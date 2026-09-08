@@ -8,6 +8,7 @@ members = [
     "crates/cine-logistics",
     "crates/cine-timeline",
     "crates/cine-comp",
+    "crates/cine-media",
     "crates/cine-color",
     "crates/cine-audio",
     "crates/cine-gpu",
@@ -53,6 +54,7 @@ cine-previs = { path = "crates/cine-previs" }
 cine-logistics = { path = "crates/cine-logistics" }
 cine-timeline = { path = "crates/cine-timeline" }
 cine-comp = { path = "crates/cine-comp" }
+cine-media = { path = "crates/cine-media" }
 cine-color = { path = "crates/cine-color" }
 cine-audio = { path = "crates/cine-audio" }
 cine-gpu = { path = "crates/cine-gpu" }

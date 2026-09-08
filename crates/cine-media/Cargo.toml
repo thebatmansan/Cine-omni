@@ -1,0 +1,37 @@
+[package]
+name = "cine-media"
+description = "Professional media foundation: identity, exact time, demux, decode, cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true
+parking_lot.workspace = true
+
+# Pure-Rust media stack. Chosen deliberately: this workspace must build with no
+# system C toolchain (see docs/blueprint/PHASE-2-MEDIA-ENGINE.md §"Build
+# constraints"). Every crate here is Rust-only.
+symphonia = { version = "0.5", default-features = false, features = [
+    "isomp4", "aac", "mp3", "flac", "alac", "pcm", "wav", "ogg", "vorbis", "mkv",
+] }
+mp4 = "0.14"
+# Pure-Rust H.264 decode (BSD-2). Chosen because no C toolchain is required and
+# it is the only pure-Rust H.264 decoder that decoded the real project asset;
+# it sits behind `decoder::VideoDecoder` so it can be replaced without churn.
+rusty_h264 = { version = "0.16", default-features = false, features = ["std"] }
+image = { version = "0.25", default-features = false, features = ["png", "tiff", "jpeg"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bench]]
+name = "decode"
+harness = false

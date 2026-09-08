@@ -23,7 +23,7 @@ that has not been earned.
 | 7 | Color science research | **Not started** — blocked | — |
 | 8 | Audio research | **Not started** — blocked | — |
 | 9 | Production / collaboration research | **Not started** — blocked | — |
-| 10 | GPU / runtime / UI shell research | **Not started** — blocked, and this is the highest-value gap | — |
+| 10 | GPU / runtime / UI shell research | **Done** — shell decided (native Rust: winit + wgpu + egui), GPU runtime specified | [`research/11-shell-and-gpu-runtime.md`](research/11-shell-and-gpu-runtime.md) |
 | 11 | Feature matrix (§46) | **Blocked** on 6–10 | — |
 | 12 | Full license matrix (§42) | **Blocked** on 6–10 | — |
 | 13 | Full integration matrix (§41) | **Blocked** on 6–10 | — |
@@ -67,6 +67,16 @@ every cascade. The fix is small and the baseline to verify it is committed.
 4. [`03-PHASED-PLAN.md`](03-PHASED-PLAN.md) — how to get there
 5. [`04-RISK-REGISTER.md`](04-RISK-REGISTER.md) — what could go wrong
 6. `research/` — the ecosystem evidence
+   - [`research/01-3d-dcc.md`](research/01-3d-dcc.md) — 3D / DCC
+   - [`research/02-editorial-media.md`](research/02-editorial-media.md) — editorial / media engine
+   - [`research/08-media-codec-stack.md`](research/08-media-codec-stack.md) — **Phase 2**: codec /
+     container / decoding stack, API boundary, and a measured pure-Rust slice
+
+## Phase 2 inputs
+
+| Document | Subject |
+|---|---|
+| [`research/09-editorial-media-model.md`](research/09-editorial-media-model.md) | How professional NLEs model media identity, time, conform and derived artefacts (AAF/UMID, FCPXML, Resolve, Premiere, MLT, OTIO) — and the proposed UCG node/edge mapping for media identity. Includes measured evidence that `RationalTime`'s `f64` representation puts 13.2 % of 23.976 frame indices on the wrong frame after a single rate rescale. |
 
 ## Standing rules for this blueprint
 
@@ -75,3 +85,11 @@ every cascade. The fix is small and the baseline to verify it is committed.
 - Never report a performance characteristic that was not measured.
 - Mark unknowns `UNVERIFIED` or `PENDING` rather than filling them plausibly.
 - Preserve working systems; the checkpoint exists so that rule can be enforced.
+
+
+## Phase 2
+
+- [`PHASE-2-MEDIA-ENGINE.md`](PHASE-2-MEDIA-ENGINE.md) — the media engine:
+  identity, exact time, decode architecture, capability matrix, licence audit,
+  measured performance and the unresolved decisions. Read this before touching
+  `crates/cine-media`.

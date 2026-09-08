@@ -23,3 +23,11 @@ cd ui && npm test && npm run build
 * Derived entity ids: `EntityId::derived(source, kinds::X)`; importer ids:
   `EntityId::from_key("<importer>:<stable key>")`.
 * Reactors live only in `cine-pipeline`; domain crates expose pure functions.
+* `cine-media`: never make a capability claim the build cannot back. Codec
+  support is decided in one place (`probe::is_decodable` + the profile gate);
+  a codec that is not handled returns `Error::NoDecoder` naming the real
+  alternatives, never a blank frame. Time is exact rational — floats are for
+  display only, never for storage, comparison or seek. Read
+  `docs/blueprint/PHASE-2-MEDIA-ENGINE.md` before touching it.
+* Media tests use real files and `need!` to skip loudly when absent. A media
+  test that quietly passes with no media is worse than no test.
