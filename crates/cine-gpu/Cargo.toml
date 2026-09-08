@@ -1,0 +1,25 @@
+[package]
+name = "cine-gpu"
+description = "wgpu device management and WGSL kernels for the previs viewport, compositor, color and scopes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Enables the real wgpu backend. Off by default so the workspace builds on
+# machines without a GPU toolchain; the WGSL kernels and CPU mirrors are always compiled.
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+glam.workspace = true
+wgpu = { version = "26", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+naga = { version = "26", features = ["wgsl-in"] }

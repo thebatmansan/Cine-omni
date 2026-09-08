@@ -1,0 +1,15 @@
+[package]
+name = "cine-color"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ACES / OpenColorIO-native color management, grading and scopes for CINE-OMNI (CPU reference implementation)"
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true
+rayon.workspace = true

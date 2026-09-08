@@ -1,0 +1,166 @@
+# Minimal OCIO v2 config exercising the cine-color parser.
+ocio_profile_version: 2
+
+name: mini
+description: |
+  A tiny ACES-style config.
+  Two lines of description.
+search_path: "luts:."
+strictparsing: true
+luma: [0.2126, 0.7152, 0.0722]
+
+roles:
+  aces_interchange: ACES2065-1
+  cie_xyz_d65_interchange: CIE-XYZ-D65
+  color_timing: ACEScct
+  scene_linear: ACEScg
+  data: Raw
+  default: ACES2065-1
+
+displays:
+  sRGB:
+    - !<View> {name: ACES SDR, view_transform: ACES SDR, display_colorspace: sRGB}
+    - !<View> {name: Un-tone-mapped, view_transform: Un-tone-mapped, display_colorspace: sRGB}
+    - !<View> {name: Warm, view_transform: Un-tone-mapped, display_colorspace: sRGB, looks: warm}
+    - !<View> {name: Raw, colorspace: Raw}
+  Rec.709:
+    - !<View> {name: ACES SDR, view_transform: ACES SDR, display_colorspace: Rec.709}
+    - !<View> {name: Raw, colorspace: Raw}
+
+active_displays: [sRGB, Rec.709]
+active_views: [ACES SDR, Un-tone-mapped, Warm, Raw]
+default_view_transform: Un-tone-mapped
+
+looks:
+  - !<Look>
+    name: warm
+    process_space: ACEScct
+    transform: !<CDLTransform> {slope: [1.05, 1.0, 0.95], offset: [0, 0, 0], power: [1, 1, 1], sat: 1.1}
+
+view_transforms:
+  - !<ViewTransform>
+    name: ACES SDR
+    from_scene_reference: !<BuiltinTransform> {style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0"}
+  - !<ViewTransform>
+    name: Un-tone-mapped
+    from_scene_reference: !<BuiltinTransform> {style: "UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD"}
+
+display_colorspaces:
+  - !<ColorSpace>
+    name: CIE-XYZ-D65
+    family: Display
+    encoding: display-linear
+    description: The display reference.
+  - !<ColorSpace>
+    name: sRGB
+    aliases: [srgb_display, sRGB - Display]
+    family: Display
+    encoding: sdr-video
+    from_display_reference: !<BuiltinTransform> {style: "DISPLAY - CIE-XYZ-D65_to_sRGB"}
+  - !<ColorSpace>
+    name: Rec.709
+    family: Display
+    encoding: sdr-video
+    from_display_reference: !<BuiltinTransform> {style: "DISPLAY - CIE-XYZ-D65_to_REC.709"}
+
+colorspaces:
+  - !<ColorSpace>
+    name: ACES2065-1
+    aliases: [aces, ap0]
+    family: ACES
+    encoding: scene-linear
+    bitdepth: 32f
+    description: The reference.
+
+  - !<ColorSpace>
+    name: ACEScg
+    aliases: [lin_ap1]
+    family: ACES
+    encoding: scene-linear
+    to_scene_reference: !<MatrixTransform> {matrix: [0.6954522414, 0.1406786965, 0.1638690622, 0,
+                                                     0.0447945634, 0.8596711185, 0.0955343182, 0,
+                                                     -0.0055258826, 0.0040252103, 1.0015006723, 0,
+                                                     0, 0, 0, 1]}
+
+  - !<ColorSpace>
+    name: ACEScct
+    family: ACES
+    encoding: log
+    to_scene_reference: !<BuiltinTransform> {style: ACEScct_to_ACES2065-1}
+
+  - !<ColorSpace>
+    name: ARRI LogC4
+    aliases: [arri_logc4]
+    family: Input/ARRI
+    encoding: log
+    to_scene_reference: !<BuiltinTransform> {style: ARRI_LOGC4_to_ACES2065-1}
+
+  - !<ColorSpace>
+    name: Sony S-Log3 S-Gamut3.Cine
+    family: Input/Sony
+    encoding: log
+    to_scene_reference: !<BuiltinTransform> {style: SONY_SLOG3_SGAMUT3.CINE_to_ACES2065-1}
+
+  - !<ColorSpace>
+    name: RED Log3G10 RWG
+    family: Input/RED
+    encoding: log
+    to_scene_reference: !<BuiltinTransform> {style: RED_LOG3G10_RWG_to_ACES2065-1}
+
+  - !<ColorSpace>
+    name: Linear Rec.709
+    aliases: [lin_rec709]
+    family: Utility
+    encoding: scene-linear
+    to_scene_reference: !<MatrixTransform> {matrix: [0.4397010, 0.3829780, 0.1773350, 0,
+                                                     0.0897923, 0.8134230, 0.0967616, 0,
+                                                     0.0175440, 0.1115440, 0.8707040, 0,
+                                                     0, 0, 0, 1]}
+    from_scene_reference: !<GroupTransform>
+      children:
+        - !<MatrixTransform> {matrix: [0.4397010, 0.3829780, 0.1773350, 0, 0.0897923, 0.8134230, 0.0967616, 0, 0.0175440, 0.1115440, 0.8707040, 0, 0, 0, 0, 1], direction: inverse}
+
+  - !<ColorSpace>
+    name: sRGB Texture
+    family: Utility
+    encoding: sdr-video
+    to_scene_reference: !<GroupTransform>
+      children:
+        - !<ExponentWithLinearTransform> {gamma: [2.4, 2.4, 2.4, 1], offset: [0.055, 0.055, 0.055, 0]}
+        - !<ColorSpaceTransform> {src: Linear Rec.709, dst: ACES2065-1}
+
+  - !<ColorSpace>
+    name: Gamma 2.2
+    family: Utility
+    encoding: sdr-video
+    to_scene_reference: !<GroupTransform>
+      children:
+        - !<ExponentTransform> {value: [2.2, 2.2, 2.2, 1]}
+        - !<ColorSpaceTransform> {src: Linear Rec.709, dst: ACES2065-1}
+
+  - !<ColorSpace>
+    name: Generic Log
+    family: Utility
+    encoding: log
+    to_scene_reference: !<GroupTransform>
+      children:
+        - !<LogCameraTransform> {base: 2, log_side_slope: 0.25, log_side_offset: 0.5, lin_side_slope: 1, lin_side_offset: 0.01, lin_side_break: 0.02, direction: inverse}
+        - !<RangeTransform> {min_in_value: 0, max_in_value: 1, min_out_value: 0, max_out_value: 1, style: noClamp}
+
+  - !<ColorSpace>
+    name: Identity LUT
+    family: Utility
+    encoding: scene-linear
+    to_scene_reference: !<FileTransform> {src: identity.cube, interpolation: tetrahedral}
+
+  - !<ColorSpace>
+    name: Shaper LUT
+    family: Utility
+    encoding: scene-linear
+    from_scene_reference: !<FileTransform> {src: gamma_shaper.cube, interpolation: linear}
+
+  - !<ColorSpace>
+    name: Raw
+    family: Utility
+    encoding: data
+    isdata: true

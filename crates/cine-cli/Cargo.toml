@@ -1,0 +1,29 @@
+[package]
+name = "cine-cli"
+description = "`cine` — command-line front end and JSON-RPC daemon for CINE-OMNI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cine"
+path = "src/main.rs"
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+cine-pipeline.workspace = true
+cine-script.workspace = true
+cine-previs.workspace = true
+cine-logistics.workspace = true
+cine-timeline.workspace = true
+cine-comp.workspace = true
+cine-color.workspace = true
+cine-audio.workspace = true
+cine-gpu.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+wgpu = ["cine-gpu/wgpu"]

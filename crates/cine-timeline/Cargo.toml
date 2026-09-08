@@ -1,0 +1,16 @@
+[package]
+name = "cine-timeline"
+description = "OpenTimelineIO-conformant multi-track NLE model, editing operations, dual-system audio sync and UCG integration for CINE-OMNI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true
+uuid.workspace = true
+rustfft.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "cine-comp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CINE-OMNI node-based compositor: images, deep compositing, keying, CPU evaluator, UCG integration"
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true
+uuid.workspace = true
+rayon.workspace = true
+glam.workspace = true
+petgraph.workspace = true

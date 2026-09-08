@@ -1,0 +1,23 @@
+[package]
+name = "cine-pipeline"
+description = "Reactors that keep every CINE-OMNI module consistent through the Unified Context Graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+cine-script.workspace = true
+cine-previs.workspace = true
+cine-logistics.workspace = true
+cine-timeline.workspace = true
+cine-comp.workspace = true
+cine-color.workspace = true
+cine-audio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

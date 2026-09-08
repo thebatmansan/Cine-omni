@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<FinalDraft DocumentType="Script" Template="No" Version="5">
+  <Content>
+    <Paragraph Type="General" Fountain="section" Level="1"><Text>ACT ONE</Text></Paragraph>
+    <Paragraph Type="General" Fountain="synopsis"><Text>A ferry pilot with one last crossing discovers her passenger is not who he claims to be.</Text></Paragraph>
+    <Paragraph Type="Scene Heading" Number="1"><SceneProperties Length="6/8"/><Text>INT. HARBOR OFFICE - NIGHT</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Rain hammers the tin roof. A single desk lamp throws a yellow cone over a cluttered desk.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>MAREN (40s, weathered, a captain&apos;s coat two sizes too big) stamps a stack of MANIFESTS with a rubber STAMP that has seen better decades.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>The office phone RINGS. She lets it.</Text></Paragraph>
+    <Paragraph Type="General" Fountain="note"><Text>Sound design: the ring should feel distant, half-drowned by rain.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Parenthetical"><Text>(not looking up)</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>We&apos;re closed.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>The door opens anyway. ELIAS (30s, soaked, a leather SATCHEL clutched to his chest) steps in and drips onto the floorboards.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>The sign says the last ferry is at eleven.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>The sign lies. Boat&apos;s been tied up since nine.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>I&apos;ll pay double.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>She finally looks up. Studies him. The satchel. The way his knuckles have gone white around the strap.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Triple. And you carry your own bag.</Text></Paragraph>
+    <Paragraph Type="General" Fountain="boneyard"><Text>Cut for length: the coffee-pot exchange from the first draft.</Text></Paragraph>
+    <Paragraph Type="Transition"><Text>CUT TO:</Text></Paragraph>
+    <Paragraph Type="Scene Heading"><SceneProperties Length="5/8"/><Text>EXT. FERRY DOCK - NIGHT</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Wind shoves the rain sideways. THE ALBATROSS, a squat diesel ferry, bumps against the pilings.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Maren unhooks the mooring LINE. Elias hovers at the gangway, satchel first.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Don&apos;t just stand there. Cast off the stern.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Which end is the stern?</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Parenthetical"><Text>(muttering)</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Triple wasn&apos;t enough.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>He finds the rope. Fumbles the knot. She watches, unimpressed, then crosses and does it herself in two moves.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>To calm himself, Elias hums an old harbor song.</Text></Paragraph>
+    <Paragraph Type="General" Fountain="lyric"><Text>Down by the water where the grey gulls cry
+She waits for the boat that never comes by</Text></Paragraph>
+    <Paragraph Type="Scene Heading"><SceneProperties Length="4/8"/><Text>INT. ALBATROSS - WHEELHOUSE - CONTINUOUS</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Maren throttles up. The engine coughs, catches. Gauges flicker to life. She flips on the RADIO.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>McALLISTER (V.O.)</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Harbor to Albatross. You are not cleared to leave, Maren. Repeat, not cleared.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>She snaps it off. Elias stands in the doorway, water pooling around his shoes.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>How long?</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Forty minutes on a good night.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>And tonight?</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Tonight isn&apos;t a *good* night.</Text></Paragraph>
+    <Paragraph Type="Centered"><Text>THE CROSSING</Text></Paragraph>
+    <Paragraph Type="Scene Heading"><SceneProperties Length="2/8"/><Text>ON THE STRAIT - NIGHT</Text></Paragraph>
+    <Paragraph Type="Action"><Text>The ferry punches through black swells. Spray explodes over the bow. In the wheelhouse window, two silhouettes.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>WHAM. WHAM. WHAM.
+Something heavy pounds against the hull from below.</Text></Paragraph>
+    <Paragraph Type="Scene Heading"><SceneProperties Length="11/8"/><Text>INT. ALBATROSS - WHEELHOUSE - NIGHT</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Elias has taken the bench. The satchel sits in his lap. He hasn&apos;t let go of it once.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>What&apos;s in the bag?</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Papers.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>People don&apos;t hold papers like that.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>He says nothing. A wave slams the hull. The satchel slides; he catches it, and a small BRASS KEY spills out and skitters across the deck.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Maren scoops it up before he can. Turns it over. An engraving: a harbor crest.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN (CONT&apos;D)</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>This is a harbor master&apos;s key.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Give it back.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Where did you get it?</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Give it BACK.</Text></Paragraph>
+    <Paragraph>
+      <DualDialogue>
+        <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+        <Paragraph Type="Dialogue"><Text>Answer me!</Text></Paragraph>
+        <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+        <Paragraph Type="Dialogue"><Text>It&apos;s mine!</Text></Paragraph>
+      </DualDialogue>
+    </Paragraph>
+    <Paragraph Type="Action"><Text>She pockets the key. Reaches for the radio HANDSET.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>The wheelhouse door BANGS open. A third figure fills the frame -- JONAH (50s, oilskin coat, a heavy FLASHLIGHT held like a club).</Text></Paragraph>
+    <Paragraph Type="Character"><Text>JONAH</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Evening, Maren.
+
+Long time.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Parenthetical"><Text>(to Elias, quietly)</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Friend of yours?</Text></Paragraph>
+    <Paragraph Type="Character"><Text>ELIAS</Text></Paragraph>
+    <Paragraph Type="Parenthetical"><Text>(backing away)</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>I&apos;ve never seen him before.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>JONAH</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>That&apos;s a lie, and a bad one.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Jonah raises the flashlight. Maren&apos;s hand drops to the throttle.</Text></Paragraph>
+    <Paragraph Type="Character"><Text>MAREN</Text></Paragraph>
+    <Paragraph Type="Dialogue"><Text>Hold on to something.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>She slams the throttle forward. The ferry lurches. Jonah stumbles. The flashlight rolls.</Text></Paragraph>
+    <Paragraph Type="Transition"><Text>FADE TO:</Text></Paragraph>
+    <Paragraph Type="Scene Heading" StartsNewPage="Yes"><SceneProperties Length="2/8"/><Text>EXT. FAR SHORE - DAWN</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Grey light. The Albatross drifts, engine dead, nudging the shingle beach. Gulls wheel overhead.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>Maren sits on the bow, the brass key in her palm. Behind her, the deck is empty. No satchel. No Elias. No Jonah.</Text></Paragraph>
+    <Paragraph Type="Action"><Text>She closes her fist around the key.</Text></Paragraph>
+    <Paragraph Type="Transition"><Text>FADE OUT.</Text></Paragraph>
+  </Content>
+  <TitlePage>
+    <Content>
+      <Paragraph Type="Action" Key="Title"><Text>THE LAST FERRY</Text></Paragraph>
+      <Paragraph Type="Action" Key="Credit"><Text>Written by</Text></Paragraph>
+      <Paragraph Type="Action" Key="Author"><Text>CINE-OMNI Test Suite</Text></Paragraph>
+      <Paragraph Type="Action" Key="Draft date"><Text>2026-09-07</Text></Paragraph>
+      <Paragraph Type="Action" Key="Contact"><Text>CINE-OMNI Engineering
+fixtures@example.invalid</Text></Paragraph>
+    </Content>
+  </TitlePage>
+</FinalDraft>

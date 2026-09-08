@@ -1,0 +1,11 @@
+[package]
+name = "ucg-schema"
+description = "Shared node kinds, attribute keys and typed components for CINE-OMNI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ucg-core.workspace = true
+serde.workspace = true
+glam.workspace = true
