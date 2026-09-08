@@ -87,7 +87,16 @@ pub fn color_correct(src: &Image, cc: &ColorCorrect, mask: Option<&Image>) -> Im
     src.map_rgba_xy(|x, y, p| {
         let u = unpremult_pixel(p);
         let c = cc.apply_rgb([u[0], u[1], u[2]]);
-        let mut out = premult_pixel([c[0], c[1], c[2], p[3]]);
+        // Re-premultiply only where the unpremultiply actually divided.
+        // `unpremult_pixel` leaves alpha-zero pixels alone because it cannot
+        // divide by zero, so multiplying by that same zero here would not undo
+        // a division — it would erase the pixel. Alpha-zero RGB is an additive
+        // element (a glow, a flare, fire), and grading one must not destroy it.
+        let mut out = if p[3] > 0.0 {
+            premult_pixel([c[0], c[1], c[2], p[3]])
+        } else {
+            [c[0], c[1], c[2], p[3]]
+        };
         if let Some(m) = &mask {
             let t = m.get_alpha(x, y);
             for i in 0..4 {
@@ -194,6 +203,48 @@ pub fn expression(src: &Image, exprs: [Option<&str>; 4]) -> Result<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An additive element carries colour with zero alpha — a glow, a lens
+    /// flare, fire. Grading one must not annihilate it.
+    #[test]
+    fn grading_an_additive_element_preserves_it() {
+        let src = Image::solid(2, 2, [1.0, 0.8, 0.6, 0.0]);
+        let cc = ColorCorrect {
+            gain: [2.0, 2.0, 2.0, 1.0],
+            ..Default::default()
+        };
+        let out = color_correct(&src, &cc, None);
+        let p = out.pixel(0, 0);
+        assert!(
+            p[0] > 0.0,
+            "grading an alpha-zero additive element erased it: {p:?}"
+        );
+        assert!(
+            (p[0] - 2.0).abs() < 1e-5,
+            "expected gain applied, got {p:?}"
+        );
+        assert!(
+            (p[1] - 1.6).abs() < 1e-5,
+            "expected gain applied, got {p:?}"
+        );
+        assert_eq!(p[3], 0.0, "alpha must stay zero");
+    }
+
+    /// The ordinary premultiplied case must be unchanged: grade acts on the
+    /// unassociated colour and the result is re-associated.
+    #[test]
+    fn grading_a_premultiplied_pixel_still_round_trips_through_alpha() {
+        let src = Image::solid(2, 2, [0.5, 0.4, 0.3, 0.5]);
+        let cc = ColorCorrect {
+            gain: [2.0, 2.0, 2.0, 1.0],
+            ..Default::default()
+        };
+        let out = color_correct(&src, &cc, None);
+        let p = out.pixel(0, 0);
+        // unassociated 1.0 -> gain 2.0 -> re-associated by alpha 0.5 = 1.0
+        assert!((p[0] - 1.0).abs() < 1e-5, "got {p:?}");
+        assert_eq!(p[3], 0.5);
+    }
 
     #[test]
     fn identity_and_gain() {

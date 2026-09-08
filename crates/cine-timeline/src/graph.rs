@@ -584,6 +584,10 @@ pub fn export_item(graph: &Graph, id: EntityId) -> Result<Item> {
                 markers,
                 metadata,
                 enabled: node.get_bool(nle_attrs::ENABLED).unwrap_or(true),
+                // The graph currently stores one reference per clip. Multiple
+                // references survive an OTIO round-trip but are not yet
+                // represented as graph nodes; see the Phase 3 blueprint.
+                ..Default::default()
             })
         }
         kinds::NLE_GAP => {

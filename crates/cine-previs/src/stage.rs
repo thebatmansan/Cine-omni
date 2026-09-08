@@ -8,9 +8,12 @@
 //! arcs, variants, time samples and schemas beyond the handful used here
 //! are out of scope.
 //!
-//! Conventions: metres, Y up, camera apertures in millimetres (written to
-//! `focalLength` / `horizontalAperture` as-is, which matches what most DCC
-//! exporters do despite USD's "tenths of scene unit" wording).
+//! Conventions: metres, Y up. Camera apertures are millimetres in
+//! [`CameraParams`], and are converted on the way out because USD defines
+//! `focalLength` and the apertures in **tenths of a scene unit** — see
+//! [`mm_to_usd_length`]. Writing millimetres straight through is only correct
+//! when the scene unit is a centimetre, which is why DCC exporters get away
+//! with it and why this stage, which is in metres, must not.
 
 use glam::{DMat4, DQuat, DVec3};
 use indexmap::IndexMap;
@@ -280,11 +283,25 @@ impl Prim {
 
     /// Write camera parameters as USD camera attributes (plus `cine:*`
     /// extras for the values USD has no slot for).
-    pub fn set_camera(&mut self, p: &CameraParams) -> &mut Self {
+    ///
+    /// `meters_per_unit` is the stage's linear scale, needed because USD
+    /// expresses lens lengths relative to the scene unit rather than in
+    /// absolute millimetres.
+    pub fn set_camera(&mut self, p: &CameraParams, meters_per_unit: f64) -> &mut Self {
         self.set_attr("projection", json!("perspective"));
-        self.set_attr("focalLength", json!(p.focal_length_mm));
-        self.set_attr("horizontalAperture", json!(p.sensor_width_mm));
-        self.set_attr("verticalAperture", json!(p.sensor_height_mm));
+        let mpu = meters_per_unit;
+        self.set_attr(
+            "focalLength",
+            json!(mm_to_usd_length(p.focal_length_mm, mpu)),
+        );
+        self.set_attr(
+            "horizontalAperture",
+            json!(mm_to_usd_length(p.sensor_width_mm, mpu)),
+        );
+        self.set_attr(
+            "verticalAperture",
+            json!(mm_to_usd_length(p.sensor_height_mm, mpu)),
+        );
         self.set_attr("fStop", json!(p.f_stop));
         self.set_attr("focusDistance", json!(p.focus_distance_m));
         self.set_attr("clippingRange", json!([p.clip[0], p.clip[1]]));
@@ -300,11 +317,12 @@ impl Prim {
     }
 
     /// Read camera parameters back (missing values fall back to defaults).
-    pub fn camera_params(&self) -> Option<CameraParams> {
+    pub fn camera_params(&self, meters_per_unit: f64) -> Option<CameraParams> {
         if self.prim_type != PrimType::Camera {
             return None;
         }
         let d = CameraParams::default();
+        let mpu = meters_per_unit;
         let clip = self
             .attrs
             .get("clippingRange")
@@ -318,11 +336,16 @@ impl Prim {
         Some(CameraParams {
             sensor_width_mm: self
                 .attr_f64("horizontalAperture")
+                .map(|v| usd_length_to_mm(v, mpu))
                 .unwrap_or(d.sensor_width_mm),
             sensor_height_mm: self
                 .attr_f64("verticalAperture")
+                .map(|v| usd_length_to_mm(v, mpu))
                 .unwrap_or(d.sensor_height_mm),
-            focal_length_mm: self.attr_f64("focalLength").unwrap_or(d.focal_length_mm),
+            focal_length_mm: self
+                .attr_f64("focalLength")
+                .map(|v| usd_length_to_mm(v, mpu))
+                .unwrap_or(d.focal_length_mm),
             f_stop: self.attr_f64("fStop").unwrap_or(d.f_stop),
             focus_distance_m: self.attr_f64("focusDistance").unwrap_or(d.focus_distance_m),
             shutter_angle_deg: self
@@ -723,10 +746,11 @@ impl Stage {
         params: &CameraParams,
         transform: Transform,
     ) -> Result<PrimPath> {
+        let mpu = self.meters_per_unit;
         let p = self.define(path, PrimType::Camera)?;
         p.prim_type = PrimType::Camera;
         p.transform = transform;
-        p.set_camera(params);
+        p.set_camera(params, mpu);
         Ok(path.clone())
     }
 
@@ -1499,5 +1523,113 @@ mod tests {
         let b = s.bounds().unwrap();
         assert!((b.min[0] - 10.7).abs() < 1e-9 && (b.max[0] - 11.3).abs() < 1e-9);
         assert!((b.max[1] - 1.8).abs() < 1e-9);
+    }
+}
+
+/// Convert a lens length in millimetres to USD's camera units.
+///
+/// `UsdGeomCamera` documents `focalLength` and the apertures as being in
+/// **tenths of a scene unit**, so one unit is `meters_per_unit / 10` metres.
+/// On a metre stage that makes 35 mm write as `0.35`; on the centimetre stage
+/// most DCCs use it writes as `35`, which is why passing millimetres through
+/// unconverted looks right in those tools and is wrong here.
+///
+/// Getting this wrong leaves field of view correct — it depends only on the
+/// ratio of aperture to focal length — while making depth of field wrong by the
+/// square of the scale error, which is exactly the kind of bug that survives a
+/// visual check.
+pub fn mm_to_usd_length(mm: f64, meters_per_unit: f64) -> f64 {
+    if meters_per_unit == 0.0 {
+        return mm;
+    }
+    (mm / 1000.0) * 10.0 / meters_per_unit
+}
+
+/// Inverse of [`mm_to_usd_length`].
+pub fn usd_length_to_mm(value: f64, meters_per_unit: f64) -> f64 {
+    if meters_per_unit == 0.0 {
+        return value;
+    }
+    value * meters_per_unit / 10.0 * 1000.0
+}
+
+#[cfg(test)]
+mod camera_unit_tests {
+    use super::*;
+
+    /// USD defines lens lengths in tenths of a scene unit. On a metre stage a
+    /// 35 mm lens is therefore `0.35`, not `35`.
+    #[test]
+    fn lens_lengths_are_written_in_tenths_of_a_scene_unit() {
+        assert!(
+            (mm_to_usd_length(35.0, 1.0) - 0.35).abs() < 1e-12,
+            "metre stage"
+        );
+        // On the centimetre stage most DCCs use, millimetres pass through — the
+        // very coincidence that makes the unconverted form look correct there.
+        assert!(
+            (mm_to_usd_length(35.0, 0.01) - 35.0).abs() < 1e-9,
+            "centimetre stage"
+        );
+    }
+
+    #[test]
+    fn the_conversion_round_trips_at_any_stage_scale() {
+        for mpu in [1.0, 0.01, 0.1, 2.54] {
+            for mm in [8.0, 35.0, 50.0, 300.0] {
+                let there_and_back = usd_length_to_mm(mm_to_usd_length(mm, mpu), mpu);
+                assert!(
+                    (there_and_back - mm).abs() < 1e-9,
+                    "{mm} mm at metersPerUnit {mpu} came back as {there_and_back}"
+                );
+            }
+        }
+    }
+
+    /// The defect this guards: focal length and focus distance must be in
+    /// consistent units once converted, or depth of field is wrong by the
+    /// square of the scale error while field of view still looks right.
+    #[test]
+    fn focal_length_and_focus_distance_agree_in_scene_units() {
+        let mut stage = Stage::new();
+        let params = CameraParams {
+            focal_length_mm: 50.0,
+            sensor_width_mm: 36.0,
+            focus_distance_m: 3.0,
+            ..Default::default()
+        };
+        let path = PrimPath::new("/World/Camera").unwrap();
+        stage
+            .add_camera(&path, &params, Transform::default())
+            .unwrap();
+        let prim = stage.get(&path).unwrap();
+
+        // Focal length as stored, expressed back in metres, must be 0.05 m.
+        let focal_units = prim.attr_f64("focalLength").unwrap();
+        let focal_m = focal_units * stage.meters_per_unit / 10.0;
+        assert!(
+            (focal_m - 0.05).abs() < 1e-9,
+            "focal length is {focal_m} m, expected 0.05"
+        );
+
+        // Focus distance is a plain scene-unit length; on a metre stage, metres.
+        let focus_m = prim.attr_f64("focusDistance").unwrap() * stage.meters_per_unit;
+        assert!(
+            (focus_m - 3.0).abs() < 1e-9,
+            "focus distance is {focus_m} m, expected 3.0"
+        );
+
+        // The two are now on the same scale: focus is 60x the focal length.
+        assert!(
+            (focus_m / focal_m - 60.0).abs() < 1e-6,
+            "focal and focus disagree by a factor of {}",
+            focus_m / focal_m
+        );
+
+        // And the parameters survive a round trip.
+        let back = prim.camera_params(stage.meters_per_unit).unwrap();
+        assert!((back.focal_length_mm - 50.0).abs() < 1e-9);
+        assert!((back.sensor_width_mm - 36.0).abs() < 1e-9);
+        assert!((back.focus_distance_m - 3.0).abs() < 1e-9);
     }
 }

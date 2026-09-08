@@ -14,7 +14,7 @@ use serde_json::{json, Map, Value as J};
 use ucg_core::{RationalTime, TimeRange};
 
 /// Key of the active media reference written by this crate (OTIO's default).
-pub const DEFAULT_MEDIA_KEY: &str = "DEFAULT_MEDIA";
+pub use crate::otio::DEFAULT_MEDIA_KEY;
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -229,24 +229,56 @@ pub fn read_track(v: &J) -> Result<Track> {
     })
 }
 
+/// Every media reference a clip carries, keyed as OTIO expects.
+fn media_references_value(c: &Clip) -> J {
+    let mut map = serde_json::Map::new();
+    for (key, r) in c.all_media_references() {
+        map.insert(key, media_reference_value(&r));
+    }
+    J::Object(map)
+}
+
 /// Parse a `Clip.2` / `Clip.1` / `Gap.1` / `Transition.1`.
 pub fn read_item(v: &J) -> Result<Item> {
     let (schema, obj) = schema_of(v)?;
     match schema {
         "Clip" => {
+            let mut active_key = DEFAULT_MEDIA_KEY.to_string();
+            let mut alternates: std::collections::BTreeMap<String, MediaReference> =
+                Default::default();
             let media_reference =
                 if let Some(refs) = obj.get("media_references").and_then(J::as_object) {
-                    // Clip.2
-                    let key = obj
+                    // Clip.2 carries a map of references with one marked active.
+                    // All of them are kept: discarding the camera original
+                    // because the editor is cutting on proxies is data loss, and
+                    // relabelling the proxy `DEFAULT_MEDIA` would assert the
+                    // proxy is the original.
+                    let declared = obj
                         .get("active_media_reference_key")
                         .and_then(J::as_str)
                         .unwrap_or(DEFAULT_MEDIA_KEY);
-                    match refs.get(key).or_else(|| refs.values().next()) {
+                    // Fall back to the first entry only when the declared key is
+                    // genuinely absent, and record the key actually used.
+                    let chosen = if refs.contains_key(declared) {
+                        declared.to_string()
+                    } else {
+                        refs.keys()
+                            .next()
+                            .cloned()
+                            .unwrap_or_else(|| declared.to_string())
+                    };
+                    for (k, r) in refs {
+                        if k != &chosen && !r.is_null() {
+                            alternates.insert(k.clone(), read_media_reference(r)?);
+                        }
+                    }
+                    active_key = chosen.clone();
+                    match refs.get(&chosen) {
                         Some(r) if !r.is_null() => read_media_reference(r)?,
                         _ => MediaReference::Missing,
                     }
                 } else {
-                    // Clip.1
+                    // Clip.1 has a single reference and no key.
                     match obj.get("media_reference") {
                         Some(r) if !r.is_null() => read_media_reference(r)?,
                         _ => MediaReference::Missing,
@@ -255,6 +287,8 @@ pub fn read_item(v: &J) -> Result<Item> {
             Ok(Item::Clip(Clip {
                 name: str_field(obj, "name"),
                 media_reference,
+                active_media_reference_key: active_key,
+                alternate_media_references: alternates,
                 source_range: opt_range(obj.get("source_range"))?,
                 markers: read_markers(obj.get("markers"))?,
                 metadata: metadata(obj.get("metadata")),
@@ -410,8 +444,8 @@ pub fn item_value(item: &Item) -> J {
             "effects": [],
             "markers": markers_value(&c.markers),
             "enabled": c.enabled,
-            "media_references": { DEFAULT_MEDIA_KEY: media_reference_value(&c.media_reference) },
-            "active_media_reference_key": DEFAULT_MEDIA_KEY,
+            "media_references": media_references_value(c),
+            "active_media_reference_key": c.active_media_reference_key,
         }),
         Item::Gap(g) => json!({
             "OTIO_SCHEMA": "Gap.1",

@@ -5,6 +5,7 @@
 //! including the ones it cannot decode. A file this build cannot decode is
 //! still a first-class media identity — it is offline capability, not an error.
 
+use crate::capability;
 use crate::error::{Error, Result};
 use crate::identity::{
     AudioStreamInfo, ContainerKind, ContentHash, MediaFile, StreamInfo, StreamKind, VideoStreamInfo,
@@ -14,48 +15,36 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-/// Codecs this build can genuinely decode to samples, as a human-readable list
-/// used in error messages so a failure names the alternative.
-pub const DECODABLE_CODECS: &str =
-    "h264 (video); aac, mp3, flac, alac, pcm, vorbis (audio); png, tiff, jpeg (image)";
+/// Codecs this build offers, as a human-readable list used in error messages
+/// so a failure names the alternative.
+///
+/// Derived from [`crate::capability::REGISTRY`] rather than written by hand, so
+/// it cannot drift out of agreement with what the code actually does.
+pub fn decodable_codecs() -> String {
+    capability::offered_summary()
+}
 
 /// Whether the decode path in this build handles a codec token.
 ///
-/// This is the single source of truth for capability. It reflects what is
-/// actually wired up, not what a dependency could theoretically do.
+/// Delegates to the capability registry, which is the single source of truth.
 pub fn is_decodable(codec: &str) -> bool {
-    matches!(
-        codec,
-        "h264"
-            | "aac"
-            | "mp3"
-            | "flac"
-            | "alac"
-            | "vorbis"
-            | "pcm"
-            | "pcm_s16le"
-            | "pcm_s24le"
-            | "pcm_f32le"
-    )
+    capability::is_offered(codec, None)
 }
 
-/// Whether the H.264 decode backend can be expected to handle this track.
+/// The profile name for an AVC track, in the vocabulary the registry uses.
 ///
-/// The gate is the profile, because that is what actually determines whether
-/// the coding tools in the stream are ones the decoder implements. A profile
-/// the container parser cannot even name is refused rather than attempted: it
-/// is more honest to report no decoder than to emit a corrupt picture.
-///
-/// 4:2:2 and 4:4:4 High profiles (`profile_idc` 122 and 244) fail the profile
-/// parse and are therefore correctly refused; only 4:2:0 8-bit is claimed.
-fn h264_profile_supported(track: &mp4::Mp4Track) -> bool {
-    matches!(
-        track.video_profile(),
-        Ok(mp4::AvcProfile::AvcConstrainedBaseline
-            | mp4::AvcProfile::AvcBaseline
-            | mp4::AvcProfile::AvcMain
-            | mp4::AvcProfile::AvcHigh)
-    )
+/// A profile the container parser cannot even name returns `None`, and such a
+/// track is refused: it is more honest to report no decoder than to emit a
+/// corrupt picture. 4:2:2 and 4:4:4 High profiles (`profile_idc` 122 and 244)
+/// fail this parse and are therefore correctly refused.
+fn h264_profile_name(track: &mp4::Mp4Track) -> Option<&'static str> {
+    match track.video_profile() {
+        Ok(mp4::AvcProfile::AvcConstrainedBaseline) => Some("Baseline"),
+        Ok(mp4::AvcProfile::AvcBaseline) => Some("Baseline"),
+        Ok(mp4::AvcProfile::AvcMain) => Some("Main"),
+        Ok(mp4::AvcProfile::AvcHigh) => Some("High"),
+        Ok(mp4::AvcProfile::AvcExtended) | Err(_) => None,
+    }
 }
 
 /// Identify a media file without decoding it.
@@ -146,7 +135,10 @@ fn probe_isobmff(path: &Path, hash: ContentHash) -> Result<MediaFile> {
             kind,
             decodable: match kind {
                 StreamKind::Audio => is_decodable(&codec),
-                StreamKind::Video => codec == "h264" && h264_profile_supported(track),
+                StreamKind::Video => match h264_profile_name(track) {
+                    Some(profile) => capability::is_offered(&codec, Some(profile)),
+                    None => false,
+                },
                 _ => false,
             },
             codec,

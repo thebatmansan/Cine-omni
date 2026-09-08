@@ -360,8 +360,16 @@ fn render_track(
         if matches!(clip.source, ClipSource::Silence) {
             continue;
         }
-        let len = (clip.duration_s() * sr as f64).round() as usize;
-        let start = (clip.start_s() * sr as f64).round() as i64 - start_frame;
+        // Derive the clip's extent from its two boundaries, never by rounding
+        // start and duration independently: `round(start) + round(duration)` is
+        // not in general `round(start + duration)`, so two clips that abut
+        // exactly on the timeline would render one sample apart. At 29.97 that
+        // happens at roughly two frame positions in five, and every occurrence
+        // is an audible click at a dialogue edit.
+        let clip_start = (clip.start_s() * sr as f64).round() as i64;
+        let clip_end = (clip.end_s() * sr as f64).round() as i64;
+        let len = (clip_end - clip_start).max(0) as usize;
+        let start = clip_start - start_frame;
         if len == 0 || start >= total as i64 || start + len as i64 <= 0 {
             continue;
         }

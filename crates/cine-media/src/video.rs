@@ -26,7 +26,7 @@ use crate::decoder::{avcc_to_annex_b, H264Decoder, Packet, VideoDecoder};
 use crate::error::{Error, Result};
 use crate::frame::{ColorMetadata, VideoFrame};
 use crate::identity::{MediaFile, StreamKind};
-use crate::probe::DECODABLE_CODECS;
+use crate::probe::decodable_codecs;
 use crate::time::{TimeBase, Timestamp};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -83,7 +83,7 @@ impl VideoReader {
         if !stream.decodable {
             return Err(Error::NoDecoder {
                 codec: stream.codec.clone(),
-                available: DECODABLE_CODECS.to_string(),
+                available: decodable_codecs(),
             });
         }
         let track_id = stream.index;

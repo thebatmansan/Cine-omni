@@ -36,14 +36,18 @@ pub enum Arg<'a> {
 impl GpuContext {
     /// Create a context on the best available adapter (headless).
     pub fn new() -> Result<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        // Headless: no compositor connection. A windowed context builds its
+        // descriptor from the platform display handle instead, which GLES on
+        // Wayland requires in order to present at all.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .map_err(|_| GpuError::NoAdapter)?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -51,6 +55,7 @@ impl GpuContext {
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
             memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: wgpu::ExperimentalFeatures::default(),
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| GpuError::Device(e.to_string()))?;
@@ -118,8 +123,8 @@ impl GpuContext {
                 self.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some(k.name),
-                        bind_group_layouts: &[&layout],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
                     });
             let pipeline = self
                 .device
@@ -242,12 +247,15 @@ impl GpuContext {
                 let _ = tx.send(r);
             });
             self.device
-                .poll(wgpu::PollType::wait())
+                .poll(wgpu::PollType::wait_indefinitely())
                 .map_err(|e| GpuError::Device(e.to_string()))?;
             rx.recv()
                 .map_err(|e| GpuError::Device(e.to_string()))?
                 .map_err(|e| GpuError::Device(e.to_string()))?;
-            let data = slice.get_mapped_range().to_vec();
+            let data = slice
+                .get_mapped_range()
+                .map_err(|e| GpuError::Device(e.to_string()))?
+                .to_vec();
             st.unmap();
             results.push(data);
         }

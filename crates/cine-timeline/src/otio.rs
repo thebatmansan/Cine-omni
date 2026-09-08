@@ -10,6 +10,7 @@
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use ucg_core::{RationalTime, TimeRange};
 
 /// Free-form OTIO metadata: a JSON object.
@@ -555,11 +556,31 @@ impl From<Transition> for Item {
     }
 }
 
+/// The key OTIO uses for a clip's primary media reference.
+pub const DEFAULT_MEDIA_KEY: &str = "DEFAULT_MEDIA";
+
 /// A clip plays a range of a media reference.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     pub name: String,
+    /// The reference currently being played.
+    ///
+    /// A clip may carry several references — a camera original, a proxy, a
+    /// transcode — of which exactly one is active. This field is the active
+    /// one, because that is what nearly every consumer wants.
     pub media_reference: MediaReference,
+    /// Which key in the reference map [`Clip::media_reference`] came from.
+    ///
+    /// Preserved because the key carries meaning: a clip playing its `proxy`
+    /// must round-trip still saying `proxy`. Relabelling it `DEFAULT_MEDIA`
+    /// would assert that the proxy *is* the camera original.
+    pub active_media_reference_key: String,
+    /// Every other reference the clip carries, by key.
+    ///
+    /// Kept verbatim so a round-trip cannot silently discard the camera
+    /// original just because the editor happened to be cutting on proxies.
+    /// A proxy is never the authoritative source.
+    pub alternate_media_references: BTreeMap<String, MediaReference>,
     /// Range inside the media that is played. `None` means the whole
     /// available range.
     pub source_range: Option<TimeRange>,
@@ -574,6 +595,8 @@ impl Default for Clip {
         Clip {
             name: String::new(),
             media_reference: MediaReference::Missing,
+            active_media_reference_key: DEFAULT_MEDIA_KEY.to_string(),
+            alternate_media_references: BTreeMap::new(),
             source_range: None,
             markers: Vec::new(),
             metadata: Metadata::new(),
@@ -583,6 +606,43 @@ impl Default for Clip {
 }
 
 impl Clip {
+    /// Every reference the clip carries, including the active one.
+    pub fn all_media_references(&self) -> BTreeMap<String, MediaReference> {
+        let mut all = self.alternate_media_references.clone();
+        all.insert(
+            self.active_media_reference_key.clone(),
+            self.media_reference.clone(),
+        );
+        all
+    }
+
+    /// Look up one reference by key, active or not.
+    pub fn media_reference_named(&self, key: &str) -> Option<&MediaReference> {
+        if key == self.active_media_reference_key {
+            Some(&self.media_reference)
+        } else {
+            self.alternate_media_references.get(key)
+        }
+    }
+
+    /// Switch which reference plays — conforming from proxy to camera original.
+    ///
+    /// Returns `false` if the key is unknown, leaving the clip untouched: a
+    /// failed conform must not silently leave a clip pointing at nothing.
+    pub fn set_active_media_reference(&mut self, key: &str) -> bool {
+        if key == self.active_media_reference_key {
+            return true;
+        }
+        let Some(next) = self.alternate_media_references.remove(key) else {
+            return false;
+        };
+        let previous = std::mem::replace(&mut self.media_reference, next);
+        let previous_key = std::mem::replace(&mut self.active_media_reference_key, key.to_string());
+        self.alternate_media_references
+            .insert(previous_key, previous);
+        true
+    }
+
     /// A clip playing `source_range` of the media at `target_url`.
     pub fn new(
         name: impl Into<String>,

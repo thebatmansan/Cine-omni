@@ -17,7 +17,7 @@
 use crate::error::{Error, Result};
 use crate::frame::AudioFrame;
 use crate::identity::{MediaFile, StreamKind};
-use crate::probe::{is_decodable, DECODABLE_CODECS};
+use crate::probe::{decodable_codecs, is_decodable};
 use crate::time::{TimeBase, Timestamp};
 use std::fs::File;
 use std::path::Path;
@@ -107,7 +107,7 @@ impl MediaReader {
         if !stream.decodable {
             return Err(Error::NoDecoder {
                 codec: stream.codec.clone(),
-                available: DECODABLE_CODECS.to_string(),
+                available: decodable_codecs(),
             });
         }
         Ok(stream)
@@ -123,7 +123,7 @@ impl MediaReader {
                     .unwrap_or_else(|| "none".into());
                 Error::NoDecoder {
                     codec,
-                    available: DECODABLE_CODECS.to_string(),
+                    available: decodable_codecs(),
                 }
             })?;
             let track = self
@@ -136,7 +136,7 @@ impl MediaReader {
                 .make(&track.codec_params, &Default::default())
                 .map_err(|e| Error::NoDecoder {
                     codec: format!("{:?} ({e})", track.codec_params.codec),
-                    available: DECODABLE_CODECS.to_string(),
+                    available: decodable_codecs(),
                 })?;
             self.audio_decoder = Some(dec);
         }
@@ -160,7 +160,7 @@ impl MediaReader {
                     .unwrap_or_else(|| "none".into());
                 return Err(Error::NoDecoder {
                     codec,
-                    available: DECODABLE_CODECS.to_string(),
+                    available: decodable_codecs(),
                 });
             }
         };

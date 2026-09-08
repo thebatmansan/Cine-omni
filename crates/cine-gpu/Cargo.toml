@@ -18,9 +18,15 @@ ucg-schema.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 glam.workspace = true
-wgpu = { version = "26", optional = true }
+wgpu = { version = "30", optional = true }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 naga = { version = "26", features = ["wgsl-in"] }
+
+# Reports the real adapter, so "GPU verified" is never an assumption.
+# Needs the real backend, hence the feature gate.
+[[example]]
+name = "adapter_probe"
+required-features = ["wgpu"]

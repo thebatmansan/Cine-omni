@@ -19,10 +19,10 @@ that has not been earned.
 | 3 | Licensing spine and its architectural consequence | **Done** | [`01-LICENSING-SPINE.md`](01-LICENSING-SPINE.md) |
 | 4 | 3D / DCC ecosystem research | **Partial** — Blender complete and deep; OpenUSD, OpenSubdiv, MaterialX, Alembic not reached | [`research/01-3d-dcc.md`](research/01-3d-dcc.md) |
 | 5 | Editorial / media ecosystem research | **Done** — FFmpeg licensing, MLT, Kdenlive, OTIO, OIIO, hardware decode, proxy architecture | [`research/02-editorial-media.md`](research/02-editorial-media.md) |
-| 6 | Compositing / imaging research | **Not started** — blocked | — |
+| 6 | Compositing / imaging research | **Done** — node-graph architecture, deep, cryptomatte, EXR/OIIO, premult rules, Rust crate reality | [`research/12-compositing.md`](research/12-compositing.md) |
 | 7 | Color science research | **Not started** — blocked | — |
-| 8 | Audio research | **Not started** — blocked | — |
-| 9 | Production / collaboration research | **Not started** — blocked | — |
+| 8 | Audio research | **Done** — `cine-audio` assessed and measured; plugin formats, backends, loudness, immersive delivery and RT/UCG discipline decided. **Overturns the VST3 finding in §01** | [`research/14-audio-architecture.md`](research/14-audio-architecture.md) |
+| 9 | Production / collaboration research | **Done** — on-set/script supervision, dailies/DIT verification, ASC MHL verified against the spec, and a collaboration model for the existing op log | [`research/15-production-dailies-collaboration.md`](research/15-production-dailies-collaboration.md) |
 | 10 | GPU / runtime / UI shell research | **Done** — shell decided (native Rust: winit + wgpu + egui), GPU runtime specified | [`research/11-shell-and-gpu-runtime.md`](research/11-shell-and-gpu-runtime.md) |
 | 11 | Feature matrix (§46) | **Blocked** on 6–10 | — |
 | 12 | Full license matrix (§42) | **Blocked** on 6–10 | — |
@@ -71,6 +71,14 @@ every cascade. The fix is small and the baseline to verify it is committed.
    - [`research/02-editorial-media.md`](research/02-editorial-media.md) — editorial / media engine
    - [`research/08-media-codec-stack.md`](research/08-media-codec-stack.md) — **Phase 2**: codec /
      container / decoding stack, API boundary, and a measured pure-Rust slice
+   - [`research/12-compositing.md`](research/12-compositing.md) — professional
+     compositing: the render dependency graph vs the UCG cascade, deep data,
+     Cryptomatte (verified spec + test vectors), the EXR decision, and a frank
+     measured assessment of `crates/cine-comp`
+   - [`research/14-audio-architecture.md`](research/14-audio-architecture.md) — professional
+     audio: the `cine-audio`/engine boundary, plugin-format licensing (**VST3 is now
+     MIT; ASIO is now GPLv3**), real-time thread discipline against the UCG,
+     loudness compliance, and immersive/ADM delivery
 
 ## Phase 2 inputs
 
