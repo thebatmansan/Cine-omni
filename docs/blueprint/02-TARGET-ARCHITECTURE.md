@@ -137,7 +137,7 @@ then split `cine-media`, `cine-editorial` and `cine-3d` out as they grow.
 | OpenUSD adoption (§34) | 3D research (not reached) | Determines whether previs interoperates with real pipelines or stays a private format |
 | OpenColorIO adoption (§36) | color research | Determines whether CINE-OMNI can ever claim color correctness honestly |
 | OFX plug-in hosting | compositing research | Would grant the entire commercial VFX plug-in ecosystem |
-| CLAP vs LV2 audio hosting | audio research | Same leverage for audio; VST3's GPLv3 arm is unusable here |
+| CLAP vs LV2 vs VST3 audio hosting | audio research | **Resolved**: the VST 3 SDK is MIT as of VST 3.8 (2025-10-29), so all three are hostable. ASIO is now the GPLv3 trap instead. See `PHASE-3-STATUS.md` §5 |
 | CRDT vs op-log for collaboration | production research | Decides whether §37 multi-user is reachable without a rewrite |
 
 ---

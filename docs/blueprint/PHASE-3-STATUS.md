@@ -1,0 +1,256 @@
+# Phase 3 — Status, Matrices and Decisions
+
+**What this document is.** The auditable state of CINE-OMNI after the Phase 3
+research and hardening pass: what is verified, what is merely implemented, what
+is planned, and what is blocked. It is the index the other blueprint documents
+hang from, and the place a claim must be justified before it may be made
+anywhere else.
+
+## 0. Status vocabulary
+
+Every claim in this repository carries exactly one of these. They are not
+interchangeable and green is never given for the existence of a type or an
+interface.
+
+| Mark | Meaning | Bar |
+|---|---|---|
+| 🟢 **VERIFIED** | Proven here, against the real thing | A test or measurement on this machine, named |
+| 🟢 **IMPLEMENTED** | Code exists and is exercised | Tests pass, but not against an external oracle |
+| 🟡 **EXPERIMENTAL** | Works, but the ground is unproven | Beyond the vendor's stated scope, or one asset only |
+| 🟡 **PARTIAL** | Some of it works, and the gap is named | The missing part is written down |
+| 🔵 **PLANNED** | Designed, not built | A design exists that survives review |
+| 🟠 **BLOCKED** | Cannot proceed here | The specific blocker is named |
+| 🔴 **NOT IMPLEMENTED** | Absent | — |
+| ⚖️ **LEGAL REVIEW REQUIRED** | An engineer must not decide this | — |
+
+---
+
+## 1. What changed in Phase 3
+
+Research across seven domains found **seven real defects in shipped code**.
+Fixing them took priority over new features, because a defect that corrupts or
+deletes work costs more than a missing feature. Every fix has a test that fails
+without it.
+
+| # | Defect | Severity | Status |
+|---|---|---|---|
+| 1 | Shot-list regeneration **deleted captured takes** — 3 destroyed by one previs edit | Data loss | 🟢 Fixed |
+| 2 | `ContentHash::verify()` passed a file with a bit flipped mid-file | False verification | 🟢 Fixed |
+| 3 | OTIO round-trip **relabelled a proxy as the camera original** and dropped the original | Data integrity | 🟢 Fixed |
+| 4 | Butt-spliced audio clips rendered a sample apart — a click at every dialogue edit | Correctness | 🟢 Fixed |
+| 5 | Grading an additive element (glow, flare, fire) erased it | Correctness | 🟢 Fixed |
+| 6 | USD lens units wrong by 100× — depth of field unusable, FOV still looked right | Correctness | 🟢 Fixed |
+| 7 | P3-limited HDR output silently answered with the Rec.2020-limited transform | Silent wrong colour | 🟢 Fixed |
+
+Defects 1, 2 and 3 share a shape worth naming: **each produced a confident,
+plausible, wrong answer rather than an error.** That is the failure mode this
+project's rules exist to prevent, and finding three of them in one pass is the
+argument for the evidence discipline, not against it.
+
+---
+
+## 2. Architecture decision matrix
+
+| Decision | Options considered | Chosen | Reason | Rejected because | Risk |
+|---|---|---|---|---|---|
+| **Application shell** | winit+wgpu+egui; Tauri; Qt; Slint; egui alone; custom GPU UI; native-host-plus-web | **winit + wgpu + egui + egui_tiles**, one process | Only option giving GPU surfaces on the *same device and queue* as the compute kernels; MIT/Apache-2.0 end to end | Tauri/webview provably cannot share a GPU surface (upstream issue closed unimplemented); Slint's open arm is GPLv3; Qt's LGPLv3 attaches relink and source-offer obligations to an Apache-2.0 product | egui composites in gamma space, so colour-managed HDR cannot live in a docked panel — the reference viewer must own its own surface. Accepted and designed around |
+| **wgpu version** | Stay on 26; move to 30 | **30** | egui 0.36 requires it; two wgpu versions would mean two incompatible `Device` types and no shared surface | Staying on 26 would have made the shell impossible without a later, harder migration | Done and verified; 17 GPU tests pass on real hardware |
+| **H.264 decode** | FFmpeg; OpenH264; `rusty_h264`; none | **`rusty_h264` behind a trait** | Only pure-Rust decoder that decoded the real asset (240/240 frames); BSD-2; no C toolchain needed. OpenH264 *failed* the asset (9/60 — no B-frames) | FFmpeg unbuildable here (no pkg-config/make/nasm) | Ten weeks old, and decodes **beyond the scope its authors advertise**. Mitigated by the trait, not resolved |
+| **Colour runtime** | Depend on real OCIO; port Apache-2.0 `aces-core`; keep current | **Port `aces-core`; OCIO as a developer-only oracle** | ACES reference is Apache-2.0 as of 2025-09-25; OCIO builds here with `zig c++` and can serve as the conformance oracle | Runtime OCIO dependency adds a C++ build to every deployment for a job a port can do | Current colour is 30% off on saturated colour; the port is unstarted |
+| **OpenUSD** | C++ sidecar; no USD; `openusd` Rust crate | **`openusd` crate (MIT) behind a cargo feature**, `usd-core` as oracle | Pure Rust, `.usda`/`.usdc`/`.usdz` plus full LIVRPS composition, builds with plain `cargo build`; AOUSD Core Spec 1.0 is ratified, so an independent implementation is legitimate | C++ USD would add a large build; "no USD" abandons interchange | The crate is very new. And **OpenUSD itself is not Apache-2.0** — see §5 |
+| **OTIO** | Native Rust; FFI; Python subprocess | **Native Rust**, Python `opentimelineio` as a *test* dependency | No usable Rust binding exists (the crates.io names are 2020 placeholders); FFI fights the UCG's identity model | — | We currently pass **Tier 1 of 5** on our own conformance bar |
+| **Timeline crate** | Evolve; replace; split | **Split** into codec / operations / model | The editing operations are correct and worth keeping; the OTIO codec and the model have different reasons to change | — | Not yet done |
+| **Audio engine** | Optimise `cine-audio::render`; new engine crate | **New `cine-audio-engine`** | `render()` is an offline mixer; it cannot be made into a real-time engine by optimisation | — | Not yet started |
+| **Collaboration** | Locking; optimistic concurrency; CRDT | **Replicate depth-0 deltas, recompute derived state** | Reactor idempotence is already a project rule, which makes recomputation sound | CRDTs guarantee convergence, not *correctness* of invariants | Op-log format is the least changeable artefact; metadata should be added before it ossifies |
+
+---
+
+## 3. Capability matrix
+
+### Media
+
+| Capability | Required | Current | Evidence |
+|---|---|---|---|
+| H.264 High 4:2:0 8-bit decode | Yes | 🟡 EXPERIMENTAL | 240/240 frames of the real asset; decoder is 10 weeks old and beyond its advertised scope |
+| H.264 Main / Baseline | Yes | 🟡 PARTIAL | Same code path, no asset here to prove it. Registry marks it UNVERIFIED, not claimed |
+| H.264 4:2:2 / 4:4:4 / 10-bit | Yes | 🔴 Refused | Deliberate: emitting a corrupt picture is worse than reporting no decoder |
+| HEVC, ProRes, DNx | Yes | 🔴 NOT IMPLEMENTED | No credible pure-Rust decoder |
+| AAC-LC, PCM decode | Yes | 🟢 VERIFIED | Real AAC and real WAV decoded, non-silent |
+| MP3, FLAC, ALAC, Vorbis | Yes | 🟡 PARTIAL | Wired up, no assets exercised here |
+| PNG decode | Yes | 🟢 VERIFIED | Real system PNG |
+| JPEG, TIFF | Yes | 🟡 PARTIAL | Enabled, unexercised |
+| OpenEXR | Yes | 🔴 NOT IMPLEMENTED | `exr` crate is BSD-3, pure Rust, 17.1M downloads — but **no deep data** |
+| Image sequences | Yes | 🔴 NOT IMPLEMENTED | A still is one frame; no sequence assembly |
+| Exact rational media time | Yes | 🟢 VERIFIED | `cine-media::time`, i128 cross-multiplication |
+| Frame-accurate seek | Yes | 🟢 VERIFIED | Sought frame is **pixel-identical** to the played frame |
+| Content-addressed identity, relink | Yes | 🟢 VERIFIED | Idempotent ingest, offline as a state |
+| Full-hash verification | Yes | 🟢 VERIFIED | Detects a single flipped bit; fast hash now **refuses** to verify |
+| Capability registry | Yes | 🟢 VERIFIED | Single source of truth; tests enforce evidence and forbid unverified hardware claims |
+| Hardware decode | Yes | 🔴 NOT IMPLEMENTED | **Not claimed.** Registry test fails if any hardware entry is added |
+| Playback / A/V sync | Yes | 🔴 NOT IMPLEMENTED | And not simulated |
+| Proxies, thumbnails, waveforms | Yes | 🔵 PLANNED | |
+
+### GPU and colour
+
+| Capability | Required | Current | Evidence |
+|---|---|---|---|
+| Real GPU adapter | Yes | 🟢 VERIFIED | Intel UHD Graphics (CML GT2), Vulkan, Mesa 25.2.8 |
+| Compute kernels, CPU parity | Yes | 🟢 VERIFIED | 17 GPU tests on real hardware |
+| YUV→RGB with CPU reference | Yes | 🟢 VERIFIED | BT.601/709/2020 × limited/full, and a real decoded frame; worst divergence <1e-4 |
+| Matrix provenance (declared vs assumed) | Yes | 🟢 VERIFIED | `MatrixChoice`; BT.2020 never assumed |
+| Swapchain / presentation | Yes | 🔴 NOT IMPLEMENTED | Foundation ready; no window yet |
+| HDR surfaces | Yes | 🔵 PLANNED | egui composites in gamma space; needs a dedicated surface |
+| ACES output transform | Yes | 🟡 PARTIAL | 18% grey exact to 6 decimals; **pure green off by 0.30 (30% of full scale)**. Tonescale right, chroma and gamut compression absent |
+| OpenColorIO config loading | Yes | 🔴 NOT IMPLEMENTED | Cannot load **any** released OCIO ACES config — `shared_views` and `!<Views>` unimplemented |
+
+### Editorial, production, audio
+
+| Capability | Required | Current | Evidence |
+|---|---|---|---|
+| OTIO write | Yes | 🟢 VERIFIED | Output parses in real OTIO — most implementations do not achieve this |
+| OTIO read | Yes | 🟡 PARTIAL | 4 hard rejections, 4 silent losses. **Tier 1 of 5** on our own bar |
+| Multiple media references / proxy conform | Yes | 🟢 VERIFIED | Preserved through round-trip; conform swaps without losing either |
+| EDL / AAF / FCPXML | Yes | 🔴 NOT IMPLEMENTED | AAF container is CFB (`cfb` crate, MIT); **`LibAAF` is GPL-2.0 and must not be read** |
+| Editing operations (ripple/roll/slip/slide…) | Yes | 🟢 IMPLEMENTED | 15-operation semantics table; no semantic errors found. Gap: no transition media-handle check, so a dissolve can validate and be unrenderable |
+| Shot → take → media traceability | Yes | 🟡 PARTIAL | Takes now survive shot-list regeneration; full production model designed, not built |
+| Offload verification state machine | Yes | 🔵 PLANNED | Designed: `discovered → copying → copied → verifying → verified`, `failed` absorbing |
+| Loudness (EBU R128 / BS.1770) | Yes | 🟢 VERIFIED | `lufs_integrated` agrees with `ebur128` to **0.000 LU** across five signals including 5.1 |
+| True-peak metering | Yes | 🟠 **Known wrong** | Reads **0.3–0.5 dB high** on programme material. Not yet fixed |
+| Real-time audio | Yes | 🟠 **Known inadequate** | One 512-frame block of 48 stereo tracks takes **12.228 ms against a 10.667 ms budget (114.6%)** |
+| Plugin hosting | Yes | 🔵 PLANNED | CLAP and VST3 now both viable — see §5 |
+| Sample-accurate splices | Yes | 🟢 VERIFIED | Reproduced the defect at 29.97 and fixed it |
+
+### Platform
+
+| Capability | Required | Current | Evidence |
+|---|---|---|---|
+| Deterministic CI regression gates | Yes | 🟢 VERIFIED | Assert work done, not wall-clock: stable on any machine |
+| Bounded op log | Yes | 🟢 VERIFIED | Gate derives its workload from the configured limit |
+| Reactor convergence / idempotence | Yes | 🟢 VERIFIED | Gated |
+| Exact time in `ucg-core` | Yes | 🟠 **Architectural defect** | `RationalTime` is `{value: f64, rate: f64}` — float. `cine-media` has the exact model; 221 references across 10 crates still use the float one |
+| Application shell | Yes | 🔵 PLANNED | Decided; GPU foundation ready |
+| Collaboration | Yes | 🔵 PLANNED | |
+
+---
+
+## 4. Research matrix
+
+| Domain | Reference systems | Open source studied | CINE-OMNI strategy | Status |
+|---|---|---|---|---|
+| Media / codecs | Resolve, Premiere | FFmpeg, symphonia, `rusty_h264`, `re_mp4` | Pure-Rust behind a decoder trait; FFmpeg deferred | 🟡 Slice verified |
+| Compositing | Nuke, Fusion | Natron (GPL), OpenImageIO, OpenEXR, OpenFX | Reimplement natively; OIIO is **Apache-2.0** so it may be *ported*; Cryptomatte is BSD-3 with published test vectors | 🔵 Designed |
+| Colour | Resolve, Baselight | OpenColorIO, ACES, OpenEXR | Port Apache-2.0 `aces-core`; OCIO as oracle | 🟡 Partial, gap measured |
+| Audio | Pro Tools, Nuendo, Fairlight | Ardour (GPL), JACK, PipeWire, CLAP, LV2 | New real-time engine crate; CLAP and VST3 hosting | 🟠 Current engine inadequate |
+| Editorial | Avid, Premiere, Resolve | OpenTimelineIO | Native Rust OTIO; split `cine-timeline` | 🟡 Tier 1 of 5 |
+| Production / dailies | ShotGrid, Silverstack, Frame.io | ASC MHL | Native; ASC MHL for interchange | 🔵 Designed |
+| 3D / DCC | Maya, Blender, Houdini | Blender (GPL), OpenUSD, Alembic, glTF, MaterialX | `openusd` crate behind a feature; Blender by bridge only | 🔵 Designed |
+| Collaboration | Resolve, Avid, Perforce | Automerge, Yjs | Replicate depth-0 deltas, recompute derived | 🔵 Designed |
+
+---
+
+## 5. Licence matrix
+
+Workspace spine is **Apache-2.0**, one-way incompatible with GPL. `cargo deny
+check` passes: advisories, bans, licences, sources all ok. **No GPL or LGPL
+anywhere in the dependency tree.**
+
+| Component | Licence | Link mode | Distribution impact | Action |
+|---|---|---|---|---|
+| `symphonia` | MPL-2.0 | Static | File-level copyleft; our files unaffected while unmodified | ✅ In use |
+| `rusty_h264` | BSD-2-Clause | Static | None | ✅ In use |
+| `mp4`, `image`, `sha2`, `indexmap` | MIT / Apache-2.0 | Static | None | ✅ In use |
+| `wgpu`, `egui`, `winit`, `egui_tiles` | MIT / Apache-2.0 | Static | None | ✅ Shell approved |
+| **OpenUSD** | **Tomorrow Open Source Technology License 1.0** — *not* Apache-2.0, since 24.08 (2024-07-25) | — | Bespoke, non-OSI, non-SPDX; Apache-2.0 with a **narrowed §6** | ⚖️ **LEGAL REVIEW REQUIRED** before any dependency |
+| `openusd` crate | MIT | Static | None | 🔵 Approved for use |
+| OpenTimelineIO | Apache-2.0 (verified by SHA-256 against the canonical text) | Test-only (Python) | None | ✅ Test oracle |
+| OpenImageIO | **Apache-2.0** (relicensed 2023; >99.86% of lines) | Source may be *ported* | None | 🔵 Port candidate |
+| OpenFX | BSD-3-Clause | Host | None | 🔵 Legally clear, deferred on engineering grounds |
+| Cryptomatte | BSD-3-Clause, spec 1.2.0 with test vectors | Reimplement | None | 🔵 ~200 lines, highest value per line |
+| OpenColorIO | BSD-3-Clause | **Developer oracle only** | None if not shipped | ✅ Oracle |
+| ACES reference | Apache-2.0 **from commit `ee380496`, 2025-09-25**; v1.3.1 and earlier are AMPAS ACES License Terms | Port | Must not vendor 1.x CTL under an Apache notice | 🔵 Port target |
+| **VST3 SDK** | **MIT as of VST 3.8 (2025-10-29)** — GPLv3/proprietary no longer offered | Host | None | 🔵 **Now hostable.** Supersedes the spine's old finding |
+| **ASIO SDK** | **Now dual GPLv3 / proprietary** | — | Cannot be linked by an Apache-2.0 product | 🔴 Reject |
+| CLAP | MIT | Host | None | 🔵 Preferred |
+| LV2 | ISC | Host | None | 🔵 Viable |
+| `vst3-sys` | GPL-3.0 | — | Pulled in by `nih-plug`'s VST3 export | 🔴 Use `vst3` (coupler-rs, MIT) instead |
+| `jack` crate | MIT, **links LGPL-2.1 libjack** | Dynamic | LGPL obligations attach to the *linked library* | ⚖️ Review before shipping |
+| `libltc-rs` | MIT, **links LGPL-3.0 libltc** | Dynamic | Same | ⚖️ Review before shipping |
+| Natron | GPL-2.0-**or-later** | — | Cannot be linked or ported | 🔴 Concepts only |
+| Blender, Kdenlive, Ardour | GPL | — | Separate process or ideas only | 🔴 No code transplant |
+| `ffmpeg-next`, `ffmpeg-the-third` | **WTFPL** — no patent grant, no warranty disclaimer | — | Commonly rejected by `cargo-deny` policy | 🔴 Use `rsmpeg` (MIT) if FFmpeg is ever bound |
+| `rawloader`/`rawler` | LGPL-2.1; `imagepipe` LGPL-3.0-only | Static (Rust) | **No LGPL §6(b) relinking escape** | 🔴 Camera-RAW stills not available on assumed terms |
+| Meadowlark | AGPL-3.0, archived | — | — | 🔴 No permissive Rust DAW engine exists |
+| `libadm`, `libbw64` | Apache-2.0; EBU ADM Renderer BSD-3-Clause-Clear | — | None | 🔵 Object audio is open |
+| Signalsmith Stretch | MIT | — | None | 🔵 Time-stretch is open (Rubber Band is GPL) |
+| ASC MHL | Tool and XSDs MIT; **spec PDFs carry no licence or copyright notice at all** | — | — | 🔵 Implement |
+| CLF / SMPTE ST 2136-1 | Schema readable, **LICENSE forbids reproduction** | — | — | 🔵 Implement, never vendor |
+
+### Patent — separate from copyright
+
+**H.264 and HEVC carry patent pools.** A BSD-2 decoder settles the *copyright*
+question and says nothing about the *patent* one. Development is unaffected;
+distribution is not. ⚖️ **LEGAL REVIEW REQUIRED** before any release.
+
+---
+
+## 6. Known defects not yet fixed
+
+Listed because an unlisted known defect is indistinguishable from a lie.
+
+| Defect | Impact | Evidence |
+|---|---|---|
+| `ucg-core::RationalTime` is float-based | Wrong frames and failed equality at NTSC rates; two time models in one project | 221 references across 10 crates; `cine-media` has the exact model |
+| `true_peak_dbtp()` reads 0.3–0.5 dB high | Delivery QC would pass material that fails | Cross-checked against `ebur128`; existing test passes only because a 1 kHz sine happens to agree |
+| `cine-audio::render` at 114.6% of budget | Cannot meet a real-time deadline | 12.228 ms vs 10.667 ms, 48 stereo tracks |
+| `cine-comp::hashes()` superlinear, on every evaluation | 53 ms at 2,001 nodes | Third occurrence of "derived value recomputed in a hot loop" |
+| `cine-comp::evaluate_roi` returns the full frame | ROI plumbing saves nothing and fragments the cache | 64×64 request returned 16.7M floats |
+| `cine-comp::resize` bilinear at all scales | 0.25 max abs error vs a box reference at 8× reduction | |
+| Deep compositing uses a linear alpha scale | OpenEXR requires Beer–Lambert `α' = 1−(1−α)^r` | |
+| `cine-comp` has no file I/O | `Read(File)` reads a pre-registered in-memory image | |
+| OTIO read gaps | Real OTIO files rejected or silently lossy | Tier 1 of 5 |
+| No transition media-handle check | A dissolve can validate and be unrenderable | |
+| VFR detection is weak | Derived from the *mean* sample duration | |
+| Colour metadata unparsed | No `colr` box, no VUI | Frames honestly carry no colour |
+
+---
+
+## 7. Environment — what this machine can and cannot verify
+
+| Capability | State |
+|---|---|
+| Rust toolchain, Zig linker | ✅ |
+| Real GPU (Intel UHD, Vulkan, Mesa 25.2.8) | ✅ GPU work is verifiable |
+| Wayland session | ✅ A window can be opened |
+| `zig cc` / `zig c++` | ✅ C and C++ sources compile — the earlier "no C toolchain" premise was **wrong** |
+| CMake + Ninja (via PyPI wheels) | ✅ |
+| OpenColorIO 2.6.0dev | ✅ Built here; usable as an oracle |
+| OpenUSD 26.8 (`usd-core`) | ✅ Runs here |
+| Python `opentimelineio` 0.18.1 | ✅ Runs here |
+| PipeWire 1.0.5 | ✅ Running |
+| `pkg-config`, `make`, `nasm` | 🟠 Absent — **FFmpeg cannot be built** |
+| `cpal` | 🟠 Fails to build (needs `pkg-config` for `alsa-sys`) |
+| Audio plugins | 🟠 None installed; hosting untested |
+| Hardware video decode | 🟠 Untested — and therefore unclaimed |
+
+---
+
+## 8. What may and may not be claimed today
+
+**May be claimed**, with evidence:
+* Exact rational time in the media layer
+* Frame-accurate seek, pixel-identical to playback
+* Content-addressed media identity, relink, and offline as a state
+* Full-hash verification that detects a single flipped bit
+* GPU/CPU parity for compute kernels and YUV→RGB on real hardware
+* Loudness measurement agreeing with `ebur128` to 0.000 LU
+* OTIO output that parses in real OpenTimelineIO
+
+**May not be claimed**:
+* "ACES-compatible" — measured 30% off on saturated colour
+* "OpenColorIO-compatible" — cannot load any released ACES config
+* "OpenUSD" — `cine-previs` emits a USDA-shaped subset
+* "OTIO-compatible" — Tier 1 of 5
+* "Real-time" for audio — 114.6% of budget
+* "Production playback" — no presentation clock exists
+* "Hardware accelerated" — no hardware path exists
+* "Production-ready" for any subsystem

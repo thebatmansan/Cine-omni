@@ -93,15 +93,36 @@ Per §60, these are named rather than guessed. All are blocked on the rate-limit
 research clusters:
 
 - OpenUSD's exact license terms and their compatibility (directive §34). Widely
-  described as a modified Apache 2.0, **UNVERIFIED here**.
-- OpenColorIO, OpenEXR, OpenImageIO, Imath — expected permissive, **UNVERIFIED**.
-- OpenFX plug-in API terms. Potentially the highest-leverage decision in VFX,
-  because hosting OFX would grant access to the commercial plug-in ecosystem.
-- CLAP vs LV2 vs VST3 for audio. **VST3 is a known trap**: dual-licensed GPLv3
-  or a proprietary Steinberg agreement, so the GPLv3 arm is unusable here.
-- ASIO (Windows audio) licensing — a known trap.
-- Dolby Atmos versus open ADM BWF for immersive audio delivery.
-- Codec patent pools, as distinct from source licenses.
+  described as a modified Apache 2.0. **RESOLVED — and it is not Apache-2.0.**
+  Since release 24.08 (2024-07-25) OpenUSD is under the **Tomorrow Open Source
+  Technology License 1.0**: bespoke, non-OSI, non-SPDX, and Apache-2.0 with a
+  *narrowed* §6. ⚖️ LEGAL REVIEW REQUIRED before any dependency. The pure-Rust
+  `openusd` crate is plain MIT and carries no such question.
+- OpenColorIO, OpenEXR, OpenImageIO, Imath — **RESOLVED, all permissive.**
+  OpenColorIO and OpenEXR are BSD-3-Clause; **OpenImageIO relicensed to
+  Apache-2.0 in 2023** (>99.86% of lines), which makes it the one major C++
+  imaging library whose source may be *ported* rather than merely linked.
+- OpenFX plug-in API terms. **RESOLVED: BSD-3-Clause.** Hosting OFX is
+  licence-clear. Deferred on engineering grounds, not legal ones.
+- CLAP vs LV2 vs VST3 for audio. **RESOLVED, and the trap has moved.** The
+  **VST 3 SDK is MIT** as of VST 3.8 (2025-10-29); Steinberg's own README
+  states that GPLv3 and proprietary licensing "is no longer available". VST3 is
+  therefore hostable by an Apache-2.0 product. Note `nih-plug`'s VST3 export
+  pulls GPL-3.0 `vst3-sys`; use `vst3` (coupler-rs, MIT) instead. CLAP (MIT)
+  and LV2 (ISC) remain clear.
+- ASIO (Windows audio) licensing. **RESOLVED, and it is now the trap**:
+  Steinberg moved the ASIO SDK to dual GPLv3 / proprietary in the same round.
+  It cannot be linked by an Apache-2.0 product.
+- Dolby Atmos versus open ADM BWF for immersive audio delivery. **The open path
+  is clear**: `libadm` and `libbw64` are Apache-2.0, the EBU ADM Renderer is
+  BSD-3-Clause-Clear.
+- Codec patent pools, as distinct from source licenses. **Still open** — see
+  `PHASE-3-STATUS.md` §5. A BSD-2 H.264 decoder settles copyright and says
+  nothing about patents. ⚖️ LEGAL REVIEW REQUIRED before distribution.
+- Camera RAW. **RESOLVED unfavourably**: `rawloader`/`rawler` are LGPL-2.1 and
+  `imagepipe` is LGPL-3.0-only. Rust links statically, so there is no LGPL
+  §6(b) relinking escape — RAW stills ingest is *not* available on the terms
+  usually assumed.
 
 ## 6. Obligations CINE-OMNI must discharge
 

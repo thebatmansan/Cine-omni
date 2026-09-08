@@ -95,6 +95,12 @@ every cascade. The fix is small and the baseline to verify it is committed.
 - Preserve working systems; the checkpoint exists so that rule can be enforced.
 
 
+## Phase 3
+
+- [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) — **start here.** Status vocabulary,
+  the capability / research / licence / decision matrices, the defects fixed and
+  the defects still open, and what may and may not be claimed today.
+
 ## Phase 2
 
 - [`PHASE-2-MEDIA-ENGINE.md`](PHASE-2-MEDIA-ENGINE.md) — the media engine:
