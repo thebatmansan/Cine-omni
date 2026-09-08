@@ -4,6 +4,7 @@ description = "Multi-channel DAW engine for CINE-OMNI: spatial panning, stem mix
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]

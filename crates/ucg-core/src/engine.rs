@@ -8,8 +8,9 @@ use crate::node::NodeKind;
 use crate::tx::{apply_op, Delta, DeltaKind, Op, Tx};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Published after every committed transaction.
 #[derive(Clone, Debug)]
@@ -179,17 +180,51 @@ pub struct UndoGroup {
     pub deltas: Vec<Arc<Delta>>,
 }
 
+/// Bounds on the engine's in-memory windows.
+///
+/// Neither bound affects durability. The on-disk op log remains the complete
+/// record, and undo history is rebuilt from it on open, so trimming these only
+/// limits what a single live session holds in RAM.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EngineLimits {
+    /// Deltas retained in the in-memory session log.
+    pub max_log_deltas: usize,
+    /// Undo groups retained. Beyond this the oldest are dropped, which is the
+    /// conventional behaviour of an application undo stack.
+    pub max_undo_groups: usize,
+}
+
+impl Default for EngineLimits {
+    fn default() -> Self {
+        EngineLimits {
+            max_log_deltas: 4_096,
+            max_undo_groups: 1_000,
+        }
+    }
+}
+
 pub struct Engine {
     graph: RwLock<Graph>,
     reactors: RwLock<Vec<Arc<dyn Reactor>>>,
     subscribers: Mutex<Vec<Subscriber>>,
     undo: Mutex<Vec<UndoGroup>>,
     redo: Mutex<Vec<UndoGroup>>,
-    /// Every delta ever committed in this session (the op log).
-    log: Mutex<Vec<Arc<Delta>>>,
+    /// Recent deltas from this session, for inspection and diagnostics.
+    ///
+    /// Bounded: the durable record is the on-disk op log, which is complete.
+    /// Retaining every delta here would grow without limit over an editing
+    /// session, and nothing in the product reads it for correctness.
+    log: Mutex<VecDeque<Arc<Delta>>>,
+    /// How many deltas have been evicted from `log` since the session began.
+    log_dropped: Mutex<u64>,
+    /// Caps on the in-memory windows. See [`Engine::set_limits`].
+    limits: Mutex<EngineLimits>,
     actor: String,
     lamport: Mutex<u64>,
     pub max_cascade_depth: u32,
+    /// How long a commit waits for the write lock before reporting a probable
+    /// self-deadlock. See [`Engine::set_write_lock_timeout`].
+    write_lock_timeout: Mutex<Duration>,
     /// Whether committed transactions trigger reactors (disabled during undo/replay).
     reacting: Mutex<bool>,
 }
@@ -212,12 +247,23 @@ impl Engine {
             subscribers: Mutex::new(Vec::new()),
             undo: Mutex::new(Vec::new()),
             redo: Mutex::new(Vec::new()),
-            log: Mutex::new(Vec::new()),
+            log: Mutex::new(VecDeque::new()),
+            log_dropped: Mutex::new(0),
+            limits: Mutex::new(EngineLimits::default()),
             actor: "local".to_string(),
             lamport: Mutex::new(0),
             max_cascade_depth: 8,
+            write_lock_timeout: Mutex::new(Duration::from_secs(5)),
             reacting: Mutex::new(true),
         }
+    }
+
+    /// How long a commit waits for the write lock before returning
+    /// [`UcgError::WriteLockTimeout`]. Lower it in tests that deliberately
+    /// exercise the deadlock path; raise it if a legitimate writer can block
+    /// for longer. Defaults to five seconds.
+    pub fn set_write_lock_timeout(&self, timeout: Duration) {
+        *self.write_lock_timeout.lock() = timeout;
     }
 
     pub fn set_actor(&mut self, actor: impl Into<String>) {
@@ -265,8 +311,29 @@ impl Engine {
         rx
     }
 
+    /// The retained window of this session's deltas, oldest first.
+    ///
+    /// Bounded by [`EngineLimits::max_log_deltas`]; use [`Engine::log_dropped`]
+    /// to see how many older deltas have been evicted. The durable record is
+    /// the on-disk op log.
     pub fn log(&self) -> Vec<Arc<Delta>> {
-        self.log.lock().clone()
+        self.log.lock().iter().cloned().collect()
+    }
+
+    /// Deltas evicted from the in-memory window since the session began.
+    pub fn log_dropped(&self) -> u64 {
+        *self.log_dropped.lock()
+    }
+
+    /// Current in-memory bounds.
+    pub fn limits(&self) -> EngineLimits {
+        *self.limits.lock()
+    }
+
+    /// Set the in-memory bounds. Applies to subsequent commits; already
+    /// retained entries are trimmed on the next push.
+    pub fn set_limits(&self, limits: EngineLimits) {
+        *self.limits.lock() = limits;
     }
 
     pub fn undo_depth(&self) -> usize {
@@ -296,7 +363,13 @@ impl Engine {
             }
         }
         if !group.deltas.is_empty() {
-            self.undo.lock().push(group.clone());
+            let limit = self.limits.lock().max_undo_groups;
+            let mut undo = self.undo.lock();
+            undo.push(group.clone());
+            if undo.len() > limit {
+                let excess = undo.len() - limit;
+                undo.drain(0..excess);
+            }
             self.redo.lock().clear();
         }
         Ok(group)
@@ -329,7 +402,15 @@ impl Engine {
     where
         F: FnOnce(&mut Tx) -> Result<()>,
     {
-        let mut g = self.graph.write();
+        // Acquiring the write lock is the one place a caller's mistake becomes
+        // a silent hang: holding an `engine.read()` guard across `transact()`
+        // deadlocks, because the lock is not reentrant. Time out instead, and
+        // say precisely what the caller almost certainly did wrong.
+        let timeout = *self.write_lock_timeout.lock();
+        let mut g = match self.graph.try_write_for(timeout) {
+            Some(g) => g,
+            None => return Err(UcgError::WriteLockTimeout(timeout)),
+        };
         let kinds_before: HashSet<NodeKind> = HashSet::new();
         // Apply in place; on error roll back what was applied.
         let ops = {
@@ -380,7 +461,15 @@ impl Engine {
         });
         let cs = ChangeSet::build(delta.clone(), &g, kinds);
         drop(g);
-        self.log.lock().push(delta);
+        {
+            let limits = *self.limits.lock();
+            let mut log = self.log.lock();
+            log.push_back(delta);
+            while log.len() > limits.max_log_deltas {
+                log.pop_front();
+                *self.log_dropped.lock() += 1;
+            }
+        }
         self.publish(&cs);
         Ok(Some(cs))
     }
@@ -548,6 +637,13 @@ impl Engine {
                     }
                 }
             }
+        }
+        // Honour the same bound as live editing, so reopening a long-lived
+        // project does not materialise an unbounded undo stack.
+        let limit = self.limits.lock().max_undo_groups;
+        if undo.len() > limit {
+            let excess = undo.len() - limit;
+            undo.drain(0..excess);
         }
         *self.undo.lock() = undo;
         *self.redo.lock() = redo;

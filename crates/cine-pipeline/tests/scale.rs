@@ -31,7 +31,18 @@ fn screenplay(scenes: usize, lines: usize) -> String {
     s
 }
 
-fn measure(scenes: usize, lines: usize) -> (Duration, Duration, usize, usize, usize) {
+/// Timings for the two classes of edit that matter.
+struct Timings {
+    import: Duration,
+    /// An edit that changes scheduler inputs (dialogue length moves duration).
+    schedule_affecting: Duration,
+    /// An edit that changes nothing the scheduler reads (a note on a scene).
+    schedule_neutral: Duration,
+    nodes: usize,
+    deltas: usize,
+}
+
+fn measure(scenes: usize, lines: usize) -> Timings {
     let project = OmniProject::new(ProjectSetup::default()).expect("project");
 
     let t = Instant::now();
@@ -41,41 +52,58 @@ fn measure(scenes: usize, lines: usize) -> (Duration, Duration, usize, usize, us
     let import = t.elapsed();
 
     let scene_ids = project.scenes(doc);
-    let (nodes, edges) = {
-        let g = project.engine.read();
-        (g.node_count(), g.edge_count())
-    };
+    let nodes = project.engine.read().node_count();
 
-    // THE INTERACTIVE PATH: one artist edits one line of dialogue.
+    // (a) Schedule-affecting: changing dialogue length changes the scene's
+    //     estimated duration, which the scheduler genuinely consumes.
     let line = project.dialogue_lines(scene_ids[scene_ids.len() / 2])[0];
     let t = Instant::now();
     let group = project
         .edit_dialogue(line, "This time I mean it, and I will not say it twice.")
         .expect("edit");
-    let edit = t.elapsed();
+    let schedule_affecting = t.elapsed();
 
-    (import, edit, nodes, edges, group.deltas.len())
+    // (b) Schedule-neutral: annotate a scene. Nothing the scheduler reads
+    //     changes, so the fingerprint fast path should skip the whole reschedule.
+    let scene = scene_ids[scene_ids.len() / 2];
+    let t = Instant::now();
+    project
+        .engine
+        .transact("note", |tx| tx.set(scene, "notes", "check continuity"))
+        .expect("note");
+    let schedule_neutral = t.elapsed();
+
+    Timings {
+        import,
+        schedule_affecting,
+        schedule_neutral,
+        nodes,
+        deltas: group.deltas.len(),
+    }
 }
 
 #[test]
 #[ignore]
 fn cascade_latency_vs_production_size() {
-    println!("\nOne dialogue edit, all 7 reactors installed.");
+    println!("\nOne edit, all 7 reactors installed.");
     println!("Interactive budget: 100ms is already sluggish; 1s is unusable.\n");
     println!(
-        "{:>7} {:>7} {:>9} {:>9} {:>12} {:>14} {:>7}",
-        "scenes", "lines", "nodes", "edges", "import", "ONE EDIT", "deltas"
+        "{:>7} {:>9} {:>12} {:>18} {:>18} {:>7}",
+        "scenes", "nodes", "import", "SCHEDULE-AFFECTING", "SCHEDULE-NEUTRAL", "deltas"
     );
-    println!("{}", "-".repeat(72));
+    println!("{}", "-".repeat(78));
 
     for (scenes, lines) in [(7usize, 3usize), (50, 4), (200, 4), (500, 4), (1000, 4)] {
-        let (import, edit, nodes, edges, deltas) = measure(scenes, lines);
+        let t = measure(scenes, lines);
         println!(
-            "{:>7} {:>7} {:>9} {:>9} {:>12?} {:>14?} {:>7}",
-            scenes, lines, nodes, edges, import, edit, deltas
+            "{:>7} {:>9} {:>12?} {:>18?} {:>18?} {:>7}",
+            scenes, t.nodes, t.import, t.schedule_affecting, t.schedule_neutral, t.deltas
         );
     }
 
-    println!("\nIf ONE EDIT grows with scene count, the cascade is not incremental:");
-    println!("an O(1) user action is triggering O(N) whole-document recomputation.");
+    println!("\nSCHEDULE-NEUTRAL must stay flat: the fingerprint fast path proves the");
+    println!("cascade no longer recomputes the film for an unrelated edit.");
+    println!("SCHEDULE-AFFECTING stays O(N) by nature - packing a shooting schedule");
+    println!("is a global optimisation over every scene - but its graph writes and");
+    println!("call-sheet regeneration are now proportional to the days that moved.");
 }

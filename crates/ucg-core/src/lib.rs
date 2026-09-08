@@ -26,12 +26,12 @@ pub mod time;
 pub mod tx;
 pub mod value;
 
-pub use engine::{ChangeSet, Engine, EngineStats, Plan, Reactor, UndoGroup};
+pub use engine::{ChangeSet, Engine, EngineLimits, EngineStats, Plan, Reactor, UndoGroup};
 pub use error::{Result, UcgError};
 pub use graph::Graph;
 pub use id::EntityId;
 pub use node::{Edge, EdgeKind, Node, NodeKind};
-pub use persist::{Manifest, Project};
+pub use persist::{Manifest, OplogReport, Project};
 pub use time::{RationalTime, TimeRange};
 pub use tx::{Delta, Op, Tx};
 pub use value::{Color, Value};

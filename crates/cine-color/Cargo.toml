@@ -3,6 +3,7 @@ name = "cine-color"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "ACES / OpenColorIO-native color management, grading and scopes for CINE-OMNI (CPU reference implementation)"
 
 [dependencies]

@@ -85,13 +85,16 @@ fn is_content_change(cs: &ChangeSet, g: &Graph, scene: EntityId) -> bool {
         || cs.deleted().any(|_| true) && affected_script_scenes(cs, g).contains(&scene)
 }
 
+/// Attribute holding the document's scheduling constraints.
+pub const SCHEDULE_CONSTRAINTS_ATTR: &str = "schedule_constraints";
+
 /// Scheduling constraints stored on the document under `schedule_constraints`
 /// (set by the UI / CLI); defaults otherwise.
 pub fn read_constraints(
     g: &Graph,
     document: EntityId,
 ) -> cine_logistics::schedule::ScheduleConstraints {
-    g.attr(document, "schedule_constraints")
+    g.attr(document, SCHEDULE_CONSTRAINTS_ATTR)
         .and_then(|v| v.to_serde().ok())
         .unwrap_or_default()
 }
@@ -188,35 +191,74 @@ impl Reactor for PrevisReactor {
 pub struct LogisticsReactor;
 
 impl LogisticsReactor {
+    /// Reschedule the document, doing as little work as the change allows.
+    ///
+    /// Scheduling is a global optimisation — one scene growing can repack every
+    /// later day — so the schedule itself cannot be computed day-locally and is
+    /// still solved whole. What this avoids is the O(total) *graph* work that
+    /// used to happen regardless:
+    ///
+    /// 1. **Fast path.** A fingerprint of exactly the attributes the scheduler
+    ///    reads is compared against the one stored with the last schedule. If
+    ///    nothing it depends on changed, the plan returns with zero ops. Most
+    ///    edits (dialogue wording, props, notes, comp or colour changes) take
+    ///    this path.
+    /// 2. **Diff-driven writes.** Only days whose content actually changed are
+    ///    rewritten; unchanged days are never re-serialised.
+    /// 3. **Dependency-aware call sheets.** Only the changed days have their
+    ///    call sheet regenerated, instead of every day on every cascade.
     fn schedule_plan(document: EntityId) -> Plan {
         Plan::new("reschedule", move |tx| {
-            use cine_logistics::schedule::schedule;
-            let breakdowns = cine_logistics::breakdown::breakdown_document(tx.graph(), document);
+            use cine_logistics::graph::{
+                read_schedule, read_schedule_fingerprint, write_call_sheet,
+                write_schedule_incremental,
+            };
+            use cine_logistics::schedule::{diff, schedule, schedule_fingerprint_with};
+
+            // 1. Fast path. The fingerprint covers the per-scene inputs *and*
+            //    the global constraints, so a constraint change invalidates too.
             let constraints = read_constraints(tx.graph(), document);
+            let fingerprint = schedule_fingerprint_with(tx.graph(), document, Some(&constraints));
+            if read_schedule_fingerprint(tx.graph(), document) == Some(fingerprint) {
+                return Ok(());
+            }
+
+            let breakdowns = cine_logistics::breakdown::breakdown_document(tx.graph(), document);
             let new = schedule(&breakdowns, &constraints);
-            let old = cine_logistics::graph::read_schedule(tx.graph(), document);
-            let schedule_id = cine_logistics::graph::write_schedule(tx, document, &new)
+            let old = read_schedule(tx.graph(), document);
+
+            // 2. Write only the days that moved.
+            let report = write_schedule_incremental(tx, document, &new, old.as_ref(), fingerprint)
                 .map_err(|e| engine_err("logistics", e))?;
-            if let Some(old) = old {
-                let diff = cine_logistics::schedule::diff(&old, &new);
-                if !diff.moved.is_empty() {
-                    tx.set(schedule_id, "last_diff", Value::from_serde(&diff)?)?;
+
+            if let Some(old) = &old {
+                let d = diff(old, &new);
+                if !d.moved.is_empty() {
+                    tx.set(report.schedule_id, "last_diff", Value::from_serde(&d)?)?;
                 }
             }
-            // Call sheets for every day (idempotent; unchanged days produce no ops).
-            let roster = cine_logistics::callsheet::CastRoster::from_breakdowns(&breakdowns);
-            let general_call =
-                cine_logistics::date::Time::new(7, 0).map_err(|e| engine_err("logistics", e))?;
-            let day_ids = tx.graph().children(schedule_id);
-            for (i, day) in new.days.iter().enumerate() {
-                if let Some(day_id) = day_ids.get(i).copied() {
+
+            // 3. Call sheets for changed days only.
+            if !report.changed_days.is_empty() {
+                let roster = cine_logistics::callsheet::CastRoster::from_breakdowns(&breakdowns);
+                let general_call = cine_logistics::date::Time::new(7, 0)
+                    .map_err(|e| engine_err("logistics", e))?;
+                for day in new
+                    .days
+                    .iter()
+                    .filter(|d| report.changed_days.contains(&d.index))
+                {
+                    let day_node = cine_logistics::graph::day_id(report.schedule_id, day.index);
+                    if !tx.graph().contains(day_node) {
+                        continue;
+                    }
                     let sheet = cine_logistics::callsheet::build_call_sheet(
                         day,
                         &breakdowns,
                         &roster,
                         general_call,
                     );
-                    cine_logistics::graph::write_call_sheet(tx, day_id, &sheet)
+                    write_call_sheet(tx, day_node, &sheet)
                         .map_err(|e| engine_err("logistics", e))?;
                 }
             }
@@ -233,11 +275,23 @@ impl Reactor for LogisticsReactor {
         cs.touches_kind(kinds::SCRIPT_SCENE)
             || cs.touches_kind(kinds::PREVIS_CAMERA)
             || cs.touches_kind(kinds::PREVIS_CHARACTER)
+            // Scheduling constraints live on the document and are global.
+            || cs.touches_kind(kinds::SCRIPT_DOCUMENT)
     }
     fn react(&self, cs: &ChangeSet, g: &Graph) -> Result<Vec<Plan>> {
         let mut plans = Vec::new();
         let mut documents = BTreeSet::new();
         let mut scenes: BTreeSet<EntityId> = BTreeSet::new();
+
+        // A constraint change on the document repacks the whole film.
+        for doc in cs
+            .dirty_of_kind(g, kinds::SCRIPT_DOCUMENT)
+            .collect::<Vec<_>>()
+        {
+            if cs.attr_changed(doc, SCHEDULE_CONSTRAINTS_ATTR) {
+                documents.insert(doc);
+            }
+        }
 
         for scene in cs.dirty_of_kind(g, kinds::SCRIPT_SCENE) {
             let relevant = cs.was_created(scene)

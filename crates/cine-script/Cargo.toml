@@ -4,6 +4,7 @@ description = "Fountain/FDX screenplay I/O, auto-tagging, statistics and ScriptS
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 ucg-core.workspace = true

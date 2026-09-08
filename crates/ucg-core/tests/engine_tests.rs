@@ -1,3 +1,4 @@
+use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use ucg_core::persist::{graph_from_json, graph_from_msgpack, graph_to_json, graph_to_msgpack};
@@ -489,4 +490,469 @@ fn undo_history_survives_reopening_a_project() {
         Some("Take two.")
     );
     assert_eq!(p.engine.undo_depth(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1: graph index ordering regressions.
+//
+// `of_kind` and `children` were rewritten for performance. These lock down the
+// exact ordering semantics they had before, so the optimisation can never
+// silently change observable behaviour.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn of_kind_returns_insertion_order() {
+    let engine = Engine::new();
+    let mut made = Vec::new();
+    engine
+        .transact("build", |tx| {
+            // Interleave kinds so a correct answer cannot come from luck.
+            for i in 0..50 {
+                made.push(tx.create("script.scene")?);
+                tx.create("nle.clip")?;
+                let _ = i;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let g = engine.read();
+    let got: Vec<EntityId> = g.of_kind("script.scene").iter().map(|n| n.id).collect();
+    assert_eq!(got, made, "of_kind must yield insertion order");
+    assert_eq!(g.of_kind("nle.clip").len(), 50);
+    assert!(g.of_kind("does.not.exist").is_empty());
+}
+
+#[test]
+fn of_kind_order_survives_removal_and_reinsertion() {
+    let engine = Engine::new();
+    let mut ids = Vec::new();
+    engine
+        .transact("build", |tx| {
+            for _ in 0..10 {
+                ids.push(tx.create("script.scene")?);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    // Remove from the middle: the survivors must keep their relative order.
+    let removed = ids[4];
+    engine.transact("remove", |tx| tx.delete(removed)).unwrap();
+    {
+        let g = engine.read();
+        let got: Vec<EntityId> = g.of_kind("script.scene").iter().map(|n| n.id).collect();
+        let want: Vec<EntityId> = ids.iter().copied().filter(|i| *i != removed).collect();
+        assert_eq!(got, want, "removal must not disturb the order of survivors");
+    }
+
+    // A newly created node appends at the end.
+    let mut fresh = EntityId::nil();
+    engine
+        .transact("add", |tx| {
+            fresh = tx.create("script.scene")?;
+            Ok(())
+        })
+        .unwrap();
+    let g = engine.read();
+    let got: Vec<EntityId> = g.of_kind("script.scene").iter().map(|n| n.id).collect();
+    assert_eq!(*got.last().unwrap(), fresh);
+    assert_eq!(got.len(), 10);
+
+    // Undo restores the node, and it re-appends at the end rather than
+    // returning to its original index. This is pre-existing behaviour, not a
+    // consequence of the index optimisation: node re-insertion appends to the
+    // `nodes` IndexMap, and the previous implementation sorted on that same
+    // index, so it produced this ordering too. Locked down here so any future
+    // change to it is a deliberate decision.
+    drop(g);
+    engine.undo().unwrap(); // undo the create
+    engine.undo().unwrap(); // undo the delete
+    let g = engine.read();
+    let got: Vec<EntityId> = g.of_kind("script.scene").iter().map(|n| n.id).collect();
+    let mut want: Vec<EntityId> = ids.iter().copied().filter(|i| *i != removed).collect();
+    want.push(removed); // restored at the end
+    assert_eq!(got, want, "undo restores the node, appended at the end");
+    assert_eq!(got.len(), ids.len(), "all nodes present after undo");
+
+    // Whatever the order, it must always equal the underlying `nodes` order,
+    // which is the invariant the old sort-based implementation guaranteed.
+    let nodes_order: Vec<EntityId> = g
+        .nodes()
+        .filter(|n| n.kind.as_str() == "script.scene")
+        .map(|n| n.id)
+        .collect();
+    assert_eq!(got, nodes_order);
+}
+
+#[test]
+fn children_order_by_order_attr_then_insertion() {
+    let engine = Engine::new();
+    let (mut parent, mut a, mut b, mut c, mut d) = (
+        EntityId::nil(),
+        EntityId::nil(),
+        EntityId::nil(),
+        EntityId::nil(),
+        EntityId::nil(),
+    );
+    engine
+        .transact("build", |tx| {
+            parent = tx.create("script.scene")?;
+            // Explicit `order` wins; equal/absent order falls back to insertion.
+            a = tx.create("script.action")?;
+            tx.set(a, "order", 2i64)?;
+            tx.link(parent, a, EdgeKind::Contains)?;
+            b = tx.create("script.action")?;
+            tx.set(b, "order", 1i64)?;
+            tx.link(parent, b, EdgeKind::Contains)?;
+            c = tx.create("script.action")?; // no order attr
+            tx.link(parent, c, EdgeKind::Contains)?;
+            d = tx.create("script.action")?; // no order attr, created after c
+            tx.link(parent, d, EdgeKind::Contains)?;
+            Ok(())
+        })
+        .unwrap();
+
+    let g = engine.read();
+    // None sorts before Some in Rust's Option ordering, so the unordered pair
+    // comes first in insertion order, then order=1, then order=2.
+    assert_eq!(g.children(parent), vec![c, d, b, a]);
+}
+
+#[test]
+fn of_kind_matches_a_naive_scan_exactly() {
+    // The index must be a pure optimisation: identical results to scanning.
+    let engine = Engine::new();
+    engine
+        .transact("build", |tx| {
+            for i in 0..200 {
+                let kind = if i % 3 == 0 {
+                    "script.scene"
+                } else {
+                    "nle.clip"
+                };
+                tx.create(kind)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let g = engine.read();
+    for kind in ["script.scene", "nle.clip"] {
+        let indexed: Vec<EntityId> = g.of_kind(kind).iter().map(|n| n.id).collect();
+        let scanned: Vec<EntityId> = g
+            .nodes()
+            .filter(|n| n.kind.as_str() == kind)
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(
+            indexed, scanned,
+            "indexed and scanned results must agree for {kind}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1C: the read-guard-across-transact invariant.
+//
+// Holding an `engine.read()` guard while calling `engine.transact()` deadlocks,
+// because the RwLock is not reentrant. That was previously a silent hang with
+// no panic and no timeout — the single most dangerous failure mode in the
+// codebase. It is now a diagnosable error.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn holding_a_read_guard_across_transact_reports_instead_of_hanging() {
+    let engine = Engine::new();
+    engine.set_write_lock_timeout(std::time::Duration::from_millis(250));
+    let mut id = EntityId::nil();
+    engine
+        .transact("seed", |tx| {
+            id = tx.create("script.scene")?;
+            Ok(())
+        })
+        .unwrap();
+
+    // The mistake: a live read guard while committing on the same thread.
+    let guard = engine.read();
+    let result = engine.transact("write while reading", |tx| tx.set(id, "heading", "X"));
+    drop(guard);
+
+    match result {
+        Err(UcgError::WriteLockTimeout(d)) => {
+            assert_eq!(d, std::time::Duration::from_millis(250));
+        }
+        other => panic!("expected WriteLockTimeout, got {other:?}"),
+    }
+
+    // The engine is still usable once the guard is released.
+    engine
+        .transact("after", |tx| tx.set(id, "heading", "Y"))
+        .unwrap();
+    assert_eq!(
+        engine.read().node(id).unwrap().get_str("heading"),
+        Some("Y")
+    );
+}
+
+#[test]
+fn correctly_scoped_guards_never_trip_the_timeout() {
+    let engine = Engine::new();
+    engine.set_write_lock_timeout(std::time::Duration::from_millis(250));
+    let mut id = EntityId::nil();
+    engine
+        .transact("seed", |tx| {
+            id = tx.create("script.scene")?;
+            Ok(())
+        })
+        .unwrap();
+
+    // The correct pattern: the guard is scoped and dropped before committing.
+    for i in 0..50 {
+        let heading = {
+            let g = engine.read();
+            g.node(id)
+                .unwrap()
+                .get_str("heading")
+                .unwrap_or("")
+                .to_string()
+        };
+        engine
+            .transact("scoped", |tx| {
+                tx.set(id, "heading", format!("{heading}{i}"))
+            })
+            .expect("correctly scoped reads must never time out");
+    }
+
+    // Concurrent readers on other threads must not block a writer either.
+    let engine = std::sync::Arc::new(engine);
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let e = engine.clone();
+            std::thread::spawn(move || {
+                for _ in 0..500 {
+                    let _ = e.read().node(id).is_some();
+                }
+            })
+        })
+        .collect();
+    for i in 0..50 {
+        engine
+            .transact("concurrent", |tx| tx.set(id, "n", i))
+            .expect("writer must proceed");
+    }
+    for r in readers {
+        r.join().unwrap();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1D: bounded op log and recovery.
+//
+// The in-memory windows are bounded so a long session cannot grow without
+// limit. Durability is unaffected: the on-disk op log stays complete, and undo
+// history is rebuilt from it on open.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn in_memory_log_is_bounded_but_disk_record_stays_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Bounded.cineomni");
+    let project = Project::create(&path, "Bounded").unwrap();
+    project.enable_autosave();
+    project.engine.set_limits(ucg_core::EngineLimits {
+        max_log_deltas: 32,
+        max_undo_groups: 16,
+    });
+
+    let mut id = EntityId::nil();
+    project
+        .engine
+        .transact("seed", |tx| {
+            id = tx.create("script.scene")?;
+            Ok(())
+        })
+        .unwrap();
+
+    for i in 0..200 {
+        project
+            .engine
+            .transact("edit", |tx| tx.set(id, "n", i))
+            .unwrap();
+    }
+
+    // In memory: bounded.
+    assert!(
+        project.engine.log().len() <= 32,
+        "log window must respect its bound"
+    );
+    assert!(
+        project.engine.undo_depth() <= 16,
+        "undo stack must respect its bound"
+    );
+    assert!(
+        project.engine.log_dropped() > 0,
+        "evictions must be reported, not silent"
+    );
+
+    // On disk: complete. Nothing needed for recovery was dropped.
+    let deltas = ucg_core::persist::read_oplog(&Project::oplog_dir(&path), 0).unwrap();
+    assert!(
+        deltas.len() >= 201,
+        "disk log must retain every delta, got {}",
+        deltas.len()
+    );
+
+    // And recovery reproduces the final state exactly.
+    let reopened = Project::open(&path).unwrap();
+    assert_eq!(
+        reopened.engine.read().node(id).unwrap().get_int("n"),
+        Some(199)
+    );
+}
+
+#[test]
+fn recovery_discards_a_torn_final_record_but_keeps_everything_committed() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Torn.cineomni");
+    let mut id = EntityId::nil();
+    {
+        let project = Project::create(&path, "Torn").unwrap();
+        project.enable_autosave();
+        project
+            .engine
+            .transact("seed", |tx| {
+                id = tx.create("script.scene")?;
+                tx.set(id, "heading", "INT. KITCHEN - NIGHT")
+            })
+            .unwrap();
+        project
+            .engine
+            .transact("edit", |tx| tx.set(id, "heading", "EXT. ROAD - DAY"))
+            .unwrap();
+    }
+
+    // Simulate a power loss mid-append: a truncated JSON record at the end.
+    let current = Project::oplog_dir(&path).join("current.jsonl");
+    let mut f = fs::OpenOptions::new().append(true).open(&current).unwrap();
+    f.write_all(br#"{"revision":99,"label":"torn","ops":[{"op":"set_at"#)
+        .unwrap();
+    drop(f);
+
+    // Recovery must succeed, report the torn tail, and preserve committed work.
+    let (deltas, report) =
+        ucg_core::persist::read_oplog_with_report(&Project::oplog_dir(&path), 0).unwrap();
+    assert!(
+        report.torn_tail.is_some(),
+        "a truncated final record must be reported"
+    );
+    assert_eq!(report.recovered, deltas.len());
+
+    let reopened = Project::open(&path).unwrap();
+    assert_eq!(
+        reopened.engine.read().node(id).unwrap().get_str("heading"),
+        Some("EXT. ROAD - DAY"),
+        "committed transactions must survive a torn tail"
+    );
+}
+
+#[test]
+fn corruption_before_the_tail_fails_loudly_rather_than_losing_operations() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Corrupt.cineomni");
+    {
+        let project = Project::create(&path, "Corrupt").unwrap();
+        project.enable_autosave();
+        let mut id = EntityId::nil();
+        project
+            .engine
+            .transact("seed", |tx| {
+                id = tx.create("script.scene")?;
+                Ok(())
+            })
+            .unwrap();
+        for i in 0..3 {
+            project
+                .engine
+                .transact("edit", |tx| tx.set(id, "n", i))
+                .unwrap();
+        }
+    }
+
+    // Damage a line in the middle, then append a valid-looking one after it.
+    let current = Project::oplog_dir(&path).join("current.jsonl");
+    let text = fs::read_to_string(&current).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    assert!(lines.len() >= 3);
+    lines[1] = "{ this is not valid json".to_string();
+    let mut f = fs::File::create(&current).unwrap();
+    f.write_all(lines.join("\n").as_bytes()).unwrap();
+    f.write_all(b"\n").unwrap();
+    drop(f);
+
+    // Silently skipping it could drop operations that later deltas depend on,
+    // so recovery must refuse rather than reconstruct a partial graph.
+    let err = ucg_core::persist::read_oplog_with_report(&Project::oplog_dir(&path), 0);
+    assert!(
+        err.is_err(),
+        "mid-file corruption must not be silently skipped"
+    );
+    assert!(Project::open(&path).is_err());
+}
+
+#[test]
+fn archive_compaction_boundary_is_explicit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Compact.cineomni");
+    let project = Project::create(&path, "Compact").unwrap();
+    project.enable_autosave();
+    let mut id = EntityId::nil();
+    project
+        .engine
+        .transact("seed", |tx| {
+            id = tx.create("script.scene")?;
+            Ok(())
+        })
+        .unwrap();
+    project
+        .engine
+        .transact("a", |tx| tx.set(id, "heading", "A"))
+        .unwrap();
+
+    // save() archives the live segment; it must not discard it.
+    project.save().unwrap();
+    project
+        .engine
+        .transact("b", |tx| tx.set(id, "heading", "B"))
+        .unwrap();
+
+    let before = Project::open(&path).unwrap();
+    assert_eq!(
+        before.engine.read().node(id).unwrap().get_str("heading"),
+        Some("B")
+    );
+    assert!(
+        before.engine.undo_depth() >= 2,
+        "undo history spans the archive boundary"
+    );
+    drop(before);
+
+    // compact() is the documented boundary at which pre-snapshot history goes.
+    project.save().unwrap();
+    let removed = project.compact().unwrap();
+    assert!(removed > 0, "compaction must remove archived segments");
+
+    // The graph is intact; only the history before the snapshot is gone.
+    let after = Project::open(&path).unwrap();
+    assert_eq!(
+        after.engine.read().node(id).unwrap().get_str("heading"),
+        Some("B"),
+        "compaction must never change the current state"
+    );
+    assert_eq!(
+        after.engine.undo_depth(),
+        0,
+        "history before the snapshot is intentionally gone"
+    );
 }

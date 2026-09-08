@@ -3,6 +3,7 @@ name = "cine-comp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "CINE-OMNI node-based compositor: images, deep compositing, keying, CPU evaluator, UCG integration"
 
 [dependencies]

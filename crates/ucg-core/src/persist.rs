@@ -239,29 +239,83 @@ pub fn append_delta(dir: &Path, delta: &Delta) -> Result<()> {
     Ok(())
 }
 
-pub fn read_oplog(dir: &Path, after_revision: u64) -> Result<Vec<Delta>> {
+/// What recovery had to tolerate when reading an op log.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OplogReport {
+    /// Deltas recovered.
+    pub recovered: usize,
+    /// A final line that could not be parsed. This is the signature of a torn
+    /// write: the process died mid-append. The partial record is discarded,
+    /// which is safe because it was never a completed transaction.
+    pub torn_tail: Option<String>,
+}
+
+/// Read an op log, tolerating a torn final record.
+///
+/// Recovery distinguishes two failure shapes deliberately:
+///
+/// * **A torn tail** — the last line of the last segment is truncated because
+///   the process died mid-write. That record never completed, so discarding it
+///   loses nothing that was ever committed. Recovery continues and reports it.
+/// * **Corruption anywhere else** — a malformed line with valid lines after it
+///   means the file was damaged, and later deltas may depend on the missing
+///   one. Recovery fails loudly rather than silently reconstructing a graph
+///   that is missing operations.
+pub fn read_oplog_with_report(
+    dir: &Path,
+    after_revision: u64,
+) -> Result<(Vec<Delta>, OplogReport)> {
     let mut out = Vec::new();
+    let mut report = OplogReport::default();
     if !dir.exists() {
-        return Ok(out);
+        return Ok((out, report));
     }
     let mut files: Vec<PathBuf> = fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().map(|e| e == "jsonl").unwrap_or(false))
         .collect();
     files.sort();
-    for f in files {
+
+    let last_file = files.len().saturating_sub(1);
+    for (fi, f) in files.iter().enumerate() {
         let reader = BufReader::new(fs::File::open(f)?);
-        for line in reader.lines() {
-            let line = line?;
+        let lines: Vec<String> = reader.lines().collect::<std::io::Result<_>>()?;
+        let last_line = lines.len().saturating_sub(1);
+        for (li, line) in lines.iter().enumerate() {
             if line.trim().is_empty() {
                 continue;
             }
-            let d: Delta = serde_json::from_str(&line)?;
-            if d.revision > after_revision {
-                out.push(d);
+            match serde_json::from_str::<Delta>(line) {
+                Ok(d) => {
+                    if d.revision > after_revision {
+                        out.push(d);
+                    }
+                }
+                Err(e) => {
+                    let is_tail = fi == last_file && li == last_line;
+                    if is_tail {
+                        // Torn write: never a completed transaction.
+                        report.torn_tail = Some(format!(
+                            "discarded truncated final record in {}: {e}",
+                            f.display()
+                        ));
+                    } else {
+                        return Err(UcgError::Serde(format!(
+                            "corrupt op log {} line {}: {e}. Recovery stopped rather than \
+                             silently dropping operations later deltas may depend on.",
+                            f.display(),
+                            li + 1
+                        )));
+                    }
+                }
             }
         }
     }
     out.sort_by_key(|d| d.revision);
-    Ok(out)
+    report.recovered = out.len();
+    Ok((out, report))
+}
+
+pub fn read_oplog(dir: &Path, after_revision: u64) -> Result<Vec<Delta>> {
+    read_oplog_with_report(dir, after_revision).map(|(d, _)| d)
 }

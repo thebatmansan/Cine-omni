@@ -4,6 +4,7 @@ description = "Shared node kinds, attribute keys and typed components for CINE-O
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 ucg-core.workspace = true

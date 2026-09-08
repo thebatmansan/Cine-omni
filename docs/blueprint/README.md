@@ -1,6 +1,8 @@
 # CINE-OMNI Industry System Blueprint
 
-**Phase 0 — research and architecture. No implementation has begun.**
+**Phase 0 — research and architecture: partially complete.**
+**Phase 1 — core platform hardening: complete.** See
+[`05-PHASE-1-RESULTS.md`](05-PHASE-1-RESULTS.md).
 
 This directory is the deliverable required by directive §62 and §81. It exists
 to turn an intentionally enormous ambition into architecture, phases and
@@ -28,6 +30,7 @@ that has not been earned.
 | 14 | Target architecture | **Directional only** | [`02-TARGET-ARCHITECTURE.md`](02-TARGET-ARCHITECTURE.md) |
 | 15 | Phased implementation plan | **Phase 1 fully specified; later phases outlined** | [`03-PHASED-PLAN.md`](03-PHASED-PLAN.md) |
 | 16 | Risk register | **Done** | [`04-RISK-REGISTER.md`](04-RISK-REGISTER.md) |
+| 17 | **Phase 1 hardening (A–E)** | **Done** | [`05-PHASE-1-RESULTS.md`](05-PHASE-1-RESULTS.md) |
 
 **Why items 6–10 are blocked:** the parallel research agents hit the account's
 model rate limit mid-run. Two of seven clusters completed and are on disk. The

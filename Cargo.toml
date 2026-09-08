@@ -21,6 +21,11 @@ edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.85"
 repository = "https://example.invalid/cine-omni"
+# These crates are workspace-internal and are not published to crates.io. They
+# depend on each other by path, which a publishable crate may not do. Declaring
+# that here is accurate metadata, and it is what lets cargo-deny distinguish an
+# internal path dependency from an unpinned registry wildcard.
+publish = false
 authors = ["CINE-OMNI Engineering"]
 
 [workspace.dependencies]

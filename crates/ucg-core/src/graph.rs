@@ -8,7 +8,7 @@ use crate::error::{Result, UcgError};
 use crate::id::EntityId;
 use crate::node::{Edge, EdgeKind, Node, NodeKind};
 use crate::value::Value;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -27,7 +27,10 @@ pub struct Graph {
     /// Flat edge list (the serialized form; adjacency is rebuilt on load).
     pub(crate) edges: Vec<Edge>,
     #[serde(skip)]
-    pub(crate) by_kind: HashMap<NodeKind, HashSet<EntityId>>,
+    /// Kind index. `IndexSet` rather than `HashSet` so iteration is already in
+    /// insertion order and [`Graph::of_kind`] never has to sort. Nodes are
+    /// appended here and to `nodes` in the same call, so the two orders agree.
+    pub(crate) by_kind: HashMap<NodeKind, IndexSet<EntityId>>,
     pub(crate) revision: u64,
 }
 
@@ -80,16 +83,39 @@ impl Graph {
         &self.edges
     }
 
+    /// Selectivity above which scanning every node beats resolving ids through
+    /// the kind index.
+    ///
+    /// Index lookup costs one hash per match; a scan walks the node arena
+    /// contiguously and compares a string. So the index wins when matches are
+    /// rare and loses when they are common. Measured crossover on this codebase
+    /// sits between 4% and 14% selectivity (see `bench_of_kind_selectivity`),
+    /// so a tenth is a safe, conservative pick.
+    const INDEX_SELECTIVITY_LIMIT: usize = 10;
+
     /// All nodes of a given kind, in insertion order.
+    ///
+    /// Picks a strategy the way a query planner does. For a selective kind it
+    /// walks the `by_kind` index, which is an `IndexSet` and therefore already
+    /// in insertion order — no sort is needed or performed. For a kind that
+    /// matches a large fraction of the graph it scans the node arena instead,
+    /// because resolving that many ids through a hash map costs more than
+    /// simply looking at every node.
+    ///
+    /// Both branches return identical results, verified by
+    /// `of_kind_matches_a_naive_scan_exactly`.
     pub fn of_kind(&self, kind: &str) -> Vec<&Node> {
         let k = NodeKind::new(kind);
-        let mut v: Vec<&Node> = self
-            .by_kind
-            .get(&k)
-            .map(|s| s.iter().filter_map(|id| self.nodes.get(id)).collect())
-            .unwrap_or_default();
-        v.sort_by_key(|n| self.nodes.get_index_of(&n.id));
-        v
+        let Some(ids) = self.by_kind.get(&k) else {
+            return Vec::new();
+        };
+        if ids.len().saturating_mul(Self::INDEX_SELECTIVITY_LIMIT) > self.nodes.len() {
+            // Common kind: a contiguous scan is cheaper than N hash lookups.
+            self.nodes.values().filter(|n| n.kind == k).collect()
+        } else {
+            // Selective kind: the index is a large win.
+            ids.iter().filter_map(|id| self.nodes.get(id)).collect()
+        }
     }
 
     /// All nodes whose kind starts with `prefix` (e.g. `"nle."`).
@@ -132,11 +158,14 @@ impl Graph {
     /// Children in the containment hierarchy (ordered by an optional `order` attr, then insertion).
     pub fn children(&self, id: EntityId) -> Vec<EntityId> {
         let mut kids = self.targets(id, EdgeKind::Contains);
-        kids.sort_by(|a, b| {
-            let oa = self.attr(*a, "order").and_then(Value::as_int);
-            let ob = self.attr(*b, "order").and_then(Value::as_int);
-            oa.cmp(&ob)
-                .then_with(|| self.nodes.get_index_of(a).cmp(&self.nodes.get_index_of(b)))
+        // `sort_by_cached_key` evaluates the key once per element. `sort_by_key`
+        // would re-evaluate it on every comparison, and each evaluation hashes a
+        // UUID, which is what made this path pathological.
+        kids.sort_by_cached_key(|a| {
+            (
+                self.attr(*a, "order").and_then(Value::as_int),
+                self.nodes.get_index_of(a),
+            )
         });
         kids
     }
@@ -299,7 +328,8 @@ impl Graph {
     pub(crate) fn remove_node(&mut self, id: EntityId) -> Result<(Node, Vec<Edge>)> {
         let node = self.nodes.shift_remove(&id).ok_or(UcgError::NotFound(id))?;
         if let Some(s) = self.by_kind.get_mut(&node.kind) {
-            s.remove(&id);
+            // `shift_remove` preserves insertion order, matching `nodes` above.
+            s.shift_remove(&id);
         }
         let mut removed = Vec::new();
         if let Some(outs) = self.out_edges.remove(&id) {

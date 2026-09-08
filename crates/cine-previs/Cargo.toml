@@ -4,6 +4,7 @@ description = "CINE-OMNI previs: physically based optics, light physics, USD-sty
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 ucg-core.workspace = true

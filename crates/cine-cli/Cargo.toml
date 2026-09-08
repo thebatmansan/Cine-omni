@@ -4,6 +4,7 @@ description = "`cine` — command-line front end and JSON-RPC daemon for CINE-OM
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "cine"

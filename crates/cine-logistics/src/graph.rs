@@ -42,6 +42,8 @@ pub const TOTAL_EIGHTHS_ATTR: &str = "total_eighths";
 pub const IS_NIGHT_ATTR: &str = "is_night";
 pub const CAST_ON_CALL_ATTR: &str = "cast_on_call";
 pub const LOCATIONS_ATTR: &str = "locations";
+/// Fingerprint of the scheduler's inputs at the time the schedule was written.
+pub const SCHEDULE_FINGERPRINT_ATTR: &str = "schedule_fingerprint";
 pub const WARNINGS_ATTR: &str = "warnings";
 pub const TAKE_ATTR: &str = "take";
 
@@ -193,6 +195,100 @@ pub fn read_shot_list(graph: &Graph, scene: EntityId) -> Vec<ShotEntry> {
 /// Store a stripboard as `logistics.schedule` derived from `document`, with
 /// one `logistics.day` child per shoot day depending on every scene it
 /// contains. Surplus days from a previous, longer schedule are deleted.
+/// What [`write_schedule_incremental`] actually touched.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScheduleWriteReport {
+    pub schedule_id: EntityId,
+    /// Day indices whose stored state was rewritten.
+    pub changed_days: Vec<usize>,
+    /// Day indices left untouched because their content was identical.
+    pub skipped_days: usize,
+}
+
+/// The fingerprint stored alongside the last written schedule, if any.
+pub fn read_schedule_fingerprint(graph: &Graph, document: EntityId) -> Option<u64> {
+    graph
+        .node(schedule_id(document))?
+        .get_int(SCHEDULE_FINGERPRINT_ATTR)
+        .map(|v| v as u64)
+}
+
+/// Persist a schedule, writing only the days that actually differ from `old`.
+///
+/// `write_schedule` rewrites every day unconditionally. Even though `Tx::set`
+/// is idempotent, *producing* the value to compare means serialising every
+/// day's strips, which is O(total days) work on every cascade. This variant
+/// compares against the previously computed schedule first and skips days that
+/// are unchanged, so a localised edit costs work proportional to the days it
+/// actually moved.
+///
+/// `fingerprint` is stored so a later cascade can skip scheduling entirely when
+/// none of the scheduler's inputs have changed.
+pub fn write_schedule_incremental(
+    tx: &mut Tx,
+    document: EntityId,
+    schedule: &Schedule,
+    old: Option<&Schedule>,
+    fingerprint: u64,
+) -> Result<ScheduleWriteReport> {
+    require(tx.graph(), document)?;
+    let sid = schedule_id(document);
+    tx.ensure(sid, kinds::LOGISTICS_SCHEDULE)?;
+    tx.set(sid, attrs::NAME, "Schedule")?;
+    tx.set(sid, WARNINGS_ATTR, schedule.warnings.clone())?;
+    tx.set(sid, "day_count", schedule.days.len())?;
+    tx.set(sid, SCHEDULE_FINGERPRINT_ATTR, fingerprint as i64)?;
+    tx.link(sid, document, EdgeKind::DerivedFrom)?;
+
+    let changed = schedule.changed_days(old);
+    let mut keep: HashSet<EntityId> = HashSet::new();
+    let mut skipped = 0usize;
+
+    for day in &schedule.days {
+        let did = day_id(sid, day.index);
+        keep.insert(did);
+        // Unchanged and already present: nothing to do, and crucially no
+        // serialisation of its strips.
+        if !changed.contains(&day.index) && tx.graph().contains(did) {
+            skipped += 1;
+            continue;
+        }
+        tx.ensure(did, kinds::LOGISTICS_DAY)?;
+        tx.set(did, attrs::NAME, format!("Day {}", day.index))?;
+        tx.set(did, attrs::DAY, day.index)?;
+        tx.set(did, attrs::ORDER, day.index)?;
+        tx.set(did, DATE_ATTR, day.date.iso())?;
+        tx.set_as(did, STRIPS_ATTR, &day.strips)?;
+        tx.set(did, TOTAL_EIGHTHS_ATTR, i64::from(day.total_eighths))?;
+        tx.set(did, IS_NIGHT_ATTR, day.is_night)?;
+        tx.set(did, CAST_ON_CALL_ATTR, day.cast_on_call.clone())?;
+        tx.set(did, LOCATIONS_ATTR, day.locations.clone())?;
+        tx.link(sid, did, EdgeKind::Contains)?;
+
+        let scenes: HashSet<EntityId> = day.strips.iter().map(|s| s.scene).collect();
+        for scene in day.strips.iter().map(|s| s.scene) {
+            if tx.graph().contains(scene) {
+                tx.link(did, scene, EdgeKind::DependsOn)?;
+            }
+        }
+        for stale in tx.graph().targets(did, EdgeKind::DependsOn) {
+            if !scenes.contains(&stale) {
+                tx.unlink(did, stale, EdgeKind::DependsOn)?;
+            }
+        }
+    }
+    for stale in children_of_kind(tx.graph(), sid, kinds::LOGISTICS_DAY) {
+        if !keep.contains(&stale) {
+            tx.delete(stale)?;
+        }
+    }
+    Ok(ScheduleWriteReport {
+        schedule_id: sid,
+        changed_days: changed,
+        skipped_days: skipped,
+    })
+}
+
 pub fn write_schedule(tx: &mut Tx, document: EntityId, schedule: &Schedule) -> Result<EntityId> {
     require(tx.graph(), document)?;
     let sid = schedule_id(document);

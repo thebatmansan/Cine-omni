@@ -13,6 +13,17 @@ jobs:
       - run: cargo test --workspace
       - run: cargo build -p cine-gpu --features wgpu
       - run: cargo run -p cine-cli -- demo
+
+  # Licence, advisory, ban and source policy. CINE-OMNI ships Apache-2.0, so a
+  # copyleft dependency appearing in the graph must fail the build rather than
+  # reach a release. Policy lives in deny.toml.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
   ui:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: ui } }

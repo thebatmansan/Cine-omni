@@ -16,8 +16,8 @@ use crate::breakdown::{eighths_str, SceneBreakdown};
 use crate::date::{Date, DateRange, Weekday};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use ucg_core::EntityId;
-use ucg_schema::IntExt;
+use ucg_core::{EntityId, Graph};
+use ucg_schema::{attrs, kinds, Component, IntExt, SceneHeading};
 
 /// Shooting-time heuristic: hours of set time per minute of screen time.
 /// (Five pages ≈ five screen minutes ≈ a twelve-hour day with moves.)
@@ -532,6 +532,112 @@ pub fn diff(old: &Schedule, new: &Schedule) -> ScheduleDiff {
 /// Convenience: is `weekday` a working day for `days_per_week`?
 pub fn is_working_weekday(weekday: Weekday, days_per_week: u32) -> bool {
     weekday.index() < days_per_week.clamp(1, 7)
+}
+
+// ---------------------------------------------------------------------------
+// Incremental scheduling support
+// ---------------------------------------------------------------------------
+
+/// A deterministic 64-bit fingerprint of everything the scheduler consumes.
+///
+/// Scheduling is a *global* optimisation: one scene growing can repack every
+/// following day, so the schedule cannot be recomputed day-locally. What can be
+/// avoided is running it at all when nothing it depends on has changed. This
+/// fingerprint reads only the schedule-relevant attributes straight off the
+/// graph, skipping the much more expensive full breakdown derivation.
+///
+/// Uses FNV-1a rather than `DefaultHasher` because the value is persisted in
+/// the project and must stay stable across processes and Rust versions.
+pub fn schedule_fingerprint(graph: &Graph, document: EntityId) -> u64 {
+    schedule_fingerprint_with(graph, document, None)
+}
+
+/// [`schedule_fingerprint`] including the constraints the schedule was solved
+/// under. A constraint change is global: it can repack every day even though no
+/// scene changed, so it must move the fingerprint.
+pub fn schedule_fingerprint_with(
+    graph: &Graph,
+    document: EntityId,
+    constraints: Option<&ScheduleConstraints>,
+) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    struct Fnv(u64);
+    impl Fnv {
+        fn write(&mut self, bytes: &[u8]) {
+            for b in bytes {
+                self.0 ^= u64::from(*b);
+                self.0 = self.0.wrapping_mul(PRIME);
+            }
+        }
+        fn str(&mut self, s: &str) {
+            self.write(s.as_bytes());
+            self.write(&[0xff]); // separator, so "ab"+"c" != "a"+"bc"
+        }
+        fn u64(&mut self, v: u64) {
+            self.write(&v.to_le_bytes());
+        }
+    }
+
+    let mut h = Fnv(OFFSET);
+    // Global constraints first: max pages/hours per day, week shape, start
+    // date, cast availability and grouping flags all change the packing.
+    if let Some(c) = constraints {
+        if let Ok(json) = serde_json::to_string(c) {
+            h.str(&json);
+        }
+    }
+    for scene in graph.children(document) {
+        let Some(n) = graph.node(scene) else { continue };
+        if n.kind.as_str() != kinds::SCRIPT_SCENE {
+            continue;
+        }
+        // Scene identity and ordering.
+        h.str(&scene.to_string());
+        h.u64(n.get_int(attrs::ORDER).unwrap_or(0) as u64);
+        h.str(n.get_str(attrs::SCENE_NUMBER).unwrap_or(""));
+        // Everything `Strip::from_breakdown` reads.
+        h.u64(n.get_int(attrs::PAGE_EIGHTHS).unwrap_or(0) as u64);
+        // Duration drives the hours-per-day limit. Quantised to a tenth of a
+        // second so floating-point noise does not force a reschedule.
+        h.u64((n.get_float(attrs::EST_DURATION_S).unwrap_or(0.0) * 10.0).round() as u64);
+        if let Some(heading) = SceneHeading::read(n) {
+            h.str(&format!("{:?}", heading.int_ext));
+            h.str(&heading.location);
+            h.str(&heading.time_of_day);
+        } else {
+            h.str(n.get_str(attrs::HEADING).unwrap_or(""));
+        }
+        // Cast is stored as a list of name strings.
+        if let Some(list) = n.get(attrs::CHARACTERS).and_then(|v| v.as_list()) {
+            for v in list {
+                if let Some(s) = v.as_str() {
+                    h.str(s);
+                }
+            }
+        }
+    }
+    h.0
+}
+
+impl Schedule {
+    /// Day indices whose content differs from `other`, plus days that exist in
+    /// only one of the two. Used to make persistence and call-sheet
+    /// regeneration dependency-aware instead of unconditional.
+    pub fn changed_days(&self, other: Option<&Schedule>) -> Vec<usize> {
+        let Some(old) = other else {
+            return self.days.iter().map(|d| d.index).collect();
+        };
+        let mut changed = Vec::new();
+        for day in &self.days {
+            match old.days.iter().find(|o| o.index == day.index) {
+                Some(o) if o == day => {}
+                _ => changed.push(day.index),
+            }
+        }
+        changed
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,118 @@
+# cargo-deny policy for CINE-OMNI.
+#
+# CINE-OMNI ships under Apache-2.0. Apache-2.0 is one-way compatible with
+# GPL-3.0 (Apache code may go into GPLv3 projects, never the reverse) and is
+# incompatible with GPL-2.0-only. The practical consequence, and the reason this
+# file exists, is that **no GPL-family code may ever be linked into the
+# distributed application**.
+#
+# GPL projects the architecture deliberately keeps at arm's length — Blender,
+# Kdenlive, Natron, Ardour — are integrated, if at all, as separate processes,
+# protocol bridges, or file interchange. Never as dependencies. A copyleft crate
+# appearing in this graph means that boundary has been breached, and this policy
+# turns that into a failed build rather than a licensing incident.
+#
+# Run:  cargo deny check
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Security advisories (RustSec)
+# ---------------------------------------------------------------------------
+[advisories]
+version = 2
+yanked = "deny"
+# Every ignore carries a written justification and a review trigger. An advisory
+# is only ignored when it is investigated and found not to be actionable — never
+# to make CI green.
+ignore = [
+    # RUSTSEC-2024-0436 — `paste` is unmaintained (archived by its author).
+    #
+    # Investigated: this is an *unmaintained* notice, not a vulnerability. There
+    # is no CVE and no exploit path. It reaches us only transitively:
+    #     paste -> metal -> wgpu-hal -> wgpu -> cine-gpu
+    # `metal` is the Apple Metal backend, so on the Linux and Windows targets
+    # CINE-OMNI builds for, this code is not even compiled. The advisory itself
+    # states "No safe upgrade is available"; the fix belongs upstream in wgpu.
+    #
+    # Action: none available to us. Removing it would mean dropping wgpu, which
+    # is the GPU foundation. Re-evaluate when wgpu releases a version whose
+    # dependency tree no longer contains `paste`.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained-only, transitive via wgpu's Metal backend, not built on our targets, no upgrade exists" },
+]
+
+# ---------------------------------------------------------------------------
+# Licences
+# ---------------------------------------------------------------------------
+[licenses]
+version = 2
+# Permissive licences compatible with shipping an Apache-2.0 product.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",          # Boost
+    "Unicode-3.0",      # unicode-ident and friends
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "MPL-2.0",          # file-level copyleft; safe as a separate unit
+    "Unlicense",
+    "OpenSSL",
+]
+# Anything not on the allow list fails. Copyleft licences are absent from the
+# list *deliberately*: GPL-2.0, GPL-3.0, AGPL-3.0, LGPL-2.1 and LGPL-3.0 must
+# never appear as Rust dependencies of this workspace.
+#
+# LGPL note: an LGPL-only FFmpeg build is a viable *dynamic* dependency for the
+# future media engine, but that is a C library loaded at runtime, not a crate in
+# this graph. If an LGPL Rust crate ever appears here, that is a mistake.
+confidence-threshold = 0.9
+
+# A crate whose licence cannot be detected from its metadata must be recorded
+# here with the file that was actually read. This list is empty because nothing
+# in the current graph needs it; adding an entry requires reading the licence.
+exceptions = []
+
+# ---------------------------------------------------------------------------
+# Bans
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"   # duplicates are a size/consistency smell, not a defect
+wildcards = "deny"           # a wildcard version makes builds unreproducible
+# ...except for this workspace's own crates. `ucg-core.workspace = true` resolves
+# to a path dependency with no version requirement, which registers as a
+# wildcard. Path dependencies are built from this tree, never fetched, so they
+# carry no reproducibility or supply-chain risk. Wildcards on *registry* crates
+# are still denied, which is the case the rule exists for.
+allow-wildcard-paths = true
+highlight = "all"
+
+# Crates that must never appear, with the reason recorded.
+deny = [
+    # Rust bindings to GPL software would drag the GPL into the linked binary.
+    { crate = "gtk", reason = "GTK bindings pull in an ecosystem the Apache-2.0 boundary forbids reasoning about loosely; UI shell decision is still open (blueprint §02)" },
+]
+
+skip = []
+skip-tree = []
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# No git dependencies. Every dependency must be a published, versioned crate so
+# the build is reproducible and the licence is auditable.
+allow-git = []

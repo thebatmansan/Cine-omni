@@ -37,6 +37,13 @@ pub enum UcgError {
     Reactor { reactor: String, message: String },
     #[error("reactor cascade exceeded depth {0}")]
     CascadeDepth(u32),
+    #[error(
+        "could not acquire the graph write lock within {0:?}. \
+         This almost always means an `engine.read()` guard is still alive on \
+         this thread while `engine.transact()` was called: the RwLock is not \
+         reentrant. Scope the read guard in its own block so it drops first."
+    )]
+    WriteLockTimeout(std::time::Duration),
 }
 
 impl From<serde_json::Error> for UcgError {

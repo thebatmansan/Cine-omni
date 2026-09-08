@@ -23,7 +23,11 @@ Outstanding: five research clusters, the three matrices, the shell decision.
 
 ## Phase 1 — Core platform strengthening
 
-**Fully specified. Independent of every pending decision, so it can start now.**
+**COMPLETE.** Measured results in [`05-PHASE-1-RESULTS.md`](05-PHASE-1-RESULTS.md).
+Headline: `of_kind` 10.6–14.5× faster; schedule-neutral edits went from 59 ms to
+0.34 ms at 1,000 scenes and are now flat; the silent-deadlock failure mode is
+now a diagnosable error; the in-memory op log is bounded without weakening
+durability; `cargo deny` passes all four checks with no GPL in the graph.
 
 The whole phase is confined to `ucg-core` and `cine-pipeline`. Nothing here
 depends on Blender, OpenUSD, the shell, or any external engine.

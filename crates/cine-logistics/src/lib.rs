@@ -59,7 +59,10 @@ pub use metadata::{
     detect_events, simulate_take, summarize, IngestBuffer, MetadataEvent, MetadataEventKind,
     TakeMetadataSummary, TakeScenario,
 };
-pub use schedule::{diff, schedule, Schedule, ScheduleConstraints, ScheduleDiff, ShootDay, Strip};
+pub use schedule::{
+    diff, schedule, schedule_fingerprint, schedule_fingerprint_with, Schedule, ScheduleConstraints,
+    ScheduleDiff, ShootDay, Strip,
+};
 pub use shotlist::{lens_grid, shot_list_for_scene, GearList, LensGrid, ShotEntry, Support};
 
 /// Everything most callers need.

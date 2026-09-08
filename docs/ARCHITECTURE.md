@@ -100,7 +100,7 @@ This is precisely the thesis scenario:
 |---|---|---|
 | dialogue text changes | `ScriptReactor` | recompute estimated duration, word list; mark `ScriptSync` stale |
 | " | `PrevisReactor` | update the derived previs scene (characters present, dialogue audio track length) |
-| " | `LogisticsReactor` | recompute page-eighths, cast/day requirements, reschedule, regenerate call sheets |
+| " | `LogisticsReactor` | rebuild the scene breakdown and shot list; reschedule **only if** the scheduler's inputs actually changed (fingerprint fast path), and regenerate call sheets **only for days that moved** |
 | " | `TimelineReactor` | flag every clip `SyncedTo S` as `needs_conform`, re-align words |
 | " | `CompReactor` | mark comp graphs bound to S's shots dirty, update frame ranges |
 | " | `ColorReactor` | carry color space / LUT metadata to affected clips |
@@ -132,6 +132,24 @@ MyFilm.cineomni/
 Load = snapshot + replay of the deltas newer than the snapshot. Schema
 migrations are versioned functions over the raw `Value` attribute bags, so old
 projects always open.
+
+**The in-memory windows are bounded.** `Engine` keeps a capped window of recent
+deltas and a capped undo stack (`EngineLimits`, default 4096 deltas and 1000
+undo groups). This is a memory bound only: the on-disk op log stays complete,
+and undo history is rebuilt from it on open, so nothing needed for recovery is
+dropped. `Engine::log_dropped()` reports evictions rather than hiding them.
+
+**Recovery distinguishes a torn tail from corruption.** A truncated final record
+is the signature of a process dying mid-append; that record was never a
+completed transaction, so it is discarded and reported via `OplogReport`. A
+malformed line anywhere *else* means later deltas may depend on a missing
+operation, so recovery fails loudly instead of silently reconstructing a partial
+graph.
+
+**The compaction boundary is explicit.** `save()` archives the live op-log
+segment rather than deleting it, so undo spans the snapshot. `compact()` is the
+one operation that discards pre-snapshot history; the current graph state is
+never affected.
 
 **Undo survives the process.** Each delta records a `DeltaKind`
 (`Normal` / `Undo` / `Redo`), so on open the engine replays the log to rebuild

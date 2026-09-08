@@ -14,7 +14,9 @@ cd ui && npm test && npm run build
 
 ## Rules that bite
 * Never hold an `engine.read()` guard across `engine.transact(...)`; the
-  RwLock is not reentrant and the test will deadlock silently.
+  RwLock is not reentrant. This no longer hangs silently: the commit times out
+  and returns `UcgError::WriteLockTimeout` naming the likely cause. Still scope
+  every read guard in its own block.
 * Graph writers must be idempotent: re-running with the same input produces
   zero ops (`group.deltas.is_empty()`). Reactor convergence depends on it.
 * Node kinds / attribute keys come from `ucg_schema::{kinds, attrs}`.

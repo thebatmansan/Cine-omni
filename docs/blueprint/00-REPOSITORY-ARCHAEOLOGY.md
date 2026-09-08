@@ -1,7 +1,10 @@
 # 00 — Repository Archaeology
 
-**Status:** complete. Every number here was measured on this machine at commit
-`7a82b41`, not estimated. The benchmarks are committed as
+**Status:** complete, and **superseded in part by Phase 1**, which fixed four of
+the five defects recorded here. Original measurements were taken at commit
+`7a82b41`; Phase 1 results are marked inline and detailed in
+[`05-PHASE-1-RESULTS.md`](05-PHASE-1-RESULTS.md). Every number is measured on
+this machine, not estimated. The benchmarks are committed as
 `crates/ucg-core/tests/scale.rs` and `crates/cine-pipeline/tests/scale.rs` and
 can be re-run at any time:
 
@@ -23,13 +26,13 @@ not.** Those are separable, and that separation is the single most important
 result of this archaeology, because it means the foundation is worth keeping and
 the defect is worth fixing rather than rewriting.
 
-| Layer | Verdict | Evidence |
-|---|---|---|
-| Identity, ops, transactions, undo, op-log | **Keep. Validated at scale.** | Commit latency is *flat* at ~13 µs from 2,801 to 112,001 nodes |
-| Graph query layer | **Fix. Two pathological hot paths.** | `of_kind()` is 74× slower than a naive linear scan |
-| Reactor cascade | **Re-architect. Not incremental.** | One dialogue edit: 2.15 ms at 7 scenes → 144 ms at 1,000 scenes |
-| Off-thread evaluation | **Re-architect.** | `snapshot()` is a full O(n) clone, 363 ms at 56k nodes |
-| In-memory op log | **Bound it.** | `Engine::log` grows without limit for the process lifetime |
+| Layer | Verdict | Evidence | Phase 1 |
+|---|---|---|---|
+| Identity, ops, transactions, undo, op-log | **Keep. Validated at scale.** | Commit latency is *flat* at ~13 µs from 2,801 to 112,001 nodes | unchanged |
+| Graph query layer | **Fix. Two pathological hot paths.** | `of_kind()` is 74× slower than a naive linear scan | **FIXED** |
+| Reactor cascade | **Re-architect. Not incremental.** | One dialogue edit: 2.15 ms at 7 scenes → 144 ms at 1,000 scenes | **FIXED for schedule-neutral edits** (now flat); schedule-affecting edits remain O(N) by nature |
+| Off-thread evaluation | ~~Re-architect~~ **Premise corrected.** | `snapshot()` is O(n), but has exactly **one** production call site (`Project::save()`); reactors never clone | no change needed |
+| In-memory op log | **Bound it.** | `Engine::log` grows without limit for the process lifetime | **FIXED** |
 
 ---
 
@@ -174,7 +177,17 @@ system to know continuously what is current, stale, processing or failed across
 twenty-odd domains. That is unreachable if each domain recomputes globally on
 every keystroke. Section 7 proposes the fix.
 
-### DEFECT 3 — `snapshot()` is a full graph clone
+### DEFECT 3 — `snapshot()` is a full graph clone — *premise corrected in Phase 1*
+
+> **Correction.** Phase 1 audited every call site. `snapshot()` has exactly one
+> in production code — `Project::save()`, which legitimately needs an owned
+> graph to serialise — plus one in a unit test. **Reactors never snapshot.** They
+> receive `&Graph` from a read guard scoped inside the cascade loop, dropped
+> before any commit. The 363 ms cost is real but is paid on explicit save, not
+> per edit, so it is not on the interactive path. Making consistent reads cheap
+> remains worthwhile for future background evaluation, but it is not the
+> reactor bottleneck this document originally implied.
+
 
 `crates/ucg-core/src/engine.rs:233`. 363 ms at 56k nodes, 467 ms at 112k, and it
 is the documented mechanism for off-thread and GPU evaluation. Any interactive

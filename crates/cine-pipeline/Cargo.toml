@@ -4,6 +4,7 @@ description = "Reactors that keep every CINE-OMNI module consistent through the 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 ucg-core.workspace = true

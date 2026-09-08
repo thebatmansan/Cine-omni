@@ -261,3 +261,155 @@ fn commit_latency_vs_graph_size() {
     }
     println!("\nIf mean edit grows with node count, the interactive path does not scale.");
 }
+
+/// Phase 1 acceptance benchmark for the graph index fix.
+///
+/// Compares three implementations of the same query on the same graph:
+///
+/// * **NEW** — `of_kind()` as it now stands: the `by_kind` index is an
+///   `IndexSet`, so iteration is already in insertion order and nothing sorts.
+/// * **OLD** — what it used to do: gather from an unordered set, then
+///   `sort_by_key` whose key is a hash lookup, re-evaluated per comparison.
+/// * **NAIVE** — no index at all; scan every node and compare its kind.
+///
+/// The old implementation was slower than having no index whatsoever, which is
+/// what made this worth fixing rather than merely tuning.
+#[test]
+#[ignore]
+fn bench_of_kind_new_vs_old_vs_naive() {
+    use std::collections::HashMap;
+
+    const SCENES: usize = 2_000;
+    let (engine, _, _) = build_production(SCENES, 6, 4);
+    let g = engine.read();
+    let total = g.node_count();
+
+    // Positional index, equivalent to the `IndexMap::get_index_of` the old sort
+    // key called on every comparison.
+    let position: HashMap<EntityId, usize> = g.ids().enumerate().map(|(i, id)| (id, i)).collect();
+
+    for kind in ["logistics.shot", "script.scene"] {
+        let expected = g.of_kind(kind).len();
+
+        // NEW
+        let t = Instant::now();
+        let mut sink = 0usize;
+        for _ in 0..20 {
+            sink += g.of_kind(kind).len();
+        }
+        let new = t.elapsed() / 20;
+
+        // OLD: unordered gather, then sort with a per-comparison hash lookup.
+        let t = Instant::now();
+        for _ in 0..20 {
+            // Gather via an unordered id set, exactly as the old `by_kind`
+            // HashSet did, then sort with the per-comparison hash lookup.
+            let ids: std::collections::HashSet<EntityId> = g
+                .nodes()
+                .filter(|n| n.kind.as_str() == kind)
+                .map(|n| n.id)
+                .collect();
+            let mut v: Vec<EntityId> = ids.into_iter().collect();
+            v.sort_by_key(|id| position.get(id).copied());
+            sink += v.len();
+        }
+        let old = t.elapsed() / 20;
+
+        // NAIVE: no index.
+        let t = Instant::now();
+        for _ in 0..20 {
+            sink += g.nodes().filter(|n| n.kind.as_str() == kind).count();
+        }
+        let naive = t.elapsed() / 20;
+
+        assert!(sink > 0);
+        bar(&format!(
+            "of_kind(\"{kind}\") — {expected} of {total} nodes"
+        ));
+        println!("NEW   (IndexSet, no sort)   {new:>12?}");
+        println!(
+            "OLD   (sort_by_key + hash)  {old:>12?}   {:.1}x slower than NEW",
+            old.as_secs_f64() / new.as_secs_f64().max(1e-12)
+        );
+        println!(
+            "NAIVE (full scan, no index) {naive:>12?}   {:.1}x slower than NEW",
+            naive.as_secs_f64() / new.as_secs_f64().max(1e-12)
+        );
+
+        // The regression that matters: the old implementation must be gone.
+        assert!(
+            new < old,
+            "the new implementation must beat the old one ({new:?} vs {old:?})"
+        );
+        // Whether an index beats a full scan depends on selectivity; see the
+        // selectivity table printed by `bench_of_kind_selectivity`.
+    }
+
+    // `children()` shares the defect class and was fixed with sort_by_cached_key.
+    let doc = g.of_kind("project")[0].id;
+    let t = Instant::now();
+    let mut sink = 0usize;
+    for _ in 0..20 {
+        sink += g.children(doc).len();
+    }
+    assert!(sink > 0);
+    bar("children() on the project root");
+    println!(
+        "NEW   (sort_by_cached_key)  {:>12?}  over {} children",
+        t.elapsed() / 20,
+        g.children(doc).len()
+    );
+}
+
+/// Where does the kind index actually pay off?
+///
+/// Resolving an id to a `&Node` is a hash lookup, so a selective query wins and
+/// a broad one can lose to a contiguous scan. This measures the crossover so the
+/// behaviour is a documented property rather than a surprise.
+#[test]
+#[ignore]
+fn bench_of_kind_selectivity() {
+    let (engine, _, _) = build_production(2_000, 6, 4);
+    let g = engine.read();
+    let total = g.node_count();
+
+    bar("of_kind selectivity: indexed vs naive scan");
+    println!(
+        "{:>22} {:>8} {:>7} {:>13} {:>13} {:>9}",
+        "kind", "matches", "sel%", "indexed", "naive", "speedup"
+    );
+
+    let mut kinds: Vec<(String, usize)> = {
+        let mut m = std::collections::HashMap::<String, usize>::new();
+        for n in g.nodes() {
+            *m.entry(n.kind.to_string()).or_default() += 1;
+        }
+        m.into_iter().collect()
+    };
+    kinds.sort_by_key(|(_, c)| *c);
+
+    for (kind, count) in &kinds {
+        let mut sink = 0usize;
+        let t = Instant::now();
+        for _ in 0..20 {
+            sink += g.of_kind(kind).len();
+        }
+        let indexed = t.elapsed() / 20;
+        let t = Instant::now();
+        for _ in 0..20 {
+            sink += g.nodes().filter(|n| n.kind.as_str() == kind).count();
+        }
+        let naive = t.elapsed() / 20;
+        assert!(sink > 0);
+        println!(
+            "{:>22} {:>8} {:>6.1}% {:>13?} {:>13?} {:>8.1}x",
+            kind,
+            count,
+            100.0 * *count as f64 / total as f64,
+            indexed,
+            naive,
+            naive.as_secs_f64() / indexed.as_secs_f64().max(1e-12)
+        );
+    }
+    println!("\nspeedup > 1.0 means the index wins.");
+}

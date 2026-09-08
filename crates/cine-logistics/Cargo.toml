@@ -4,6 +4,7 @@ description = "Breakdowns, shot lists, lens grids, scheduling, call sheets and l
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 ucg-core.workspace = true

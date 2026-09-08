@@ -4,6 +4,7 @@ description = "wgpu device management and WGSL kernels for the previs viewport, 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [features]
 default = []
