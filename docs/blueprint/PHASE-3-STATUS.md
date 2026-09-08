@@ -98,7 +98,7 @@ argument for the evidence discipline, not against it.
 | Compute kernels, CPU parity | Yes | 🟢 VERIFIED | 17 GPU tests on real hardware |
 | YUV→RGB with CPU reference | Yes | 🟢 VERIFIED | BT.601/709/2020 × limited/full, and a real decoded frame; worst divergence <1e-4 |
 | Matrix provenance (declared vs assumed) | Yes | 🟢 VERIFIED | `MatrixChoice`; BT.2020 never assumed |
-| Swapchain / presentation | Yes | 🔴 NOT IMPLEMENTED | Foundation ready; no window yet |
+| Swapchain / presentation | Yes | 🟢 VERIFIED | Real window on Wayland, Bgra8Unorm surface, real frames presented and dumped for inspection |
 | HDR surfaces | Yes | 🔵 PLANNED | egui composites in gamma space; needs a dedicated surface |
 | ACES output transform | Yes | 🟡 PARTIAL | 18% grey exact to 6 decimals; **pure green off by 0.30 (30% of full scale)**. Tonescale right, chroma and gamut compression absent |
 | OpenColorIO config loading | Yes | 🔴 NOT IMPLEMENTED | Cannot load **any** released OCIO ACES config — `shared_views` and `!<Views>` unimplemented |
@@ -128,7 +128,7 @@ argument for the evidence discipline, not against it.
 | Bounded op log | Yes | 🟢 VERIFIED | Gate derives its workload from the configured limit |
 | Reactor convergence / idempotence | Yes | 🟢 VERIFIED | Gated |
 | Exact time in `ucg-core` | Yes | 🟠 **Architectural defect** | `RationalTime` is `{value: f64, rate: f64}` — float. `cine-media` has the exact model; 221 references across 10 crates still use the float one |
-| Application shell | Yes | 🔵 PLANNED | Decided; GPU foundation ready |
+| Application shell | Yes | 🟡 PARTIAL | `cine-shell` opens a real window and presents real decoded frames with frame stepping. No docking UI, no transport, no playback clock |
 | Collaboration | Yes | 🔵 PLANNED | |
 
 ---
@@ -237,6 +237,9 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 ## 8. What may and may not be claimed today
 
 **May be claimed**, with evidence:
+* A real window presenting real decoded H.264 frames through a GPU colour
+  conversion, on real hardware, with the colour interpretation labelled as
+  assumed rather than stated
 * Exact rational time in the media layer
 * Frame-accurate seek, pixel-identical to playback
 * Content-addressed media identity, relink, and offline as a state

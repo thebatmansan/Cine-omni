@@ -36,14 +36,25 @@ ignore = [
     # Investigated: this is an *unmaintained* notice, not a vulnerability. There
     # is no CVE and no exploit path. It reaches us only transitively:
     #     paste -> metal -> wgpu-hal -> wgpu -> cine-gpu
-    # `metal` is the Apple Metal backend, so on the Linux and Windows targets
-    # CINE-OMNI builds for, this code is not even compiled. The advisory itself
-    # states "No safe upgrade is available"; the fix belongs upstream in wgpu.
+    # `ttf-parser` is unmaintained (RUSTSEC-2026-0192). It is not a
+    # vulnerability: the author has simply stated the crate will receive no
+    # further fixes, and the advisory itself records "No safe upgrade is
+    # available".
     #
-    # Action: none available to us. Removing it would mean dropping wgpu, which
-    # is the GPU foundation. Re-evaluate when wgpu releases a version whose
-    # dependency tree no longer contains `paste`.
-    { id = "RUSTSEC-2024-0436", reason = "unmaintained-only, transitive via wgpu's Metal backend, not built on our targets, no upgrade exists" },
+    # It reaches us four levels down, through winit's Wayland client-side
+    # window decorations:
+    #
+    #   ttf-parser -> owned_ttf_parser -> ab_glyph -> sctk-adwaita -> winit
+    #
+    # It parses font files in order to draw a title bar. It never sees media,
+    # project data or anything else attacker-influenced, and it is absent on
+    # every non-Wayland target.
+    #
+    # Action: none available to us. The alternative is dropping winit's
+    # decorations, which would leave the window without a title bar for a
+    # dependency question rather than a product one. Re-evaluate when winit's
+    # decoration stack moves to a maintained parser.
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained-only, transitive via winit's Wayland window decorations, no upgrade exists" },
 ]
 
 # ---------------------------------------------------------------------------
