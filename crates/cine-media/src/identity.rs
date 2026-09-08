@@ -109,14 +109,43 @@ impl ContentHash {
         })
     }
 
-    /// Verify a file still matches this hash. Used by ingest verification and
-    /// before any operation that assumes the media is unchanged.
+    /// Verify that a file's **content** still matches this hash.
+    ///
+    /// Only a [`ContentHash::Full`] can do this. A `Fast` hash covers the head,
+    /// the tail and the length, so it detects replacement and truncation but is
+    /// blind to a flipped bit in the middle of the file — precisely the
+    /// corruption a card offload needs to catch. Verifying against one and
+    /// reporting success would be the worst possible answer, so it is refused
+    /// with [`Error::CannotVerify`] instead.
+    ///
+    /// Use [`ContentHash::matches_quickly`] when a cheap check is what is
+    /// wanted, and be clear in the caller that it is not verification.
     pub fn verify(&self, path: &Path) -> Result<()> {
+        if !self.is_full() {
+            return Err(Error::CannotVerify {
+                path: path.display().to_string(),
+            });
+        }
+        self.compare(path, ContentHash::full(path)?)
+    }
+
+    /// Cheap check that a file is plausibly the same one: same length, same
+    /// head and tail.
+    ///
+    /// **This is not verification.** It catches a missing file, a different
+    /// file and a truncated file. It cannot catch interior corruption. Ingest
+    /// uses it to catalogue quickly; a copy is not `verified` until
+    /// [`ContentHash::verify`] has passed against a full hash.
+    pub fn matches_quickly(&self, path: &Path) -> Result<()> {
         let actual = if self.is_full() {
             ContentHash::full(path)?
         } else {
             ContentHash::fast(path)?
         };
+        self.compare(path, actual)
+    }
+
+    fn compare(&self, path: &Path, actual: ContentHash) -> Result<()> {
         if actual.hex() == self.hex() && actual.size() == self.size() {
             Ok(())
         } else {
@@ -361,6 +390,73 @@ mod tests {
 
         std::fs::write(&p, b"tampered take").unwrap();
         assert!(matches!(h.verify(&p), Err(Error::HashMismatch { .. })));
+    }
+
+    /// The defect this guards: a fast hash cannot see a flipped bit in the
+    /// middle of a file, so reporting "verified" from one would let corrupt
+    /// media pass an offload check. It must refuse instead.
+    #[test]
+    fn a_fast_hash_refuses_to_verify_rather_than_reporting_false_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("A001C001.mov");
+
+        // Large enough that head+tail sampling leaves an unexamined interior.
+        let mut data = vec![0u8; 4 * 1024 * 1024];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = (i % 251) as u8;
+        }
+        std::fs::write(&p, &data).unwrap();
+
+        let fast = ContentHash::fast(&p).unwrap();
+        let full = ContentHash::full(&p).unwrap();
+
+        // Flip one bit in the middle — the classic silent-corruption case.
+        data[2 * 1024 * 1024] ^= 0x01;
+        std::fs::write(&p, &data).unwrap();
+
+        // The full hash catches it.
+        assert!(
+            matches!(full.verify(&p), Err(Error::HashMismatch { .. })),
+            "a full hash must detect interior corruption"
+        );
+
+        // The fast hash cannot, and must say so rather than pass.
+        assert!(
+            matches!(fast.verify(&p), Err(Error::CannotVerify { .. })),
+            "a fast hash must refuse to verify, never report success it cannot support"
+        );
+
+        // The quick check is still available, still honest about what it is,
+        // and still blind to this corruption — which is exactly why it is not
+        // called verification.
+        assert!(
+            fast.matches_quickly(&p).is_ok(),
+            "the quick check compares head, tail and length, which are unchanged"
+        );
+    }
+
+    /// The quick check must still catch the things it does cover.
+    #[test]
+    fn the_quick_check_catches_replacement_and_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("A001C002.mov");
+        std::fs::write(&p, vec![7u8; 1024 * 1024]).unwrap();
+        let fast = ContentHash::fast(&p).unwrap();
+        assert!(fast.matches_quickly(&p).is_ok());
+
+        // Truncated: the length is part of the digest.
+        std::fs::write(&p, vec![7u8; 512 * 1024]).unwrap();
+        assert!(matches!(
+            fast.matches_quickly(&p),
+            Err(Error::HashMismatch { .. })
+        ));
+
+        // A different file of the same length: head and tail differ.
+        std::fs::write(&p, vec![9u8; 1024 * 1024]).unwrap();
+        assert!(matches!(
+            fast.matches_quickly(&p),
+            Err(Error::HashMismatch { .. })
+        ));
     }
 
     #[test]

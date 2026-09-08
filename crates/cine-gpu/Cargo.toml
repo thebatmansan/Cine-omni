@@ -23,7 +23,8 @@ pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
-naga = { version = "26", features = ["wgsl-in"] }
+cine-media.workspace = true
+naga = { version = "30", features = ["wgsl-in"] }
 
 # Reports the real adapter, so "GPU verified" is never an assumption.
 # Needs the real backend, hence the feature gate.

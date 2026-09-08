@@ -16,6 +16,7 @@
 pub mod cpu;
 pub mod frame_graph;
 pub mod kernels;
+pub mod yuv;
 
 #[cfg(feature = "wgpu")]
 pub mod device;

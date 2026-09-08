@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "ACES / OpenColorIO-native color management, grading and scopes for CINE-OMNI (CPU reference implementation)"
+description = "ACES-shaped colour management, grading and scopes for CINE-OMNI (CPU reference; not ACES- or OpenColorIO-compatible -- see crate docs)"
 
 [dependencies]
 ucg-core.workspace = true

@@ -24,6 +24,11 @@ pub enum Error {
         expected: String,
         actual: String,
     },
+    #[error(
+        "cannot verify {path} against a fast hash: a head+tail+length digest cannot \
+         detect corruption in the interior of a file. Compute a full hash to verify content."
+    )]
+    CannotVerify { path: String },
 
     // ---- container and streams -------------------------------------------
     #[error("unrecognised container for {0}")]

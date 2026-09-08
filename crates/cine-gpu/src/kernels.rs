@@ -12,6 +12,8 @@ pub enum KernelId {
     Blur,
     Keyer,
     Dof,
+    /// Planar YUV to RGB, for presenting decoded camera media.
+    YuvToRgb,
     /// Vertex/fragment viewport shader (render pipeline, not compute).
     Previs,
 }
@@ -79,6 +81,16 @@ const WG: [u32; 3] = [16, 16, 1];
 use Binding::{Read, Uniform, Write};
 
 pub const KERNELS: &[Kernel] = &[
+    Kernel {
+        id: KernelId::YuvToRgb,
+        name: "yuv_to_rgb",
+        source: include_str!("shaders/yuv_to_rgb.wgsl"),
+        stage: KernelStage::Compute {
+            entry: "main",
+            workgroup: WG,
+        },
+        bindings: &[Uniform, Read, Read, Read, Write],
+    },
     Kernel {
         id: KernelId::Merge,
         name: "merge",

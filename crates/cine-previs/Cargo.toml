@@ -1,6 +1,6 @@
 [package]
 name = "cine-previs"
-description = "CINE-OMNI previs: physically based optics, light physics, USD-style stage, camera rigs, grease-pencil strokes and 2D storyboards"
+description = "CINE-OMNI previs: physically based optics, light physics, a USDA-shaped stage (not OpenUSD -- no composition, materials or time samples), camera rigs, grease-pencil strokes and 2D storyboards"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

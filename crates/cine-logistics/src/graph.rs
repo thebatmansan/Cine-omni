@@ -152,7 +152,12 @@ pub fn write_shot_list(tx: &mut Tx, scene: EntityId, shots: &[ShotEntry]) -> Res
     for (i, shot) in shots.iter().enumerate() {
         let sid = shot_id(shot.camera);
         keep.insert(sid);
+        let existed = tx.graph().contains(sid);
         tx.ensure(sid, kinds::LOGISTICS_SHOT)?;
+        // A shot that was retired and is now back on the list is live again.
+        if existed && tx.graph().node(sid).and_then(|n| n.get_bool(attrs::STALE)) == Some(true) {
+            tx.set(sid, attrs::STALE, false)?;
+        }
         tx.set(sid, attrs::NAME, shot.spec.number.clone())?;
         tx.set(sid, attrs::ORDER, i as i64)?;
         shot.spec.write(tx, sid)?;
@@ -162,9 +167,22 @@ pub fn write_shot_list(tx: &mut Tx, scene: EntityId, shots: &[ShotEntry]) -> Res
             tx.link(sid, shot.camera, EdgeKind::DependsOn)?;
         }
     }
+    // Shots whose camera is gone. A shot is derived and may be regenerated, but
+    // a take is *captured* — it records that something was actually shot. Takes
+    // hang beneath shots by `Contains`, and node deletion recurses into
+    // `Contains` children, so deleting a stale shot would destroy them.
+    //
+    // A shot holding captured data is therefore retired rather than deleted: it
+    // is marked stale for a human to resolve, and its takes are untouched. Only
+    // a shot with nothing captured against it is cleaned up.
     for stale in children_of_kind(tx.graph(), list, kinds::LOGISTICS_SHOT) {
-        if !keep.contains(&stale) {
+        if keep.contains(&stale) {
+            continue;
+        }
+        if takes_of_shot(tx.graph(), stale).is_empty() {
             tx.delete(stale)?;
+        } else {
+            tx.set(stale, attrs::STALE, true)?;
         }
     }
     Ok(list)

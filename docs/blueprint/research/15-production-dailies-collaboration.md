@@ -1,10 +1,14 @@
 # CINE-OMNI Industry Blueprint — 15: Production, Dailies and Collaboration
 
-**Status:** research. Section B's manifest chapter (§B.7) is fully verified
-against the ASC MHL specification, its XSDs and its reference implementation,
-all fetched and read. Sections A and C carry primary-source verification for
-some claims and explicit `UNVERIFIED` markers for the rest; the register in §G
-says exactly which is which.
+**Status:** research, complete. Every interchange format named here was fetched
+and read: ASC MHL (spec, XSDs, reference implementation, generated examples),
+MHL v1.1, SMPTE ST 2114 (C4), iXML, EBU Tech 3285 (BWF), ALE, the ASC CDL schema,
+ACES AMF, Cooke /i, SMPTE ST 12-1 / ST 380 / RDD 18. Vendor collaboration
+behaviour is quoted from vendor documentation; the CRDT and OT literature from
+the primary papers. Every Rust crate named has been verified on crates.io and
+against its repository's LICENSE file. What remains unverified is listed in §G —
+the largest single gap is Adobe Productions, whose documentation refused every
+automated fetch.
 **Date of research:** 2026-09-08
 **Scope:** (A) on-set / script supervision / camera + sound metadata,
 (B) dailies / DIT offload, checksums, manifests and verification,
@@ -134,12 +138,12 @@ and sources in §B.7.
 
 ## A. On-set and production
 
-> **Verification status of this section: PARTIAL.** The workflow descriptions
-> below are the industry concepts as understood, and the *data-model* conclusions
-> drawn from them are the deliverable. Where a specific field name, format
-> structure, or numeric figure is claimed, it is marked `UNVERIFIED` unless a
-> primary source is cited. Primary-source verification of iXML, BWF `bext`, ALE,
-> Cooke /i and ASC CDL is in progress and will be folded in.
+> **Verification status of this section: the formats are verified; some
+> workflow folklore is not.** §A.8 carries the primary-source detail — iXML,
+> BWF `bext` (EBU Tech 3285 v2.0), ALE, ASC CDL, ACES AMF, Cooke /i, ZEISS
+> eXtended Data, SMPTE ST 12-1 / ST 380 / RDD 18 — all fetched and read. §§A.1–A.7
+> state the model; where a workflow claim rests on practitioner sources rather
+> than a citable authority it says so inline and appears in the §G register.
 
 ### A.1 What the set actually produces
 
@@ -169,28 +173,47 @@ counting.
 to print/use) is the best-known status, but it is one value in a set that a
 model must represent distinctly because they mean different things downstream:
 
-| Status | Meaning | Downstream consequence |
-|---|---|---|
-| `circled` / `print` | selected as good | goes to dailies selects, editorial priority |
-| `good` | usable, not selected | available |
-| `ng` | no good | archived, not cut |
-| `false_start` | aborted before the action completed | usually not even offloaded to selects; must still be *retained* |
-| `hold` | may be usable | undecided; must not be auto-purged |
-| `pickup` | a partial re-take of part of a previous take | must reference the take it picks up |
-| `series` | one of several takes rolled without cutting | shares a slate |
+**The vocabulary is not ours — iXML publishes it, and it is a *set*, not an
+enum.** iXML v2.0 deprecated the individual booleans `<NO_GOOD>`,
+`<FALSE_START>` and `<WILD_TRACK>` in favour of a comma-delimited `<TAKE_TYPE>`
+drawn from `DEFAULT, NO_GOOD, FALSE_START, WILD_TRACK, PICKUP, REHEARSAL,
+ANNOUNCEMENT, SOUND_GUIDE` — so `<TAKE_TYPE>FALSE_START,PICKUP</TAKE_TYPE>` is
+legal and meaningful. `<CIRCLED>` was **not** deprecated and stays a separate
+boolean (§A.8.1).
 
-Three modelling consequences:
+| Value | Source | Meaning | Downstream consequence |
+|---|---|---|---|
+| `circled` | iXML `<CIRCLED>` (boolean, independent) | the take the **director** selected; relayed by the script supervisor | dailies selects, editorial priority |
+| `NO_GOOD` | iXML `TAKE_TYPE` | technically unusable | archived, not cut |
+| `FALSE_START` | iXML `TAKE_TYPE` | aborted before the action completed | not in selects; must still be **retained** |
+| `PICKUP` | iXML `TAKE_TYPE` | a partial re-take within a scene | must reference the take it picks up |
+| `WILD_TRACK` | iXML `TAKE_TYPE` | sound with no picture | no camera record exists for it |
+| `REHEARSAL`, `ANNOUNCEMENT`, `SOUND_GUIDE` | iXML `TAKE_TYPE` | not performance takes | excluded from take numbering expectations |
+| `DEFAULT` | iXML `TAKE_TYPE` | an ordinary take | — |
 
-1. **`circled` is not `good`.** Two independent axes: *technical usability* and
-   *editorial selection*. Collapsing them loses the distinction between "the
-   director liked it" and "the focus was sharp", which are recorded by different
-   people.
-2. **`pickup` needs an edge, not a flag.** A pickup take references a prior take.
+The sound report's published abbreviation key adds a parallel vocabulary for the
+sound side — `GD, NG, GT (guide track), RT (room tone), AMB, WSFX (wild sound
+effect), WD (wild dialogue)` (§A.6) — which overlaps but does not coincide. Both
+must be representable.
+
+Four modelling consequences:
+
+1. **Status is a flag set, not an enum.** A take can be a false start *and* a
+   pickup. Typing it as a single-valued enum cannot round-trip a real iXML file.
+2. **`circled` is not `good`.** Two independent axes: *technical usability* and
+   *editorial selection*, and iXML keeps them as separate fields for exactly this
+   reason. The authority chain is documented: *"the Script Supervisor will tell
+   you which takes are to be circled. These are the takes that the Director
+   likes"* (Elkins, §A.8.8) — different people, different facts.
+3. **`pickup` needs an edge, not a flag.** A pickup take references a prior take.
    That is `References` (it does not propagate dirtiness — a note changing on the
    original must not dirty the pickup).
-3. **A false start must be retained.** Any dailies workflow that treats
+4. **A false start must be retained.** Any dailies workflow that treats
    `false_start` as "delete" violates the retention rule that everything shot is
    archived. Status controls *presentation*, never *retention*.
+
+`series` takes remain in the model as a working concept; the term could not be
+verified against a citable production-management source (§A.8.8, §G).
 
 ### A.3 Slate, scene numbering, and why the identity cannot be a number
 
@@ -201,8 +224,23 @@ to the same material across coloured revisions. Slates are `scene + setup letter
 (24A, 24B — the setup, which is a different use of the same letter convention)
 and takes are numbered within the slate.
 
-`UNVERIFIED` as to a citable authority for the A/B/apple/baker conventions;
-verification pending.
+**Verified, and with a rule worth implementing.** Elkins, *The Camera
+Assistant's Manual* 5th ed.: *"When shooting a portion of a scene or a pick-up of
+action within a scene, a letter is usually added to the scene number... **Some
+letters that are not usually used for slating scene numbers are I, O, Q, S, and
+Z, which can resemble numbers when written hurriedly.**"* Five excluded letters,
+with the reason — so a slate-designation generator must skip **I, O, Q, S, Z**.
+
+The convention is also **not universal**. Elkins: *"In Britain it is common
+practice to not use scene numbers on the slate... they are written as shot
+numbers, and the first shot on the first day of filming is shot number 1."* The
+iXML specification says the same thing in its own `<SCENE>` definition (§A.8.1).
+A model that assumes `"24A"` parses into `(24, 'A')` is wrong for half the world,
+which is a second, independent reason the designation must be an opaque label.
+
+The spoken form ("scene 24 apple") is **`UNVERIFIED`** — no canonical call-out
+alphabet was found, and the practitioner lists that exist conflict with Elkins's
+excluded set.
 
 The data-model consequence is unambiguous and matches the media-identity
 argument in [`09`](09-editorial-media-model.md) §1.8: **the human-facing
@@ -345,6 +383,475 @@ enforces one level up:
    every automatic key — so the match rank is stored, and automatic
    reconciliation refuses to overwrite rank 6.
 
+### A.8 The interchange formats, verified against their specifications
+
+Everything in this section was fetched and read. Licence and openness are stated
+first for each, because that decides whether we may implement it at all.
+
+| Format | What it carries | Openness | Licence |
+|---|---|---|---|
+| **iXML** | production semantics in a WAV chunk: scene, take, sound roll, circled, take type, channel roles | open, revision 3.01 (28 Oct 2021), `ixml.info` | **the format is released to the public domain**; the *prose describing it* is © Gallery UK |
+| **BWF `bext`** | time and identity: sample-accurate origin time, originator, UMID, loudness, coding history | open, EBU **Tech 3285 v2.0** (May 2011) | EBU publication |
+| **ALE** | Avid's tab-separated log: tape, timecode, scene, take, rolls, CDL columns | no formal spec; header syntax published in Avid's own whitepaper | vendor document |
+| **ASC CDL** | slope/offset/power/saturation | **spec is NOT publicly downloadable** — `theasc.com` 403s; obtained by e-mail request | none stated |
+| **ASC CDL XSD** | the actual schema | **public**, bundled in the ACES AMF repo | Apache-2.0 (as part of that repo) |
+| **ACES AMF** | the colour pipeline as a sidecar, referencing CDL | fully open, spec updated Nov 2025 | **schema Apache-2.0, prose CC BY 4.0** |
+| **Cooke /i** | per-frame lens data | "open protocol", but **extended commands are by-request/NDA** | © Cooke Optics; manual no longer self-hosted |
+| **ZEISS eXtended Data** | /i plus distortion and shading | tools published, **no format spec found** | — |
+| **SMPTE ST 12-1, ST 380, RDD 18** | timecode, MXF descriptive metadata, lens metadata | **free since 17 June 2026** at `pub.smpte.org` | SMPTE |
+
+**A note that changes the sourcing posture for the whole blueprint: SMPTE's
+entire catalogue became free on 17 June 2026** and is machine-fetchable at
+`pub.smpte.org/doc/<id>/<date>-pub/<id>-<date>-pub.zip`. ST 12-1, ST 380,
+RDD 18 and EG 42 were downloaded without authentication for this document.
+Normative text can now be cited rather than paraphrased.
+
+#### A.8.1 iXML — where production semantics actually live
+
+The `iXML` chunk (`0x69584D4C`) carries raw XML in a WAV file. The element names,
+verbatim from the specification's object details:
+
+* `<PROJECT>` — *"The name of the project... typically the name of the motion
+  picture or program"*
+* `<SCENE>` — *"The name of the scene / slate being recorded. **For US system this
+  might typically be 32, 32A, 32B, A32B, 32AB etc. For UK system this might
+  typically be a incrementing number with no letters.**"*
+* `<TAKE>` — *"The number of the take... variations for things like wild tracks
+  may yield takes like 1, 2, 3, WT1, WT2"*
+* `<TAPE>` — *"**The SoundRoll** which identifies a group of recordings... the
+  soundroll should change at least once in any 24 hour period."*
+* `<CIRCLED>` — *"mark this recording as a circle-take. The value should be TRUE
+  or FALSE. If absent, this should be assumed FALSE."*
+* `<FILE_UID>` — *"A unique number which identifies this physical FILE,
+  regardless of the number of channels"*
+* `<UBITS>` — *"The userbits associated with this recording... **Typically the
+  userbits are rarely used now** because other more explicit metadata supercedes
+  this function."*
+* `<NOTE>` — free text, e.g. *"TAIL SLATE, NO SLATE, or to warn of noise
+  interruptions - PLANE OVERHEAD"*
+
+Five things here are directly load-bearing for §A.2, §A.3 and §A.4, and each
+either confirms or corrects this document's model:
+
+1. **`<TAPE>` is the sound roll, not a videotape.** The most misread field in the
+   format, and a parser that treats it as a video reel will mis-key every
+   reconciliation in §A.7.
+2. **`<TAKE>` is a *string*, not a number** — `WT1`, `WT2` are legal values. This
+   confirms §A.3: the take designation is a label. A schema that types it as an
+   integer cannot round-trip a real sound report.
+3. **`<SCENE>` explicitly documents the US letter convention *and* the UK
+   numeric one** in the spec text itself. Any model that assumes `24A` parses
+   into `(24, 'A')` is wrong for half the world.
+4. **The status vocabulary is a *list*, and it superseded the booleans.**
+   `<NO_GOOD>`, `<FALSE_START>` and `<WILD_TRACK>` are each marked
+   *"(Deprecated in iXML v2.0, superceded by TAKE_TYPE)"*. `<TAKE_TYPE>` is a
+   comma-delimited list drawn from
+   `DEFAULT, NO_GOOD, FALSE_START, WILD_TRACK, PICKUP, REHEARSAL, ANNOUNCEMENT,
+   SOUND_GUIDE` — e.g. `<TAKE_TYPE>FALSE_START,PICKUP</TAKE_TYPE>`. **`<CIRCLED>`
+   was *not* deprecated**, and remains a separate boolean.
+
+   This is a **correction to §A.2**: take status is not one value from a closed
+   set, it is a *set* of orthogonal type flags, plus an independent `circled`
+   boolean. §A.2's claim that "circled is not good" is right and the format
+   agrees — but the rest of the statuses compose rather than exclude. A take can
+   be a false start *and* a pickup. Model it as a flag set, not an enum.
+5. **Channel roles are a first-class structure**, exactly as §A.5 requires:
+
+   ```xml
+   <TRACK_LIST>
+     <TRACK_COUNT>2</TRACK_COUNT>
+     <TRACK>
+       <CHANNEL_INDEX>1</CHANNEL_INDEX>
+       <INTERLEAVE_INDEX>1</INTERLEAVE_INDEX>
+       <NAME>Mid</NAME>
+       <FUNCTION>M-MID_SIDE</FUNCTION>
+     </TRACK>
+   </TRACK_LIST>
+   ```
+
+   `CHANNEL_INDEX` *"communicates the 'input' or 'source' number on a recorder"*
+   while `INTERLEAVE_INDEX` gives position in the file, because *"XML does not
+   require the objects to be in any particular order"*. Both are **1-based**:
+   *"Channel and Interleave Indexes are indexed from a base of 1 (not zero)."*
+
+Two further rules should be adopted verbatim as implementation policy:
+
+> *"This would include the **iSCENE=, iTAKE=, iTAPE=, iNOTE=** metadata currently
+> written by most recorders into the bext description field... **Reading
+> applications should favour iXML if it is present, falling back to bext
+> description if not.**"*
+
+> *"All iXML parameters and objects are OPTIONAL. Readers must not assume that
+> any particular parameters exist... **It is better for iXML writers to exclude an
+> object or parameter than to simply add it with blank metadata.**"*
+
+That second rule is the same distinction CINE-OMNI already draws in
+`ColorMetadata::is_complete()` — **absent is not empty** — and it pairs exactly
+with the idempotent-writer requirement: writing a blank field is an op, and an op
+that carries no information is a convergence hazard.
+
+**There is deliberately no XSD.** Verbatim: *"At the present time, to ensure that
+no products are developed which enforce schema compatibility, it has been decided
+**NOT to create a schema for iXML**."* So the parser must ignore unknown elements
+rather than reject them; vendor subtrees (`<AATON_CANTAR>`, `<AVID>`,
+`<STEINBERG>`) are expected.
+
+`<SPEED>` is worth one more note because it vindicates an existing project rule:
+all rates are expressed as **integer/integer ratios** — `30000/1001`,
+`24000/1001` — alongside `TIMECODE_RATE` and a `TIMECODE_FLAG` of NDF/DF. The
+professional sound format independently reached the same conclusion as
+`crates/cine-media`'s exact-rational time model, and for the same reason.
+
+#### A.8.2 BWF `bext` — and an important negative result
+
+EBU Tech 3285 v2.0 defines the chunk exactly:
+
+```c
+CHAR  Description[256];        /* ASCII : «Description of the sound sequence» */
+CHAR  Originator[32];
+CHAR  OriginatorReference[32];
+CHAR  OriginationDate[10];     /* ASCII : «yyyy:mm:dd» */
+CHAR  OriginationTime[8];      /* ASCII : «hh:mm:ss» */
+DWORD TimeReferenceLow;        /* First sample count since midnight, low word */
+DWORD TimeReferenceHigh;
+WORD  Version;
+BYTE  UMID_0 .... BYTE UMID_63 /* Binary byte 0..63 of SMPTE UMID */
+WORD  LoudnessValue;           /* Integrated Loudness Value in LUFS (x100) */
+WORD  LoudnessRange;
+WORD  MaxTruePeakLevel;
+WORD  MaxMomentaryLoudness;
+WORD  MaxShortTermLoudness;
+BYTE  Reserved[180];
+CHAR  CodingHistory[];
+```
+
+Fixed part is **602 bytes**, then variable `CodingHistory`. Offsets:
+`Description` 0, `Originator` 256, `OriginatorReference` 288, `OriginationDate`
+320, `OriginationTime` 330, `TimeReferenceLow` 338, `TimeReferenceHigh` 342,
+`Version` 346, `UMID` 348, `LoudnessValue` 412, `LoudnessRange` 414,
+`MaxTruePeakLevel` 416, `MaxMomentaryLoudness` 418, `MaxShortTermLoudness` 420,
+`Reserved` 422, `CodingHistory` 602.
+
+The field that matters most is `TimeReference`, and its definition is a trap:
+*"a 64-bit value which contains the first sample count since midnight. **The
+number of samples per second depends on the sample frequency** which is defined
+in the field `<nSamplesPerSec>` from the `<format chunk>`."* So start-of-file
+timecode is **a sample count, not a timecode**, and converting it requires the
+sample rate from a *different chunk*. Storing it as a timecode string on ingest
+would discard the precision that makes it useful for sync.
+
+Loudness fields are signed with a sentinel: **`7FFFh` means ignore**, and *"If
+any parameters are found to have values outside their valid ranges (not just
+7FFFh)... they shall be ignored too."*
+
+**The negative result.** EBU Tech 3285 v2.0 **never mentions iXML** — zero
+occurrences — and contains no concept of scene, take or slate. The only hook is
+§2.1: *"Any additional chunks that are present in the file and which are not
+specified in this document... are to be considered **private**... However,
+**BWF-compliant applications shall pass these chunks.**"*
+
+That single "shall pass" is the entire legal basis on which iXML survives a BWF
+round trip. The conclusion for the model is clean and worth stating as a rule:
+
+> **BWF gives you time and identity. iXML gives you production semantics.
+> Neither substitutes for the other, both must be read, and iXML wins where they
+> overlap.**
+
+#### A.8.3 ALE — and a finding that contradicts the common assumption
+
+Avid publishes no formal specification, but its own metadata whitepaper prints
+the header syntax:
+
+```
+Heading<RETURN>
+FIELD_DELIM<TAB>TABS<RETURN>
+VIDEO_FORMAT<TAB>NTSC<RETURN>
+FILM_FORMAT<TAB>35mm, 4 perf<RETURN>
+AUDIO_FORMAT<TAB>48khz<RETURN>
+FPS<TAB>24<RETURN>
+```
+
+Three sections — `Heading`, `Column`, `Data` — tab-separated, and *"the Column
+headings can appear in any order as long as the column data appears below the
+correct heading."* Minimum importable set: *"1. Tape 2. Start 3. End"*.
+
+Avid's own column definitions, verbatim, and note how precisely they match §A.4's
+per-device split: `Tape` — *"ID of source. When entered, it triggers the creation
+of TAPE MOB ID within Avid editing system"*; `Soundroll` — *"ID of sound roll. A
+Clip must contain an Audio track in order for Soundroll to have a value."*;
+`Camroll` — *"ID of individual camera roll"*; `Labroll` — *"ID of multiple camera
+rolls when combined into one roll for transfer"*; `End` — *"Timecode of last
+frame in clip **+1 (EDL Style)**"*.
+
+That `End` definition is an exclusive-end convention and must not be silently
+converted to an inclusive one.
+
+> **⚠️ `Circled` is not a standard ALE column.** A real 129-column Avid export
+> (from the OpenTimelineIO ALE adapter's test corpus) was indexed
+> programmatically: it contains `Scene`, `Take`, `Camroll`, `Soundroll`,
+> `Labroll`, `Reel`, `Tape`, `TapeID`, `Start`, `End`, `ASC_SOP`, `ASC_SAT`,
+> `LUT`, `Comments` — and **no column whose name contains "ircl"**. Neither does
+> Avid's own whitepaper column table. Circled-take is a *custom* column by
+> convention, which Avid supports (*"Any new column (header) written to the ALE
+> file will be available as custom fields in the Avid Media Composer"*), not a
+> standard field.
+
+The practical consequence: **the single most important editorial fact on set —
+which take the director liked — has no standardised carrier in the dominant
+editorial interchange format.** It travels in iXML `<CIRCLED>` on the sound file,
+in a custom ALE column, or on paper. Any system that wants it must read it from
+the sound side and carry it itself. That is an argument for `circled` being a
+first-class attribute on `logistics.take` in our graph rather than something we
+expect to import.
+
+CDL columns carry real values in the shape:
+
+```
+ASC_SOP: (1.0000 1.0000 1.0000)(0.0000 0.0000 0.0000)(1.0000 1.0000 1.0000)
+ASC_SAT: 1.0000
+```
+
+#### A.8.4 ASC CDL and ACES AMF — the licence asymmetry
+
+**The ASC CDL specification is not publicly available.** `theasc.com` returns
+HTTP 403 to every path and there is no archived copy of the release document;
+the documented route is an e-mail request to the ASC. **No open licence is
+stated.**
+
+**But the official XSD is public**, bundled into the ACES AMF repository
+(Apache-2.0), `targetNamespace="urn:ASC:CDL:v1.01"`, authored 20 July 2007. It
+settles the alias question that the ALE columns raise:
+
+```xml
+<element name="SOPNode" type="cdl:SOPNodeType" substitutionGroup="cdl:ColorNodeBase"/>
+<element name="ASC_SOP" type="cdl:SOPNodeType" substitutionGroup="cdl:SOPNode"/>
+<element name="SatNode" type="cdl:SatNodeType" substitutionGroup="cdl:ColorNodeBase"/>
+<element name="ASC_SAT" type="cdl:SatNodeType" substitutionGroup="cdl:SatNode"/>
+```
+
+So **`ASC_SOP`/`ASC_SAT` are the specification's own aliases for
+`SOPNode`/`SatNode`** — the ALE column names are not an Avid invention.
+`ColorCorrection/@id` is `anyURI` and **required**. Real files: `.cdl` has root
+`<ColorDecisionList xmlns="urn:ASC:CDL:v1.01">`, `.ccc` has
+`<ColorCorrectionCollection>`, `.cc` is a bare `<ColorCorrection>`. OpenColorIO
+(BSD-3) additionally accepts `SATNode` as an alternate spelling and parses
+scientific notation and leading-dot floats — accept both.
+
+The maths, from the ACES CLF specification (CC BY 4.0):
+
+> out_SOP = CLAMP(in × slope + offset)^power
+> luma = 0.2126 × out_SOP,R + 0.7152 × out_SOP,G + 0.0722 × out_SOP,B
+> out = CLAMP[luma + saturation × (out_SOP − luma)]
+
+with styles `Fwd`, `Rev`, `FwdNoClamp`, `RevNoClamp` — the no-clamp variants
+existing *"to provide compatibility with the many applications that take that
+alternative approach"*. **The luma weights are Rec.709**, which is a fact a
+colour-managed pipeline must not silently re-derive from the working space.
+
+`ucg_schema::Cdl` already stores exactly slope/offset/power/saturation, so the
+existing component is correct and needs only the clamp-style flag.
+
+**ACES AMF is the genuinely open one**: schema Apache-2.0, prose CC BY 4.0,
+namespace `urn:ampas:aces:amf:v2.0`, and it **imports the ASC CDL schema
+directly**. Its root is `acesMetadataFile` → `amfInfo` (uuid, author, dateTime),
+`clipId?`, `pipeline`, `archivedPipeline*`. Every transform carries a **required
+`@applied` boolean**, which is the interesting design idea: the same file is
+either a *recipe* (not yet applied) or a *receipt* (already baked), and the flag
+says which. AMF also states its own boundary — *"AMFs do not contain 'timeline'
+metadata such as edit points... Edit Decision Lists (EDLs) or Avid Log Exchange
+files (ALEs) may reference AMFs"* — which is exactly the `AMF_UUID`/`AMF_NAME`
+ALE column mechanism.
+
+#### A.8.5 Lens metadata — and where it is lost
+
+Cooke /i carries, verbatim from Cooke: *"**focal length, focus distance, zoom
+position, near and far focus, hyper focal distance, T-stop, horizontal field of
+view and entrance pupil position**... digitally recorded for every frame, at any
+frame rate up to 285 fps"*. It is described as *"an open protocol"*, but the
+support page qualifies that: *"if you wish to... **need access to any of the
+non-disclosed technical information**, please contact us"*, and the manual splits
+**CORE** commands (*"supported by ALL /i Technology partners"*) from **EXTENDED**
+(*"available by request to /i Technology Partners"*).
+
+ZEISS eXtended Data is *"**Based on the Cooke /i Technology**"* and adds
+*"Lens distortion characteristics based on the focal point"* and *"Lens shading
+characteristics based on the focal point and effective T-stop"*. ZEISS is careful
+that *"**Shading does not refer to vignetting**"*. Carriage is a sidecar:
+*"Side car files with extension **.zlcf (ZEISS Lens Correction File)**"*, and
+*"none of the EXR transcoders... will automatically inject ZEISS eXtended Data
+into the EXR file sequences. This must be done manually."*
+
+> **The finding that matters: lens metadata is lossy at the container boundary.**
+> SMPTE **RDD 18:2021** is the standardised Lens Unit Metadata Set — iris
+> F/T-number, iris/focus/zoom ring positions, focus distance from image plane and
+> front vertex, focal length, anamorphic squeeze, extender, and a free-text
+> `Lens Attributes` capped at *"less than 64 bytes"*. It has **no entrance pupil,
+> no lens serial, no hyperfocal, no near/far focus, no HFOV, and no
+> distortion or shading**. Everything /i carries beyond focus/iris/zoom either
+> dies at the MXF boundary or goes into a vendor blob.
+>
+> Therefore: **model the /i field set as the source of truth and treat RDD 18 as
+> a lossy projection**, not the other way round. A `production.lens` node with
+> the full /i payload plus a `.zlcf` reference is the honest shape; deriving our
+> model from the SMPTE standard would silently discard what VFX actually needs.
+
+#### A.8.6 Timecode, user bits and jam sync — measured drift
+
+**User bits**, ST 12-1 §8.4, verbatim: *"The binary groups are intended for
+storage and transmission of data by the users... **Note: The binary groups are
+commonly referred to as 'user bits'.**"* Thirty-two bits in eight 4-bit groups,
+with the interpretation governed by BGF2/BGF1/BGF0 — `000` unspecified, `100`
+date and time zone (per ST 309), `101` page/line (per ST 262), `110` clock time
+plus date, `111` clock time plus page/line. §8.4.1: *"The 32 bits within the
+eight binary groups may be assigned in any manner without restriction."*
+
+In practice they carry the date. Sound Devices: *"Static, numeric data that is
+available as part of a timecode signal. **User bits are often used to indicate the
+date of a file.**"* — with UI options `mm:dd:yy:UU` **and** `dd:mm:yy:UU`.
+
+> **Rule: store user bits as four raw bytes plus a BGF-derived interpretation
+> hint. Never parse them as a date without the BGF flags saying so** — vendors
+> disagree on day/month order and one vendor exposes both.
+
+**Jam sync**, defined by ARRI, verbatim: *"The camera... **samples the timecode
+value once** from the timecode connector and then continues counting based on its
+own high precision crystal clock... **This mode ensures stable timecode with an
+offset of less than one frame for each eight hours, after which the camera has to
+be re-jammed.**"* Contrast **Regen**, where *"the timecode source must remain
+connected"*.
+
+Vendor drift figures, all from vendor documentation:
+
+| Device | Stated accuracy | Oscillator |
+|---|---|---|
+| ST 12-1, unreferenced LTC source | *"the frequency tolerance shall be **±100 ppm**"* (≈2.6 s/day) | — |
+| Sound Devices 833 | *"Sample/Timecode Accuracy: **0.1 ppm (0.25 frames per 24 hours)**"* | — |
+| Ambient NanoLockit | *"drift of less than 1 frame a day (**~0,1ppm**)"*; *"Zero Drift with active C-Jam Mode"* | — |
+| Ambient Lockit | *"**drift less than 1 frame apart within 24 hours**"* | TCXO |
+| Tentacle SYNC E | *"**Less than 1 Frame Drift in 24 Hours**"*; *"High Precision TCXO — **0.2 ppm**"* | TCXO |
+| Deity TC-1 | *"**±0.5ppm**... **less than 1 frame of drift in a 72-hour period**"* | TCXO |
+| Atomos UltraSync ONE | *"Free Running: **TCXO 0.5 ppm (~1 Frame Drift in 24 Hours)**"* | TCXO |
+| ARRI ALEXA 35, jammed | *"less than one frame for each eight hours"* | crystal |
+| TASCAM CG-1800 (master clock, for contrast) | *"**±0.01ppm**... frequency stability **±0.005ppm per day**"* | OCXO |
+
+Sanity check, derived: at 24 fps one frame is 41.67 ms, so over 86 400 s one
+frame/day is **≈0.48 ppm**. The 0.5 ppm ⇒ ~1 frame/24 h claims are internally
+consistent; Sound Devices' 0.1 ppm ⇒ 0.25 frames/24 h checks out; Deity's
+0.5 ppm ⇒ <1 frame/72 h only holds for parts well inside spec, so treat it as
+optimistic.
+
+**The model consequence:** a jam is an *event with an age*, and sync confidence
+decays from it. `production.record` should carry `jammed_at` and the generator's
+rated ppm, so "these two devices were jammed eleven hours ago from a ±0.5 ppm
+source" becomes a computable expected offset rather than a guess — which is
+exactly what §A.7 rank 2 needs to decide whether a timecode match is trustworthy.
+
+**Genlock is not timecode**, and the clearest statement is Ambient's own:
+*"while timecode is a required information to jam sync several units together...,
+**it will not take care to keep them synchronous over a longer time as it will not
+affect the speed the camera is generating frames**. To achieve this a blank signal
+commonly referenced to as **genlock** is required."*
+
+**Run modes**, Sound Devices' glossary: *"**record run** - timecode advances only
+when recording is engaged · **free run** - timecode run continuously... ·
+**24 hour** - similar to free run except the start time corresponds to
+time-of-day · **ext TC** - the recorder applies the value of an external timecode
+source."* ARRI adds the constraint that decides the data model: *"**Free Run
+timecode is only possible if the sensor frame rate matches the project rate.** If
+the camera is over- or undercranking... the camera will automatically switch to
+run mode Rec Run."* So the run mode is a **per-record** fact, not a per-project
+one, and it changes when someone ramps.
+
+#### A.8.7 MXF DMS-1 — why not to model slates on it
+
+SMPTE **ST 380** (there is no "ST 380-1"; the document is SMPTE 380M-2004) is
+free and was read. It defines three frameworks — Production, Clip and Scene.
+The relevant fields exist:
+
+| UL | Name | Type | Framework |
+|---|---|---|---|
+| `01.05.06.00.00.00.00.00` | Scene Number | ISO 7-bit char, ≤32 | **Scene** |
+| `01.05.07.00.00.00.00.00` | Take Number | **Uint16** | **Clip** |
+| `03.02.05.03.00.00.00.00` | Slate Information | UTF-16 string | **Clip** |
+
+> **Recommendation: do not model slates on DMS-1.** Four reasons, all from the
+> standard itself: (a) `Take Number` is a **Uint16**, so it cannot express "3A",
+> "WT1" or any pickup/series convention — which iXML's string `<TAKE>` can;
+> (b) `Scene Number` lives in the **Scene** framework while `Take Number` lives
+> in the **Clip** framework, so a slate's (scene, take) pair **is not one
+> record** and must be reconstructed by correlating DM segments on different
+> tracks; (c) `Slate Information` is untyped free text; (d) there is no camera
+> roll, camera id, sound roll or circled flag anywhere in it.
+
+And it was never widely adopted. The EBU's own Technical Review (2010 Q3):
+*"**Until now, the use of DM inside MXF containers has not been widespread.**
+Some cameras record titles and similar information as DMS-1... Still, **most
+applications resort to basic key/value pairs or store DM in ancillary XML
+files.**"* Corroborated directly: ARRI's own MXF metadata specification cites
+ST 377-1, ST 378 and RDD 18 and contains **zero** occurrences of "380".
+
+Treat DMS-1 as an export target at most.
+
+#### A.8.8 Script supervision — what is citable and what is not
+
+The guild bodies (IATSE Local 871, the LA Script Supervisors Network) **publish
+no sample forms** — a verified negative. The citable material is in published
+textbooks.
+
+**Who decides a circled take** — Elkins, *The Camera Assistant's Manual* 5th ed.:
+*"**After each setup, the Script Supervisor will tell you which takes are to be
+circled. These are the takes that the Director likes and wants to consider for
+use in the editing of the film**... The circled takes are called good (G) takes.
+The takes on the report that have not been circled are called no good (NG)."*
+
+That is the authority chain — **Director decides → Script Supervisor relays →
+2nd AC marks the camera report** — and it confirms §A.2's claim that circling is
+an *editorial selection* recorded by a different person from the technical
+assessment.
+
+**Scene lettering**, Elkins, and this is the most useful single quote in the
+section: *"When shooting a portion of a scene or a pick-up of action within a
+scene, a letter is usually added to the scene number... **Some letters that are
+not usually used for slating scene numbers are I, O, Q, S, and Z, which can
+resemble numbers when written hurriedly. The letter I resembles the number one, O
+and Q resemble the number zero, S resembles the number five, and Z resembles the
+number two.**"*
+
+Five excluded letters — **I, O, Q, S, Z** — with the reason. A slate-designation
+generator that increments A, B, C… must skip exactly those. Elkins also documents
+the US/UK split: *"In Britain it is common practice to not use scene numbers on
+the slate... they are written as shot numbers, and the first shot on the first day
+of filming is shot number 1."* — matching iXML's `<SCENE>` note (§A.8.1).
+
+**The lined script**, Musburger & Ogden, *Single-Camera Video Production* 6th ed.:
+*"♦ **Solid vertical lines** on the script indicate what each shot covers.
+♦ **Squiggly lines** indicate off-camera dialogue or action not seen in that
+particular shot. ♦ Shots are labeled with the scene number and an alpha
+designation... The 'A' tag is typically the Master Scene shot and runs the length
+of the scene."*
+
+⚠️ Two fetched sources **disagree** on the squiggle: Musburger & Ogden say
+*off-camera / not seen in this shot*; practising script supervisors define it as
+*whether the actor's face is visible*. **No guild-published normative definition
+exists.** If CINE-OMNI ever renders a lined script it must pick one and document
+which.
+
+⚠️ **`false_start` and `series` takes are `UNVERIFIED` as *film-production*
+definitions.** The two standard references (Miller's glossary; Cybulski's *Beyond
+Continuity*, which reportedly has a section by that exact name) could not be
+fetched. §A.2's descriptions of them are therefore working definitions, not
+citations — though iXML's `FALSE_START` in the `TAKE_TYPE` dictionary at least
+confirms the term is standard vocabulary. `pickup` is verified only in the
+*within-scene* sense (Elkins, above); the *reshoot-after-principal-photography*
+sense is `UNVERIFIED`.
+
+⚠️ **"MOS" etymology is folklore and the published sources say so.** Elkins:
+*"**The Hollywood legend says** that the term MOS came from a German director who
+could not say 'without sound.'... The literal translation of the term is **minus
+optical sound**."* Do not put an etymology in a tooltip. The *paperwork*
+convention is solid: *"If the shot was done with sync sound, write S in the
+column for sync, and if it was done without sound, write M for MOS."*
+
 ---
 
 ## B. Dailies and DIT
@@ -357,10 +864,29 @@ Everything else — proxies, LUTs, burn-ins, selects, editorial handoff — is
 downstream convenience. The card format is irreversible, so the verification
 question is not academic; it is the only question.
 
-The industry rule of thumb is **3-2-1**: three copies of the data, on two
-different kinds of media, one of them offsite. It is a general data-protection
-rule rather than a film-specific one. `UNVERIFIED` as to an authoritative
-originating citation.
+The industry rule of thumb is **3-2-1**, and it has a citable source. From
+*"Data Backup Options"* by Paul Ruggiero and Matthew A. Heckathorn, *"© 2012
+Carnegie Mellon University. Produced for US-CERT, a government organization"*,
+hosted by CISA:
+
+> *"To increase your chances of recovering lost or corrupted data, follow the
+> 3-2-1 rule: **3 – Keep 3 copies of any important file: 1 primary and 2
+> backups. 2 – Keep the files on 2 different media types to protect against
+> different types of hazards. 1 – Store 1 copy offsite (e.g., outside your home
+> or business facility).**"*
+
+Two corrections to the folklore around it. **US-CERT did not originate the
+rule** — that document's own footnote 1 credits *"Krogh, Peter. The DAM Book:
+Digital Asset Management for Photographers, 2nd Edition, **p. 207**. O'Reilly
+Media, 2009"*, and the wording also appears under Krogh's byline on the ASMP
+dpBestflow site. And **it is not "ST19-001"** — that identifier appears nowhere in
+the document.
+
+Krogh's own formulation adds a caveat worth keeping: *"While 3-2-1 storage is
+the ideal arrangement, it's not always possible... Best practices, however, still
+require 3 copies and some physical separation between the copies."* — i.e. the
+"2 media types" leg is the soft one; three copies and physical separation are
+not.
 
 The model consequence: **"verified" is a property of a *copy*, not of the
 media.** A `media.material` is not verified; a `media.copy` on a particular
@@ -619,6 +1145,70 @@ re-fetching those pages to quote them verbatim is **pending** and the "Reference
 column is therefore `UNVERIFIED` as a *citation*, though the agreement between
 four independent implementations' published constants and this build is itself
 meaningful.
+
+**Corroboration from the projects' own published benchmarks.** Both were fetched.
+
+xxHash's README (machine stated verbatim: *"an Intel i7-9700K cpu... Ubuntu x64
+20.04... compiled with `clang` v10.0 using `-O3`"*):
+
+| Hash | Width | Bandwidth |
+|---|---|---|
+| XXH3 (SSE2) | 64 | **31.5 GB/s** |
+| XXH128 (SSE2) | 128 | 29.6 GB/s |
+| *RAM sequential read* | — | *28.0 GB/s* |
+| XXH64 | 64 | 19.4 GB/s |
+| SHA1 | 160 | 0.8 GB/s — *"Cryptographic but broken"* |
+| MD5 | 128 | 0.6 GB/s — *"Cryptographic but broken"* |
+
+with the project's own caveat: *"some algorithms feature _faster than RAM_
+speed... they can only reach their full speed potential when input is already in
+CPU cache (L3 or better). Otherwise, they max out on RAM speed limit."*
+
+BLAKE3's chart data (from the benchmark script behind the README's SVG;
+provenance comment verbatim: *"an AWS c5.metal instance, with an Intel Cascade
+Lake-SP 8275CL processor... MD5, SHA-1, SHA-2, and SHA-3 are all provided by
+OpenSSL"*), single-threaded, 16 KiB input: **BLAKE3 6 866 MiB/s**, BLAKE2b 1 312,
+SHA-1 1 027, BLAKE2s 876, MD5 740, SHA-512 720, **SHA-256 484**, SHA3-256 394.
+
+Both tables reproduce the ordering measured here. The absolute numbers are
+higher, as expected on server parts; the *ratios* are what the design rests on.
+
+> **⚠️ The SHA-256 figure is hardware-dependent, and this changes R8.** Intel's
+> SHA Extensions add `sha256msg1`, `sha256msg2` and `sha256rnds2`; Intel's own
+> kernel patch submission reports *"up to 3.6x speedup over existing SSSE3
+> enhanced routines... on Broxton platform"*. This machine has **no `sha_ni`
+> flag**, and an independent `openssl speed` run here gives SHA-256 ≈ **162 MB/s**
+> at 16 KiB — the same order as the 123 MiB/s measured through `sha2`, and it
+> also shows SHA-256 is *slower than SHA-512* on 64-bit hardware without the
+> extension.
+>
+> So: on a machine without SHA-NI, SHA-256 is ~40× slower than XXH3 and the case
+> for a fast transfer digest is overwhelming. On a SHA-NI machine the gap
+> narrows substantially. **The honest conclusion is that the identity-digest
+> choice should be a capability-gated decision, not a hardcoded constant** — the
+> same shape as `cine-media`'s existing `probe::is_decodable` gate. The specific
+> "with SHA-NI" throughput number is `UNVERIFIED`; no such CPU was available.
+
+Two notes on the cryptanalysis, because "broken" is doing real work in the table
+above and both claims were checked against the primary papers:
+
+* **MD5** — Wang, Feng, Lai and Yu, *"Collisions for Hash Functions MD4, MD5,
+  HAVAL-128 and RIPEMD"*, IACR ePrint 2004/199. The load-bearing clause is not
+  the speed but the generality: *"On IBM P690, it takes about one hour to find
+  such M and M′... **Moreover, our attack works for any given initial value.**"*
+  That is what distinguishes it from earlier chosen-IV pseudo-collisions and is
+  why MD5 is unusable where an adversary is in the threat model.
+* **SHA-1** — Stevens, Bursztein, Karpman, Albertini and Markov, *"The first
+  collision for full SHA-1"*, IACR ePrint 2017/190: *"the computational effort
+  spent is equivalent to 2^63.1 calls to SHA-1's compression function, and took
+  approximately 6,500 CPU years and 100 GPU years... still more than 100,000
+  times faster than a brute force search."*
+  ⚠️ **Do not cite `shattered.io`** — the domain no longer hosts that work and
+  now serves unrelated auto-generated content. Cite the ePrint paper.
+
+Neither matters for detecting *accidental* corruption, which is why ASC MHL
+still permits both (§B.7.6). Both matter for content identity, which is the
+second reason the two jobs need two algorithms.
 
 **Collision reasoning, stated numerically rather than hand-waved.** For a
 64-bit digest and *n* files, the birthday collision probability is
@@ -1328,57 +1918,303 @@ same file or run the same reactor mint the *same* `EntityId` and both emit
 attributes, applied after a local edit, loses the local edit with no trace. A
 policy is required and none exists.
 
-### C.4 The three candidate models, judged against *this* system
+### C.4 How the industry actually does it — vendor-documented behaviour
 
-**Pessimistic locking** (Perforce-style exclusive checkout; Avid bin locking;
-Resolve's collaborative locks — vendor-documented behaviour **`UNVERIFIED`** in
-this revision).
+Fetched from vendor documentation. No internals are asserted; only what the
+vendor publishes about observable behaviour.
 
-* *Fits:* binary-ish, coarse-grained, high-conflict-cost artefacts. A timeline, a
-  reel's offload job, a shoot day's schedule.
+**DaVinci Resolve** (Reference Manual, chapters 194–195) is the most
+sophisticated of the three, and its granularity is **three-tiered**:
+
+> *"Multi-user collaborative workflow uses 'bin locking' to manage who has
+> access to what... Using bin locking, multiple editors can simultaneously edit
+> different timelines in different bins of the same project... Using clip
+> locking, multiple colorists and compositing artists can work together in the
+> same timeline... **One editor, one compositing artist, and one colorist can
+> work together on the same clip in the same Timeline of the same project without
+> conflict.**"*
+
+The partition is **by discipline, not by region**: the editor owns the cut, the
+colorist owns the grade, the compositor owns the Fusion comp, and they can hold
+the *same clip* simultaneously because they touch disjoint attribute sets. The
+conflict rule is stated plainly — *"a 'first come, first served' model"* — and
+timeline-level editing is exclusive: *"The first collaborator that opens a
+timeline is the only person that can make editorial changes... Other
+collaborators... are 'locked out' of making changes to the Edit or Fairlight
+pages, but they can see the Timeline, and they can make grading changes in the
+Fusion or Color pages."*
+
+Two details are worth stealing outright:
+
+* **Propagation is pulled, not pushed, and deliberately so.** *"All changes that
+  collaborators make are automatically saved to the project as they're made, so
+  no work will ever be lost... However, **each collaborator gets to decide when
+  they want to update** the bin, timeline, or clip they're currently working on
+  to see the changes made by everyone else, **in order to prevent a kaleidoscope
+  of constant alterations to compositions and grades from being a distraction**
+  while you're working."* That is a UX decision, not a technical limit, and it is
+  the right one for a grading or comp session.
+* **When two people must share a timeline, the documented answer is branch and
+  merge by hand**: *"this can be accomplished using duplicate timelines and then
+  merging the changes back together later on... **Compare With Current
+  Timeline**... Right-clicking within the right highlighted area reveals an
+  **Accept Change** command."*
+
+Resolve also documents the *non*-collaborative mode, which is the honest baseline
+for §C.8's first slice: *"When a shared project is opened by someone else after
+it's already been opened, a dialog informs you that it's being opened in
+**Read-only mode**."*
+
+**Avid Media Composer** locks at the **bin**, never the sequence:
+
+> *"Your Avid editing application provides a locking mechanism... The method
+> allows one user to write to a bin; multiple users can read the files in that
+> bin."*
+> *"The user who opens the bin first controls the lock... When the person who
+> controls the lock closes the bin, it becomes available for another user."*
+
+Because a sequence lives *inside* a bin, locking a bin locks every sequence and
+clip in it together — which is why Avid facilities adopt one-bin-per-editor as a
+discipline rather than a preference. Two things Avid documents that are unusually
+candid and directly relevant:
+
+> *"**Occasionally, when two editors attempt to open a shared bin at the same
+> time, both editors get the green lock icon. However, only one editor really has
+> the lock**... Both editors can modify their copies of the bin, but only the
+> editor that controls the lock... can save that bin. The other editor is warned
+> that the bin is locked but is allowed to save a copy."*
+
+> *"**Avoid creating duplicate bins when you modify a locked bin.** If you do
+> create a duplicate bin, you should manually merge the changes into the original
+> bin and delete the duplicate."*
+
+So the lock is advisory and racy even in the reference implementation of
+pessimistic locking, and the recovery path is a manual merge. That is a strong
+argument against betting the design on locks being authoritative.
+
+Avid NEXIS workspace permissions are a **separate, storage-layer** mechanism —
+the NEXIS administration guide contains no mention of bin locking at all, and
+grants combine permissively: *"The permissions set for users, groups, and
+Workspaces work together to grant the **highest** level of privilege of the
+combination."* Write access to the storage is necessary but not sufficient to
+hold a bin lock. Two layers, documented separately — which is exactly the split
+§C.7 proposes between recorded roles and advisory claims.
+
+⚠️ **The `.lck` file is `UNVERIFIED`.** Avid documents the mechanism functionally
+(a red/green lock button, bold text in the Project window) and **never names a
+`.lck` file**. That description is community knowledge, not vendor documentation.
+
+**Adobe Productions** is a genuine gap: `helpx.adobe.com` refused every automated
+fetch (timeouts and bot mitigation across several methods), and the previously
+cited URL now 404s. **Everything about Productions is `UNVERIFIED` in this
+revision** and is deliberately not reproduced from search fragments.
+
+**Perforce Helix Core** is the purest pessimistic model, and its documentation
+states the *reason* rather than the mechanism:
+
+> `+l` — *"Exclusive open (locking): If set, only one user at a time can to open
+> a file for editing. Useful for binary file types, such as graphics, where
+> **merging of changes from multiple authors is meaningless**."*
+
+> *"Some of the main challenges in managing and versioning binaries include:
+> **You can't merge them**, making collaboration on an asset difficult."*
+
+That is the whole argument, and it is worth restating because it decides where
+locking belongs in *our* design: **optimistic concurrency's entire payoff is
+merge. Where merge is impossible, the optimistic bet has no upside and only the
+cost of wasted parallel work.** Media files are unmergeable; the *graph* is not.
+So locking belongs on media operations (an offload job, a render) and optimistic
+concurrency belongs on the graph — which is precisely §C.6's split.
+
+Note also that Perforce separates two things we should keep separate:
+`+l` is a **filetype attribute** enforced automatically at open-for-edit;
+`p4 lock` is an **explicit command** that blocks *submit* rather than *open*.
+And the changelist is atomic: *"either all the files listed in the changelist are
+saved in the depot, or none of them are"* — the same guarantee a UCG `Delta`
+already provides.
+
+**Git LFS** shows what an advisory lock protocol looks like when it is honest
+about being advisory. `git lfs lock` *"Sets the given file path as 'locked'
+against the Git LFS server, **with the intention of blocking** attempts by other
+users to update the given path"*; `git lfs track --lockable` makes matching paths
+*"read-only in the working copy when not locked"*. The server API is small —
+`POST /locks`, `GET /locks`, `POST /locks/verify`, `POST /locks/:id/unlock` —
+and enforcement happens at push: *"any updated files matching one of 'their'
+locks will **halt the push**. At this point, **it is up to the user to resolve the
+lock conflict with their team**."*
+
+The project's own design document is the most useful sentence in this whole
+section:
+
+> *"We need the ability to lock files to **discourage (we can never prevent)**
+> parallel editing of binary files which will result in an unmergeable
+> situation."*
+
+And it degrades openly: *"Since File Locking is an early release, and few LFS
+servers implement the API, **Git LFS won't halt your push if it cannot verify
+locked files**."* An advisory lock that says so is more useful than an
+"authoritative" one that races (cf. Avid, above). This is the model for
+`collab.claim` in §C.7.
+
+**Figma** is the strongest single primary source here, because they published
+their reasoning. On OT:
+
+> *"we didn't want to use operational transforms (a.k.a. OTs)... As a startup we
+> value the ability to ship features quickly, and **OTs were unnecessarily complex
+> for our problem space**... They're a great way of editing long text documents...
+> but they are very complicated and hard to implement correctly. They result in a
+> **combinatorial explosion of possible states** which is very difficult to reason
+> about... **Since Figma isn't a text editor, we didn't need the power of OTs.**"*
+
+On CRDTs — inspired by, deliberately not one:
+
+> *"**Figma isn't using true CRDTs though.** CRDTs are designed for decentralized
+> systems where there is no single central authority... There is some unavoidable
+> performance and memory overhead with doing this. Since Figma is centralized
+> (our server is the central authority), we can simplify our system by removing
+> this extra overhead."*
+
+On the merge rule they actually use — which is §C.6's rule, arrived at
+independently:
+
+> *"Figma's multiplayer servers keep track of the latest value that any client has
+> sent for a given property on a given object... **This approach is similar to a
+> last-writer-wins register in CRDT literature** except we don't need a timestamp
+> because the server can define the order of events."*
+
+> *"changes are atomic at the property value boundary... If the text value is B
+> and someone changes it to AB at the same time as someone else changes it to BC,
+> the end result will be either AB or BC but **never ABC**. That's ok with us
+> because Figma is a design tool, not a text editor."*
+
+And on the tree — the passage that matters most for a bin/timeline hierarchy:
+
+> *"Arranging objects in an eventually-consistent tree structure is the most
+> complicated part of our multiplayer system... **Two concurrent reparenting
+> operations for the same object shouldn't ever result in two copies of that
+> object in separate places in the tree.**"*
+> *"An example of this is a concurrent edit where one client makes A a child of B
+> while another client makes B a child of A. Then A and B are both each other's
+> parent, which forms a cycle."*
+> *"Figma's multiplayer servers **reject parent property updates that would cause
+> a cycle**... But it can still happen on the client... Figma's solution is to
+> temporarily parent these objects to each other and **remove them from the tree**
+> until the server rejects the client's change."*
+
+Note that Figma's fix **requires a central authority**. Ours cannot assume one
+(§C.4's offline constraint), which is what makes the next section's paper the
+relevant one.
+
+### C.4a The algorithms, judged against *this* system
+
+**Pessimistic locking.**
+
+* *Fits:* unmergeable, coarse-grained, high-conflict-cost artefacts — a media
+  offload job, a render, an export. Perforce states the criterion exactly:
+  locking is for things where *"merging of changes from multiple authors is
+  meaningless"*.
 * *Fails:* the on-set and dailies half of this product is **offline by nature**.
-  There is no network on a location. A design where work stops when a lock server
-  is unreachable is unusable for exactly the workflows in sections A and B.
-* *Verdict:* necessary as a **layer**, insufficient as **the** mechanism.
+  A design where work stops when a lock server is unreachable cannot serve
+  sections A and B. And even the reference implementations are racy and advisory
+  (Avid's own "both editors get the green lock icon"; Git LFS's "we can never
+  prevent").
+* *Verdict:* necessary as a **layer** over media operations, insufficient as
+  **the** mechanism for the graph.
 
-**Optimistic concurrency over a causally-ordered op log** (compare-and-swap on a
-revision; detect conflicts at merge; resolve by rule or by human).
+**Optimistic concurrency over a causally-ordered op log.**
 
 * *Fits:* an append-only op log is already a commit DAG waiting for parent
   pointers. Conflicts are detectable at attribute granularity because ops name
-  `(entity, key)`. Offline work is natural: you keep committing locally and
-  reconcile later, which is precisely the sneakernet reality of a shoot.
-* *Costs:* someone must define the resolution rule per attribute class, and
-  `prev` must stop being load-bearing for inversion (§C.3).
+  `(entity, key)` — the same granularity Figma settled on. Offline work is
+  natural: keep committing locally, reconcile later, which is the sneakernet
+  reality of a shoot.
+* *Costs:* a resolution rule per attribute class, and `prev` must stop being
+  load-bearing for inversion (§C.3).
 * *Verdict:* **the fit.**
 
-**CRDT** (Automerge, Yjs/`yrs`; licences and maturity **`UNVERIFIED`** in this
-revision, pending crates.io fetch).
+**CRDT** — `automerge` 0.11.0 (MIT, 570 717 downloads, 16 required deps) and
+`yrs` 0.27.4 (MIT, 2 897 418 downloads, 10 deps); both actively maintained, both
+pure Rust (automerge pins `flate2` to the pure-Rust `zlib-rs` backend). Licences
+verified from the repositories' own LICENSE files. So the *dependency* objection
+is weaker than assumed — but three substantive ones remain.
 
-* *Fits:* text and ordered sequences, where intention preservation genuinely
-  needs a purpose-built algorithm.
-* *Fails, for the graph as a whole:* (i) a CRDT **replaces** the op log rather
-  than sitting on it, so undo, `cause`, `depth`, and the reactor cascade all have
-  to be rebuilt on top of it; (ii) CRDTs guarantee *convergence*, not
-  *invariants* — nothing stops two sites converging on a graph where a take has
-  two conflicting bindings, a schedule is not a valid packing, or a `Contains`
-  edge set has become a cycle; (iii) moves in replicated trees are a known-hard
-  problem needing a specific algorithm rather than falling out of the model;
-  (iv) it is a large dependency to put at the centre of the system's identity
-  before the single-user case is finished.
+1. **A CRDT replaces the op log rather than sitting on it.** Undo, `cause`,
+   `depth` and the reactor cascade all have to be rebuilt on top of it.
+2. **CRDTs guarantee convergence, not invariants — and Automerge's own
+   documentation is careful never to claim otherwise.** It says *"Automerge
+   automatically merges the changes together cleanly, so that everybody ends up
+   in the same state, and no changes are lost"* — a convergence claim. On
+   conflicts: *"Automerge picks one of the concurrently written values as the
+   'winner', and it ensures that this winner is the same on all nodes"*, where
+   *"'randomly choose' means 'choose one arbitrarily, but in such a way that all
+   nodes agree'"*. On sequences it hedges explicitly: the RGA sequence *"means
+   that concurrent insertions and deletions can be merged in a manner which
+   **attempts to** preserve user intent"*, and *"There are cases where this
+   algorithm does not preserve insertion order — primarily when inserting
+   elements in reverse."*
+
+   Nothing there prevents two sites converging on a timeline with overlapping
+   clips on one track, a take bound to two conflicting materials, a schedule that
+   is not a valid packing, or a `Contains` cycle. **Those are our invariants and
+   a CRDT will happily converge on a state that violates every one of them.**
+3. **Tree moves are a genuinely hard special case, not a consequence of the
+   model.** Kleppmann, Mulligan, Gomes and Beresford, *"A highly-available move
+   operation for replicated trees"*, state the problem exactly: *"different
+   replicas may perform operations that are individually safe, but whose
+   combination leads to a cycle... replica 1 moves B to be a child of A, while
+   concurrently replica 2 moves A to be a child of B."* Their paper *"demonstrate[s]
+   bugs in Google Drive and Dropbox that arise with concurrent moves"*, and notes
+   that *"it is not sufficient for the replica that generates a move operation to
+   check whether the operation introduces a cycle"*.
+
+   Their solution costs a log replay per move: *"When a replica needs to apply an
+   operation with timestamp t, it first **undoes** the effect of any operations
+   with a timestamp greater than t, then **performs** the new operation, and
+   finally **re-applies** the undone operations."* They are candid about the
+   price: *"Ideally, we would want to incur the costs of the undo-do-redo process
+   only for genuine move operations."*
+
+   **This is the single most directly applicable paper to CINE-OMNI**, because
+   `Tx::reparent` exists and a UCG project *is* a tree of `Contains` edges
+   (project → bin → timeline → track → clip). Any design that lets two people
+   reorganise concurrently inherits this problem verbatim. The two documented
+   answers are Figma's (a server rejects cycles; clients tolerate a transient
+   disappearance) and Kleppmann's (undo-do-redo in timestamp order). Ours cannot
+   assume Figma's server.
+
 * *Verdict:* **rejected for the graph; retained as a candidate for two specific
   fields** — script dialogue text and ordered list positions — where the problem
-  really is sequence merging.
+  really is sequence merging. And `Tx::reparent` is flagged as needing the
+  Kleppmann treatment the day concurrent editing becomes real.
 
-**Operational Transformation.**
+**Operational Transformation.** The correctness conditions are TP1/TP2 (Imine,
+Molli, Oster and Rusinowitch state them as C1 and C2):
 
-* *Verdict:* **rejected.** OT's value is in transforming sequence operations
-  against each other; this graph's ops are keyed set/edge mutations where
-  last-writer-wins with causality is both simpler and better defined. OT
-  additionally has a long, well-documented history of subtle correctness failures
-  in the transformation functions (TP1/TP2), and most practical deployments
-  require a central server, which the offline requirement rules out as the only
-  mode. (Citations pending; **`UNVERIFIED`**.)
+> *"C1: op1 ∘ T(op2, op1) ≡ op2 ∘ T(op1, op2)"*
+> *"C2: T(op3, op1 ∘ T(op2, op1)) = T(op3, op2 ∘ T(op1, op2))"*
+
+The evidence that this is hard is not anecdotal — it is that a theorem prover
+broke the published functions:
+
+> *"Proving the correction of these transformation functions is very complex and
+> error prone... we have verified the correctness of state-of-art transformation
+> functions defined on Strings **with surprising results**. Counter-examples
+> provided by the theorem prover have helped us to define new correct
+> transformation functions."*
+
+They found a C1 violation in Ellis & Gibbs's original functions and a **C2
+violation in Ressel's aDOPTed functions — an algorithm specifically designed to
+satisfy C1 and C2**. Their conclusion:
+
+> *"Even on a simple String object, all existing transformation functions are
+> incorrect or over-specified... On a simple String object, each time a function
+> definition changes, you have to explore **123 different cases** carefully."*
+
+* *Verdict:* **rejected.** OT's value is transforming *sequence* operations;
+  this graph's ops are keyed attribute and edge mutations where last-writer-wins
+  with causality is simpler and better defined — which is Figma's published
+  reasoning for the same choice on the same kind of data. The correctness record
+  above settles the rest.
 
 ### C.5 The transaction metadata that must be added
 
@@ -1488,10 +2324,10 @@ Resolution rules for the authored surface, by attribute class:
 
 | Rejected | Reason |
 |---|---|
-| Full CRDT graph (Automerge / `yrs`) | replaces the op log, undo and cascade; guarantees convergence but not invariants; tree moves are a special case rather than a consequence; large dependency at the centre of the system |
-| Operational Transformation | correctness of transformation functions is famously hard; needs a central server; buys nothing over LWW for keyed attribute mutations |
-| Central server / database as the source of truth (the Avid/Resolve shared-project shape) | on-set and DIT work happens with no network; a design that requires reachability cannot serve sections A and B |
-| Locking as the only mechanism | same reason; also, per-file locks on a graph whose nodes are fine-grained would be either useless (too coarse) or unusable (too many) |
+| Full CRDT graph (`automerge` 0.11.0 MIT / `yrs` 0.27.4 MIT — both healthy, so the dependency objection is *not* the reason) | replaces the op log, undo and cascade; **guarantees convergence but not invariants** — Automerge's own docs claim only that "everybody ends up in the same state", and hedge sequences as *"attempts to preserve user intent"*; tree moves need Kleppmann's undo-do-redo as a special case (§C.4a) |
+| Operational Transformation | a theorem prover found a C1 violation in Ellis & Gibbs's original functions **and a C2 violation in Ressel's aDOPTed functions, which were designed to satisfy C1 and C2**; *"123 different cases"* to re-check per change; and Figma rejected it for the same data shape we have (§C.4) |
+| Central server / database as the source of truth (the Avid/Resolve shared-project shape) | on-set and DIT work happens with no network; a design that requires reachability cannot serve sections A and B. Note Figma's cycle fix *requires* a central authority — we cannot borrow it |
+| Locking as the only mechanism | same reason; and the reference implementations are candid that locks are advisory and racy — Avid: *"both editors get the green lock icon. However, only one editor really has the lock"*; Git LFS: *"discourage (we can never prevent)"* |
 | Replicating the full cascade | wasteful and semantically wrong — merges answers instead of recomputing them |
 | Wall-clock ordering | set clocks drift and laptops return from location wrong |
 | `actor: String` as both person and machine | breaks locks (per-machine) and permissions (per-person) simultaneously |
@@ -1735,7 +2571,18 @@ that justify it, because they are one `Value` tree set by one `tx.set_as`.
 | R10 | Namespace the media identity key by algorithm now | `"media:file:<hex>"` | a later algorithm change silently mints different entities for the same file (F4) |
 | R11 | No reactor may delete a node with captured descendants | the current unconditional stale-shot delete | reproduced: a script/previs edit deletes takes (F1) |
 | R12 | Replicate `depth == 0` deltas; recompute derived state | replicating the full cascade | merges answers instead of recomputing them; wasteful and semantically wrong (§C.6) |
-| R13 | Optimistic concurrency over a causally-parented op log + advisory claims | full CRDT graph; OT; central server; locking alone | see the table in §C.6 |
+| R13 | Optimistic concurrency over a causally-parented op log + advisory claims | full CRDT graph; OT; central server; locking alone | see the table in §C.6 and the evidence in §C.4/§C.4a |
+| R24 | Locking belongs on **media operations** (offload, render, export); optimistic concurrency belongs on **the graph** | one mechanism for both | Perforce states the criterion: locking is for artefacts where *"merging of changes from multiple authors is meaningless"*. Media files are unmergeable; the graph is not (§C.4) |
+| R25 | Partition concurrent access **by discipline**, not by region — editor/colourist/comp touch disjoint attribute sets on the same clip | one lock per clip | this is Resolve's documented three-tier model and it is why three people can hold the same clip without conflict (§C.4) |
+| R26 | Remote changes are **pulled**, not pushed into a live session | auto-propagating every remote delta | Resolve does this deliberately — *"to prevent a kaleidoscope of constant alterations... from being a distraction"* — and it is a UX requirement, not a technical limitation (§C.4) |
+| R27 | Treat `Tx::reparent` as the known-hard case; adopt Kleppmann's undo-do-redo *if and when* concurrent reorganisation ships | assuming tree moves fall out of the merge rules | concurrent moves produce cycles or duplicates, and *"it is not sufficient for the replica that generates a move operation to check whether the operation introduces a cycle"* (§C.4a) |
+| R28 | The take-status model is a **flag set** (iXML `TAKE_TYPE`) plus an independent `circled` boolean | a single-valued status enum | `<TAKE_TYPE>FALSE_START,PICKUP</TAKE_TYPE>` is legal; an enum cannot round-trip a real iXML file (§A.2, §A.8.1) |
+| R29 | Model lens metadata on the Cooke /i field set; treat SMPTE RDD 18 as a lossy projection | deriving the model from the SMPTE standard | RDD 18 has no entrance pupil, serial, hyperfocal, near/far, HFOV, distortion or shading, and caps `Lens Attributes` under 64 bytes (§A.8.5) |
+| R30 | Do not model slates on MXF DMS-1; export target at most | using ST 380 as the take schema | `Take Number` is a **Uint16** (cannot express "3A"), and scene and take live in *different frameworks* so the pair is not one record (§A.8.7) |
+| R31 | Store timecode user bits as four raw bytes plus a BGF-derived interpretation hint | parsing them as a date | vendors disagree on day/month order and one exposes both; ST 12-1 permits *"any manner without restriction"* (§A.8.6) |
+| R32 | Record `jammed_at` and the generator's rated ppm on each `production.record` | treating timecode sync as binary | drift is computable — ARRI's jam holds *"less than one frame for each eight hours"*, generators are rated 0.1–0.5 ppm — so §A.7 rank 2 can decide whether a match is trustworthy (§A.8.6) |
+| R33 | Make the identity-digest algorithm a **capability-gated** choice, not a constant | hardcoding SHA-256 or BLAKE3 | SHA-256 throughput varies ~3.6× on the presence of Intel SHA extensions; the same shape as `probe::is_decodable` (§B.4) |
+| R34 | Carry `circled` as a first-class attribute we own, not something we expect to import | relying on interchange to bring it | it has **no standard carrier in ALE** — verified against a real 129-column Avid export (§A.8.3) |
 | R14 | Add `id`, `parents`, `site`, `author`, `wall_clock_utc`, `content_hash` to `Delta` **now** | adding them when collaboration ships | the op-log file format is the least changeable artefact in the system (§C.5) |
 | R15 | Cross-site undo is a new forward "revert" delta, not an inverse replay | replaying `Op::inverse` across sites | `prev` is only valid against the state it was generated on; remote inverse replay silently rewrites history (§C.3) |
 | R16 | Write the authored-replay convergence test today | waiting for a collaboration project | it is the acceptance criterion for everything later and finds reactor-idempotence bugs now (§C.6) |
@@ -1751,9 +2598,14 @@ that justify it, because they are one `Value` tree set by one `tx.set_as`.
 
 ## F. What this document does not claim
 
-* **Section A's format field names are not verified.** iXML, BWF `bext`, ALE,
-  Cooke /i, ZEISS eXtended Data, ASC CDL and AMF element/column names are
-  deliberately absent rather than approximated.
+* **Section A's format field names *are* now verified** (§A.8) — iXML, BWF
+  `bext`, ALE, ASC CDL, ACES AMF, Cooke /i, ZEISS, ST 12-1, ST 380 and RDD 18
+  were all fetched. What is *not* verified is some of the surrounding workflow
+  folklore: the spoken slate call-out alphabet, the lined-script squiggle
+  convention, and film-production definitions of "false start" and "series
+  takes". Those are marked inline and in §G.
+* **Adobe Productions is a genuine gap.** `helpx.adobe.com` refused every
+  automated fetch method. Nothing about it is asserted.
 * **Section B's ASC MHL chapter *is* verified** — spec, guidelines, XSDs,
   reference implementation and generated examples were all fetched and read
   (§B.7). Two caveats are recorded there rather than smoothed over: the
@@ -1761,9 +2613,10 @@ that justify it, because they are one `Value` tree set by one `tx.set_as`.
   several element orderings differ between the spec prose and the shipped XSD.
   Where they disagree, this document follows the shipped XSD and the examples,
   and says so.
-* **No vendor internals are asserted.** Resolve, Avid, Adobe, Silverstack,
-  YoYotta and Hedge appear (where they appear at all) as workflow *concepts*, not
-  as reproduced designs.
+* **No vendor internals are asserted.** Resolve, Avid, Perforce, Git LFS and
+  Figma are quoted only on *documented behaviour* and, in Figma's case, on
+  reasoning they published themselves. Silverstack, YoYotta and Hedge appear (if
+  at all) as workflow concepts; none of their designs is reproduced.
 * **The benchmark figures are from one machine with no SHA hardware
   acceleration**, run twice (loaded and quiet). The *ordering* is robust across
   both; the absolute SHA-256 number is not portable and is flagged as such.
@@ -1782,28 +2635,70 @@ that justify it, because they are one `Value` tree set by one `tx.set_as`.
 | U4 | C4 ID: digest, encoding, length, standardisation, implementations | **RESOLVED — verified** (§B.7.7): SMPTE ST 2114:2017, SHA-512, base58, 90 chars, **no IEEE number**; Avalanche-io `c4` is Apache-2.0 | — |
 | U4a | IEEE Xplore's own metadata for ST 2114 | **UNVERIFIED** — the Xplore page returned empty content; the *absence* of an IEEE designation inside the standard text is verified | fetch the Xplore record |
 | U4b | The `cccc.io` list of C4 implementations and their licences (beyond Avalanche-io `c4`, which was read) | **LIGHTLY VERIFIED** — page is JS-rendered | fetch each repo's LICENSE |
-| U5 | iXML field names for scene/take/tape/circled/file uid/user bits, and whether the spec is open | **UNVERIFIED** | fetch the iXML specification |
-| U6 | BWF `bext` chunk field list and the EBU technical document number | **UNVERIFIED** | fetch the EBU tech doc |
-| U7 | ALE header structure and conventional column names | **UNVERIFIED** | real example files or vendor documentation |
-| U8 | Cooke /i and ZEISS eXtended Data payload fields; openness of either | **UNVERIFIED** | vendor technical documentation |
-| U9 | ASC CDL file formats (`.cdl`/`.ccc`/`.cc`) exact structure | **UNVERIFIED** | ASC publication |
-| U10 | ACES AMF contents and openness | **UNVERIFIED** | ACES documentation |
-| U11 | Timecode generator drift figures (ppm / drift per day) for jam-sync devices | **UNVERIFIED** | vendor specification pages |
-| U12 | Scene-numbering conventions ("24A"/"24 apple") — a citable authority | **UNVERIFIED** | production-management publication |
-| U13 | 3-2-1 rule: an authoritative originating citation | **UNVERIFIED** | primary source |
-| U14 | Camera/sound take numbering divergence — a citable source | **UNVERIFIED** | production-sound publication |
-| U15 | DaVinci Resolve collaboration: lock granularity and documented conflict rules | **UNVERIFIED** | Blackmagic manual |
-| U16 | Avid bin locking granularity and conflict rule | **UNVERIFIED** | Avid documentation |
-| U17 | Adobe Productions project-locking behaviour | **UNVERIFIED** | helpx.adobe.com |
-| U18 | Perforce exclusive-checkout (`+l`) semantics; Git LFS `git lfs lock` API | **UNVERIFIED** | vendor documentation |
-| U19 | Figma's published account of CRDT vs OT and their reasoning | **UNVERIFIED** | Figma engineering blog |
-| U20 | CRDT literature: Shapiro et al. 2011 definitions; Kleppmann et al. replicated-tree move | **UNVERIFIED** | fetch the papers |
-| U21 | OT correctness literature (TP1/TP2) | **UNVERIFIED** | fetch the papers |
-| U22 | `automerge` and `yrs`: version, licence, maintenance, dependency weight | **UNVERIFIED** | crates.io + LICENSE files |
-| U23 | C2PA / Content Credentials as a provenance standard, and `c2pa-rs` licence/maturity | **UNVERIFIED** | spec + crates.io |
-| U24 | xxHash / BLAKE3 published benchmark tables (to corroborate §B.4 against the projects' own figures) | **UNVERIFIED** | fetch the project READMEs |
-| U25 | Published test vectors quoted verbatim (the "Reference" column of §B.4) | **UNVERIFIED as citations**; the values agree with this build | fetch the reference test-vector files |
-| U26 | `quick-xml`, `bs58`, `uuid`, `memmap2`, `walkdir`, `twox-hash` version/licence/maintenance | **PARTIAL** — `twox-hash 2.1.4` resolved locally; licences not yet read | crates.io + LICENSE files |
+| U5 | iXML element names and openness | **RESOLVED — verified** (§A.8.1): revision 3.01; *"the iXML specification is released to the public domain"* (prose © Gallery UK); real element names quoted | — |
+| U6 | BWF `bext` field list and the EBU document number | **RESOLVED — verified** (§A.8.2): EBU **Tech 3285 v2.0**, May 2011; full struct and byte offsets | — |
+| U7 | ALE header structure and column names | **RESOLVED — verified** (§A.8.3), including the negative: **`Circled` is not a standard ALE column** | — |
+| U8 | Cooke /i and ZEISS eXtended Data payloads; openness | **PARTIALLY RESOLVED** (§A.8.5): /i field list quoted from Cooke; ZEISS field list quoted from ZEISS; **/i EXTENDED commands are by-request/NDA and no ZEISS format spec exists publicly** | a partner NDA |
+| U9 | ASC CDL formats | **RESOLVED, with an asymmetry** (§A.8.4): the **specification is not publicly downloadable** (`theasc.com` 403s; obtained by e-mail request, no licence stated) but the **official XSD is public** in the Apache-2.0 AMF repo | — |
+| U10 | ACES AMF contents and openness | **RESOLVED — verified** (§A.8.4): schema Apache-2.0, prose CC BY 4.0, `urn:ampas:aces:amf:v2.0` | — |
+| U11 | Timecode generator drift figures | **RESOLVED — verified** (§A.8.6): vendor-stated 0.1–0.5 ppm; ST 12-1's own ±100 ppm floor; ARRI's *"less than one frame for each eight hours"* | — |
+| U12 | Scene-numbering conventions | **RESOLVED for the written convention** (§A.8.8): Elkins gives the excluded letters **I, O, Q, S, Z** and the reason, plus the UK/US split. **The spoken "24 apple" call-out alphabet remains `UNVERIFIED`** — no canonical list, and practitioner lists conflict with Elkins | a production-management publication |
+| U12a | The lined-script squiggle: "off-camera" vs "face visible" | **UNVERIFIED — two fetched sources disagree** and no guild-published normative definition exists (§A.8.8) | a guild publication |
+| U12b | `false_start` and `series` as *film-production* definitions; `pickup` in the post-principal-photography sense | **UNVERIFIED** — the two standard references could not be fetched. iXML's `TAKE_TYPE` at least confirms `FALSE_START` and `PICKUP` are standard vocabulary (§A.8.8) | Miller's glossary; Cybulski, *Beyond Continuity* |
+| U13 | 3-2-1 rule origin | **RESOLVED — verified** (§B.1): CISA-hosted US-CERT/CMU document, whose **own footnote credits Krogh, *The DAM Book* 2nd ed., p. 207**. It is **not** "ST19-001". The 2005 first-edition claim remains `UNVERIFIED` | the 1st edition |
+| U14 | Camera/sound take-numbering divergence | **INDIRECTLY SUPPORTED** (§A.8.1, §A.6): iXML types `<TAKE>` as a *string* admitting `WT1`, and sound and camera reports are keyed by different rolls — but no source states the divergence as a rule | a production-sound publication |
+| U15 | Resolve collaboration granularity and conflict rules | **RESOLVED — verified** (§C.4): three tiers (bin / clip / timeline), *"first come, first served"*, pull-based refresh, duplicate-and-merge for shared timelines | — |
+| U16 | Avid bin locking granularity and conflict rule | **RESOLVED — verified** (§C.4): bin-level, first-opener wins, and Avid's own admission that the lock can race | — |
+| U16a | Avid `.lck` files | **UNVERIFIED** — Avid documents the mechanism functionally and never names a `.lck` file; the description is community knowledge (§C.4) | Avid documentation |
+| U17 | Adobe Productions locking behaviour | **UNVERIFIED — a genuine gap.** `helpx.adobe.com` refused every automated fetch and the previously cited URL 404s. Deliberately not reconstructed from search fragments | a browser session on the four pages named in §C.4 |
+| U18 | Perforce `+l`; Git LFS locking API | **RESOLVED — verified** (§C.4): `+l` exclusive open vs `p4 lock` on submit; the four LFS endpoints; and LFS's own *"we can never prevent"* | — |
+| U19 | Figma's account of CRDT vs OT | **RESOLVED — verified** (§C.4): OT *"unnecessarily complex for our problem space"*; *"Figma isn't using true CRDTs"*; LWW at the property boundary; the cycle problem and their transient-removal fix | — |
+| U20 | CRDT literature | **RESOLVED — verified**, with a correction (§C.4a): **RR-7506 does not define Strong Eventual Consistency** — the companion SSS 2011 paper does. Kleppmann et al.'s move operation fetched and quoted | — |
+| U21 | OT correctness literature | **RESOLVED — verified** (§C.4a): C1/C2 stated; a theorem prover broke both Ellis & Gibbs's and Ressel's functions; *"123 different cases"* | — |
+| U21a | Ressel et al. CSCW'96; Imine et al. TCS 2006; Sun & Ellis CSCW'98 | **UNVERIFIED** — paywalled or OCR-corrupted; the ECSCW 2003 and TOCHI 1998 papers were used instead | institutional access |
+| U22 | `automerge` and `yrs` reality | **RESOLVED — verified**: `automerge` 0.11.0, **MIT**, 570 717 downloads, 16 required deps, pure Rust (`flate2` pinned to `zlib-rs`); `yrs` 0.27.4, **MIT**, 2 897 418 downloads, 10 deps. Both actively maintained | — |
+| U23 | C2PA and `c2pa-rs` | **RESOLVED — verified**: spec is at **v2.4**, published by the **Joint Development Foundation**, licensed **CC BY 4.0**; `c2pa` 0.90.20 is **MIT OR Apache-2.0** but pulls **83 required runtime dependencies** — a large audit surface for a provenance library. Content Credentials is the consumer brand, not a synonym for C2PA | — |
+| U23a | How the Content Authenticity Initiative relates to C2PA | **UNVERIFIED** — no quotable sentence found on either site | — |
+| U24 | xxHash / BLAKE3 published benchmarks | **RESOLVED — verified** (§B.4): xxHash's README table (i7-9700K, clang 10, `-O3`) and BLAKE3's chart data (AWS c5.metal, Cascade Lake-SP 8275CL, single thread) | — |
+| U24a | SHA-256 throughput *with* Intel SHA extensions | **UNVERIFIED** — no SHA-NI CPU available. Intel's own kernel patch reports *"up to 3.6x speedup over existing SSSE3 enhanced routines"*, which is what §B.4 cites instead | a SHA-NI machine |
+| U25 | Published hash test vectors quoted verbatim | **PARTIALLY RESOLVED**: MD5 and SHA-1 cryptanalysis now cited to the primary IACR papers (§B.4). The "Reference" column of the test-vector table remains agreement-between-implementations rather than a fetched citation | fetch the reference test-vector files |
+| U26 | `quick-xml`, `bs58`, `memmap2`, `walkdir`, `twox-hash` | **RESOLVED — verified**: `quick-xml` 0.42.0 **MIT** (one dep, memchr); `bs58` 0.5.1 `MIT/Apache-2.0`, zero deps, **frozen since 2024-03-19**; `memmap2` 0.9.11 `MIT OR Apache-2.0`; `walkdir` 2.5.0 Unlicense/MIT, **last commit 2024-12-31 — finished, not actively maintained**; `twox-hash` 2.1.4 **MIT**, zero deps | — |
+| U26a | `bs58`'s MIT file names the wrong project | **VERIFIED ODDITY** — its `LICENSE-MIT` reads *"Copyright (c) 2016 The roaring-rs developers"*, a copy-paste artefact worth knowing before a provenance audit | — |
+
+### G.1 Rust crate reality — verified on crates.io and against repository LICENSE files
+
+Fetched 2026-09-08. Licences confirmed twice: the crates.io metadata field *and*
+the actual LICENSE file in each repository.
+
+| Crate | Version | Licence | Total dl | Last release | Deps | Pure Rust | Note |
+|---|---|---|---|---|---|---|---|
+| `xxhash-rust` | 0.8.18 | **BSL-1.0** | 100.0 M | 2026-07-21 | **0** | yes | no default features, unconditional `no_std`, `const fn` variants; **the only non-MIT/Apache crate proposed here** |
+| `twox-hash` | 2.1.4 | MIT | 236.6 M | 2026-08-27 | **0** | yes | more downloads and more recent releases; **but its defaults pull `rand` and are not `no_std`** — needs `default-features = false` |
+| `blake3` | 1.8.7 | CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception | — | — | — | with `pure` | default build compiles C/asm and **fails under this machine's `zig cc`** |
+| `sha2` | 0.10.9 | MIT OR Apache-2.0 | — | — | — | yes | already in use |
+| `md-5` | 0.10.6 | MIT OR Apache-2.0 | — | — | — | yes | read-only interop |
+| `sha1` | 0.10.7 | MIT OR Apache-2.0 | — | — | — | yes | read-only interop |
+| `crc32fast` | 1.5.1 | MIT OR Apache-2.0 | — | — | — | yes | error detection only |
+| `quick-xml` | 0.42.0 | MIT | 403.0 M | 2026-08-22 | **1** (memchr) | yes | for ASC MHL; licence file is `LICENSE-MIT.md`, not `LICENSE` |
+| `bs58` | 0.5.1 | `MIT/Apache-2.0` | 127.0 M | 2024-03-19 | **0** | yes | for C4. **Frozen since 2024**; and its MIT file names *"The roaring-rs developers"* — a copy-paste artefact |
+| `memmap2` | 0.9.11 | MIT OR Apache-2.0 | 333.5 M | 2026-06-22 | 1 (libc, FFI decls only) | yes | optional, for large-file hashing |
+| `walkdir` | 2.5.0 | Unlicense/MIT | 608.2 M | 2024-03-01 | 2 | yes | **finished, not actively maintained** (last commit 2024-12-31) |
+| `automerge` | 0.11.0 | **MIT** | 570.7 k | 2026-08-12 | 16 | yes (`flate2` pinned to `zlib-rs`) | **rejected for the graph** (§C.4a) — on invariants, not on health |
+| `yrs` | 0.27.4 | **MIT** | 2.9 M | 2026-08-22 | 10 | yes | same |
+| `c2pa` | 0.90.20 | MIT OR Apache-2.0 | 9.9 M | 2026-09-04 | **83** | yes by default (`openssl` is optional) | provenance; 83 required deps is a large audit surface |
+
+All of these pass this project's `deny.toml` allowlist, which already permits
+`BSL-1.0`, `CC0-1.0`, `MIT`, `Apache-2.0` and `Unlicense`.
+
+**Recommendation on the xxHash crate.** `xxhash-rust` with
+`features = ["xxh3"]` gives XXH3/XXH128, **zero dependencies**, unconditional
+`no_std` and `const fn` — at the cost of adding **BSL-1.0**, a third licence
+family, to the bill of materials. `twox-hash` is the more-downloaded crate but
+its default features pull `rand` and forfeit `no_std`, so it must be taken as
+`default-features = false, features = ["xxhash3_128"]`. Both implement all four
+variants; the frequently-repeated claim that only one supports XXH3 is false.
+**Prefer `xxhash-rust`** — zero dependencies on a hot path in a media tool is
+worth one extra permissive licence, and `deny.toml` already allows it.
 
 **Verified in this revision (not in the register):**
 

@@ -1,11 +1,33 @@
-//! # cine-color — ACES / OpenColorIO-native color for CINE-OMNI
+//! # cine-color — an ACES-shaped colour pipeline for CINE-OMNI
 //!
-//! CPU reference implementation of the color pipeline: colorimetry and
+//! CPU reference implementation of the colour pipeline: colorimetry and
 //! transfer functions ([`space`], [`transfer`]), optimized op chains
 //! ([`processor`]), ACES matrices / encodings / output transforms ([`aces`]),
-//! OpenColorIO configs ([`ocio`]), `.cube` LUTs ([`lut`]), grading primaries,
-//! curves, secondaries and CDL export ([`grade`], [`curve`], [`mask`]),
-//! scopes ([`scopes`]) and the graph integration ([`ucg`]).
+//! an OpenColorIO-*shaped* config reader ([`ocio`]), `.cube` LUTs ([`lut`]),
+//! grading primaries, curves, secondaries and CDL export ([`grade`], [`curve`],
+//! [`mask`]), scopes ([`scopes`]) and the graph integration ([`ucg`]).
+//!
+//! ## What this is not — read before relying on it
+//!
+//! This crate is **not ACES-compatible and not OpenColorIO-compatible**, and
+//! must not be described as either. Both claims were tested against the real
+//! implementations and both failed:
+//!
+//! * **It cannot load any released OpenColorIO ACES config.** All three that
+//!   OCIO ships (ACES 2.0 CG, ACES 2.0 Studio, ACES 1.3 CG) fail on the first
+//!   display block, because [`ocio`] does not implement `shared_views` or the
+//!   `!<Views>` tag — core OCIO v2 features present in every ACES config since
+//!   2021. What it reads is a subset of the config *syntax*, not OCIO.
+//! * **Its ACES output transform is exact on neutrals and badly wrong on
+//!   saturated colour.** Measured against OpenColorIO 2.6.0dev as an oracle,
+//!   ACEScg to ACES 2.0 SDR Rec.709: 18% grey matches to six decimal places,
+//!   while pure green differs by 0.30 — 30% of full scale. The tonescale is
+//!   right; the chroma handling and gamut compression are absent.
+//!
+//! Treat it as a working CPU colour engine whose neutral axis is trustworthy,
+//! and whose saturated-colour path is not yet a display-referred answer anyone
+//! should grade against. See `docs/blueprint/research/13-color-management.md`
+//! for the measurements and for what closing the gap requires.
 //!
 //! ```
 //! use cine_color::prelude::*;

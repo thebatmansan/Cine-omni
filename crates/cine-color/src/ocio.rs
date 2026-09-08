@@ -1832,8 +1832,19 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
                 ot.to_xyz_d65_op(),
             ]
         }
-        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1"
-        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1" => {
+        // P3-limited HDR is a *different* gamut limit from Rec.2020-limited, and
+        // this build implements only the latter. Answering the P3lim request
+        // with the Rec.2020lim transform would return plausible-looking but
+        // wrong colour, with nothing to indicate it — the worst failure mode a
+        // colour pipeline has. Refusing names exactly what is missing.
+        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1" => {
+            return Err(Error::Unsupported(format!(
+                "BuiltinTransform style `{st}`: P3-limited HDR output is not implemented \
+                 (gamut limiting to P3 is absent); the Rec.2020-limited transform is not \
+                 an equivalent substitute"
+            )))
+        }
+        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1" => {
             let ot = OutputTransform::for_display(Display::Rec2020Pq1000);
             vec![
                 Op::matrix(rgb_to_rgb_matrix(
@@ -1993,6 +2004,36 @@ mod tests {
         }
     }
 
+    /// A style this build does not implement must be refused, never answered
+    /// with a near-neighbour. Silent substitution returns colour that looks
+    /// plausible and is wrong, which is worse than an error.
+    #[test]
+    fn an_unimplemented_output_transform_is_refused_not_substituted() {
+        let p3lim = "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1";
+        let rec2020lim =
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1";
+
+        match builtin_ops(p3lim, Direction::Forward) {
+            Err(Error::Unsupported(msg)) => {
+                assert!(
+                    msg.contains("P3"),
+                    "the error must name what is missing: {msg}"
+                );
+                assert!(
+                    msg.contains("not an equivalent substitute"),
+                    "the error must say why the near-neighbour was not used: {msg}"
+                );
+            }
+            Err(e) => panic!("expected Unsupported, got {e}"),
+            Ok(_) => panic!(
+                "P3-limited HDR output is not implemented; returning the Rec.2020-limited \
+                 transform for it is silently wrong colour"
+            ),
+        }
+        // The one that *is* implemented still works.
+        assert!(builtin_ops(rec2020lim, Direction::Forward).is_ok());
+    }
+
     #[test]
     fn builtin_styles_invert() {
         let styles = [
@@ -2019,7 +2060,6 @@ mod tests {
             "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0",
             "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_1.1",
             "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1",
-            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1",
         ];
         for style in styles {
             let fwd = Processor::new(builtin_ops(style, Direction::Forward).unwrap());
