@@ -34,7 +34,7 @@ pub use error::{Error, Result};
 pub use isolate::{
     dialogue_segments_to_words_hint, isolate_dialogue, IsolationParams, IsolationResult,
 };
-pub use mix::{render, render_stems, BLOCK_SIZE};
+pub use mix::{render, render_stems, Renderer, BLOCK_SIZE};
 pub use pan::{downmix, ChannelLayout, Downmix, ObjectPanParams, PanLaw, Speaker, VbapPanner};
 pub use session::{
     Automation, Bus, BusId, Clip, ClipId, ClipSource, Insert, Interpolation, Lane, PanState, Param,
@@ -54,7 +54,7 @@ pub mod prelude {
     pub use crate::isolate::{
         dialogue_segments_to_words_hint, isolate_dialogue, IsolationParams, IsolationResult,
     };
-    pub use crate::mix::{render, render_stems, BLOCK_SIZE};
+    pub use crate::mix::{render, render_stems, Renderer, BLOCK_SIZE};
     pub use crate::pan::*;
     pub use crate::session::*;
     pub use crate::ucg::{

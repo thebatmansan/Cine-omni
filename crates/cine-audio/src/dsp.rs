@@ -191,6 +191,30 @@ impl Biquad {
         }
     }
 
+    /// Filter every `stride`-th sample of `block` — one channel of an
+    /// interleaved block.
+    ///
+    /// A biquad is a two-sample recurrence, so its state must live in registers
+    /// across the run to be worth anything. Walking an interleaved block frame
+    /// by frame and switching filters per sample reloads that state every
+    /// sample instead; this runs one channel to the end before moving on.
+    pub fn process_strided(&mut self, block: &mut [f32], stride: usize) {
+        debug_assert!(stride >= 1);
+        let mut z1 = self.z1;
+        let mut z2 = self.z2;
+        let (b0, b1, b2) = (self.b0 as f64, self.b1 as f64, self.b2 as f64);
+        let (a1, a2) = (self.a1 as f64, self.a2 as f64);
+        for s in block.iter_mut().step_by(stride) {
+            let x = *s as f64;
+            let y = b0 * x + z1;
+            z1 = b1 * x - a1 * y + z2;
+            z2 = b2 * x - a2 * y;
+            *s = y as f32;
+        }
+        self.z1 = z1;
+        self.z2 = z2;
+    }
+
     /// Magnitude response (linear) at `freq_hz` for the given sample rate.
     pub fn magnitude_at(&self, sample_rate: f64, freq_hz: f64) -> f64 {
         let w = 2.0 * PI * freq_hz / sample_rate.max(1.0);
@@ -478,20 +502,43 @@ impl Compressor {
     }
 
     /// Process an interleaved block with `channels` channels (linked detection).
+    ///
+    /// Two shortcuts, both exact rather than approximate. Material under the
+    /// knee has a gain target of zero, which a linear threshold answers without
+    /// a logarithm; and while the smoother sits at exactly zero dB — where it
+    /// starts, and where it stays through a whole take of quiet dialogue — the
+    /// linear gain is exactly the makeup, without an exponential. Between them,
+    /// a compressor that is not compressing costs no transcendentals at all,
+    /// where before it cost two per frame whatever the signal was doing.
     pub fn process(&mut self, block: &mut [f32], channels: usize) {
         let channels = channels.max(1);
         let makeup = db_to_lin(self.params.makeup_db);
+        // `static_curve_db` is the identity below the knee's foot. The detector
+        // floors x_db at −120 dB, so the linear test only stands in for the dB
+        // one while the foot is above that floor. Derived per block, not
+        // cached on the struct: `params` is public and may be retuned between
+        // blocks.
+        let foot_db = self.params.threshold_db - self.params.knee_db.max(0.0) / 2.0;
+        let below_knee = (foot_db > -120.0).then(|| db_to_lin(foot_db));
         for frame in block.chunks_mut(channels) {
             let level = frame.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-            let x_db = lin_to_db(level).max(-120.0);
-            let target = self.static_curve_db(x_db) - x_db; // ≤ 0
+            let target = if below_knee.is_some_and(|k| level < k) {
+                0.0
+            } else {
+                let x_db = lin_to_db(level).max(-120.0);
+                self.static_curve_db(x_db) - x_db // ≤ 0
+            };
             let coef = if target < self.gain_db_state {
                 self.attack
             } else {
                 self.release
             };
             self.gain_db_state = coef * self.gain_db_state + (1.0 - coef) * target;
-            let g = db_to_lin(self.gain_db_state) * makeup;
+            let g = if self.gain_db_state == 0.0 {
+                makeup
+            } else {
+                db_to_lin(self.gain_db_state) * makeup
+            };
             for s in frame.iter_mut() {
                 *s *= g;
             }
@@ -627,9 +674,16 @@ pub struct Limiter {
     lookahead: usize,
     release: f32,
     channels: usize,
-    delay: VecDeque<f32>,
+    /// Lookahead delay line and moving-average window as flat rings. Both are
+    /// fixed-length and strictly first-in-first-out, so a `VecDeque`'s
+    /// push/pop per sample bought nothing over an index that wraps — and cost
+    /// a bounds-checked capacity test on every sample of every channel.
+    delay: Vec<f32>,
+    delay_pos: usize,
+    /// The sliding minimum genuinely is a deque: it is popped from both ends.
     min_window: VecDeque<(u64, f32)>,
-    avg_window: VecDeque<f32>,
+    avg_window: Vec<f32>,
+    avg_pos: usize,
     avg_sum: f64,
     env: f32,
     counter: u64,
@@ -646,9 +700,11 @@ impl Limiter {
             lookahead,
             release: ar_coeff(params.release_ms, sample_rate),
             channels,
-            delay: VecDeque::new(),
+            delay: Vec::new(),
+            delay_pos: 0,
             min_window: VecDeque::new(),
-            avg_window: VecDeque::new(),
+            avg_window: Vec::new(),
+            avg_pos: 0,
             avg_sum: 0.0,
             env: 1.0,
             counter: 0,
@@ -664,9 +720,13 @@ impl Limiter {
 
     /// Reset state (delay line filled with silence, gain = 1).
     pub fn reset(&mut self) {
-        self.delay = VecDeque::from(vec![0.0f32; self.lookahead * self.channels]);
+        self.delay.clear();
+        self.delay.resize(self.lookahead * self.channels, 0.0);
+        self.delay_pos = 0;
         self.min_window.clear();
-        self.avg_window = VecDeque::from(vec![1.0f32; self.lookahead]);
+        self.avg_window.clear();
+        self.avg_window.resize(self.lookahead, 1.0);
+        self.avg_pos = 0;
         self.avg_sum = self.lookahead as f64;
         self.env = 1.0;
         self.counter = 0;
@@ -701,17 +761,26 @@ impl Limiter {
                 self.release * self.env + (1.0 - self.release) * win_min
             };
             // Moving average over L.
-            self.avg_window.push_back(self.env);
             self.avg_sum += self.env as f64;
-            if let Some(old) = self.avg_window.pop_front() {
-                self.avg_sum -= old as f64;
+            self.avg_sum -= self.avg_window[self.avg_pos] as f64;
+            self.avg_window[self.avg_pos] = self.env;
+            self.avg_pos += 1;
+            if self.avg_pos == self.avg_window.len() {
+                self.avg_pos = 0;
             }
             let gain = (self.avg_sum / self.lookahead as f64) as f32;
-            // Delay line.
+            // Delay line: read the oldest frame out, write the new one in.
+            let mut p = self.delay_pos;
             for s in frame.iter_mut() {
-                self.delay.push_back(*s);
-                *s = self.delay.pop_front().unwrap_or(0.0) * gain;
+                let old = self.delay[p];
+                self.delay[p] = *s;
+                *s = old * gain;
+                p += 1;
+                if p == self.delay.len() {
+                    p = 0;
+                }
             }
+            self.delay_pos = p;
             self.counter += 1;
         }
     }

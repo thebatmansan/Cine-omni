@@ -23,3 +23,9 @@ glam.workspace = true
 # Test-only oracle: the reference EBU R128 / ITU-R BS.1770 implementation.
 # Never a runtime dependency — cine-audio's meters must stand on their own.
 ebur128 = "0.1"
+
+# Harness-free by design: a measurement tool, not a statistical benchmark
+# suite. See `benches/mix.rs`.
+[[bench]]
+name = "mix"
+harness = false

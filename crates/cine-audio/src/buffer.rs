@@ -355,6 +355,20 @@ impl AudioBuffer {
     /// Sample-rate convert with a 16-tap Hann-windowed sinc interpolator.
     /// When downsampling, the sinc cutoff is lowered to the new Nyquist so
     /// aliasing is suppressed.
+    ///
+    /// The filter is **polyphase**. The ratio of two sample rates is rational,
+    /// so the fractional distance from an output instant to the input grid
+    /// takes only `target_rate / gcd` distinct values — 147 for 48 → 44.1 kHz,
+    /// two for 48 → 96 kHz — and every one of them can be tabulated up front.
+    /// Deriving the sixteen weights inline instead cost two transcendentals per
+    /// tap per output frame, thirty-two per output sample, which made
+    /// converting a file cost far more than playing it. The phase index is
+    /// integer arithmetic on the exact rational position, so it is also free of
+    /// the drift a repeatedly accumulated float position would have.
+    ///
+    /// Rates sharing no useful factor (`den` above [`RS_PHASE_LIMIT`]) fall
+    /// back to deriving the weights per frame, where a table would be the
+    /// expensive part.
     pub fn resample(&self, target_rate: u32) -> AudioBuffer {
         if target_rate == self.sample_rate || self.sample_rate == 0 || target_rate == 0 {
             let mut b = self.clone();
@@ -369,40 +383,61 @@ impl AudioBuffer {
         let in_frames = self.frames();
         let out_frames = ((in_frames as f64) / ratio).round() as usize;
         let cutoff = if ratio > 1.0 { 1.0 / ratio } else { 1.0 };
-        const TAPS: i64 = 16;
-        const HALF: i64 = TAPS / 2;
         let mut out = AudioBuffer::new(target_rate, self.channels, out_frames);
+        if out_frames == 0 || in_frames == 0 {
+            return out;
+        }
         let ch = self.channels;
-        let mut weights = [0.0f64; TAPS as usize];
+
+        // Exact rational position: output frame `o` sits at input frame
+        // `o * num / den`.
+        let g = gcd(self.sample_rate, target_rate);
+        let num = i64::from(self.sample_rate / g);
+        let den = i64::from(target_rate / g);
+        let table: Vec<([f64; RS_TAPS], f64)> = if den <= RS_PHASE_LIMIT {
+            (0..den)
+                .map(|ph| resample_taps(ph as f64 / den as f64, cutoff))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let half = RS_HALF as i64;
         for o in 0..out_frames {
-            let t = o as f64 * ratio;
-            let center = t.floor() as i64;
-            let frac = t - center as f64;
-            // taps k = -HALF+1 ..= HALF, relative to `center`
-            let mut wsum = 0.0;
-            for (wi, w) in weights.iter_mut().enumerate() {
-                let k = wi as i64 - HALF + 1;
-                let x = k as f64 - frac; // distance from the tap to the sample point
-                let sinc = if x.abs() < 1e-9 {
-                    1.0
-                } else {
-                    (PI * cutoff * x).sin() / (PI * cutoff * x)
-                };
-                let win = 0.5 * (1.0 + (PI * x / HALF as f64).cos());
-                let win = if x.abs() >= HALF as f64 { 0.0 } else { win };
-                *w = sinc * cutoff * win;
-                wsum += *w;
-            }
-            let norm = if wsum.abs() > 1e-12 { 1.0 / wsum } else { 1.0 };
-            for c in 0..ch {
-                let mut acc = 0.0f64;
-                for (wi, w) in weights.iter().enumerate() {
-                    let idx = center + wi as i64 - HALF + 1;
-                    if idx >= 0 && (idx as usize) < in_frames {
-                        acc += *w * self.data[idx as usize * ch + c] as f64;
+            let idx = o as i64 * num;
+            let center = idx.div_euclid(den);
+            let phase = idx.rem_euclid(den);
+            let inline;
+            let (w, norm) = if table.is_empty() {
+                inline = resample_taps(phase as f64 / den as f64, cutoff);
+                (&inline.0, inline.1)
+            } else {
+                let e = &table[phase as usize];
+                (&e.0, e.1)
+            };
+            let base = center - half + 1;
+            if base >= 0 && base + RS_TAPS as i64 <= in_frames as i64 {
+                // Interior: every tap is inside the buffer, so the kernel runs
+                // without a bounds test per tap.
+                let start = base as usize * ch;
+                for c in 0..ch {
+                    let mut acc = 0.0f64;
+                    for (wi, wv) in w.iter().enumerate() {
+                        acc += *wv * f64::from(self.data[start + wi * ch + c]);
                     }
+                    out.data[o * ch + c] = (acc * norm) as f32;
                 }
-                out.data[o * ch + c] = (acc * norm) as f32;
+            } else {
+                for c in 0..ch {
+                    let mut acc = 0.0f64;
+                    for (wi, wv) in w.iter().enumerate() {
+                        let i = base + wi as i64;
+                        if i >= 0 && (i as usize) < in_frames {
+                            acc += *wv * f64::from(self.data[i as usize * ch + c]);
+                        }
+                    }
+                    out.data[o * ch + c] = (acc * norm) as f32;
+                }
             }
         }
         out
@@ -572,6 +607,46 @@ impl AudioBuffer {
     }
 }
 
+/// Taps in the resampling kernel, and half that.
+const RS_TAPS: usize = 16;
+const RS_HALF: usize = RS_TAPS / 2;
+/// Largest polyphase table [`AudioBuffer::resample`] will build. Every pair of
+/// standard rates needs far fewer (320 at the worst); the limit only matters
+/// for rates chosen to share no factor, where deriving the weights per frame is
+/// cheaper than tabulating one phase per output frame.
+const RS_PHASE_LIMIT: i64 = 4_096;
+
+/// The 16 Hann-windowed sinc weights for a fractional sample position, with the
+/// reciprocal of their sum: normalising to unit DC gain keeps the phases
+/// agreeing with each other on a steady signal, which truncating the window
+/// otherwise breaks.
+fn resample_taps(frac: f64, cutoff: f64) -> ([f64; RS_TAPS], f64) {
+    let mut w = [0.0f64; RS_TAPS];
+    let mut wsum = 0.0;
+    for (wi, wv) in w.iter_mut().enumerate() {
+        let k = wi as i64 - RS_HALF as i64 + 1;
+        let x = k as f64 - frac; // distance from the tap to the sample point
+        let sinc = if x.abs() < 1e-9 {
+            1.0
+        } else {
+            (PI * cutoff * x).sin() / (PI * cutoff * x)
+        };
+        let win = 0.5 * (1.0 + (PI * x / RS_HALF as f64).cos());
+        let win = if x.abs() >= RS_HALF as f64 { 0.0 } else { win };
+        *wv = sinc * cutoff * win;
+        wsum += *wv;
+    }
+    (w, if wsum.abs() > 1e-12 { 1.0 / wsum } else { 1.0 })
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 {
+        a.max(1)
+    } else {
+        gcd(b, a % b)
+    }
+}
+
 /// Taps in the true-peak interpolation kernel, and half that.
 const TP_TAPS: usize = 16;
 const TP_HALF: usize = TP_TAPS / 2;
@@ -677,20 +752,26 @@ pub fn k_weight_highpass(fs: f64) -> Biquad {
 }
 
 /// Decibels → linear gain.
+///
+/// `10^(db/20)` reached as `exp2(db · log2(10) / 20)`. It is the same number —
+/// and unity is still exactly unity — but it asks for an exponential rather
+/// than a general power, which the dynamics processors call once per frame.
+#[inline]
 pub fn db_to_lin(db: f32) -> f32 {
     if db == f32::NEG_INFINITY {
         0.0
     } else {
-        10f32.powf(db / 20.0)
+        (db * (std::f32::consts::LOG2_10 / 20.0)).exp2()
     }
 }
 
 /// Linear gain → decibels (`-inf` for zero).
+#[inline]
 pub fn lin_to_db(lin: f32) -> f32 {
     if lin <= 0.0 {
         f32::NEG_INFINITY
     } else {
-        20.0 * lin.log10()
+        lin.log2() * (20.0 / std::f32::consts::LOG2_10)
     }
 }
 
@@ -754,6 +835,79 @@ mod tests {
             max_err = max_err.max((up.data[i] - reference.data[i]).abs());
         }
         assert!(max_err < 0.02, "upsample max error {max_err}");
+    }
+
+    #[test]
+    fn polyphase_resampling_matches_the_inline_kernel() {
+        // The table and the fallback are two ways of reaching the same filter;
+        // if they disagree, one of them is wrong. A pair of rates whose ratio
+        // needs more phases than the table allows takes the fallback, and a
+        // standard pair takes the table.
+        let src = AudioBuffer::sine(48_000, 2, 997.0, 0.7, 0.05);
+        for target in [44_100u32, 96_000, 32_000, 22_050] {
+            let out = src.resample(target);
+            assert_eq!(out.sample_rate, target);
+            // Reference: the same kernel, weights derived per output frame.
+            let ratio = 48_000.0 / f64::from(target);
+            let cutoff = if ratio > 1.0 { 1.0 / ratio } else { 1.0 };
+            let ch = src.channels;
+            let mut worst = 0.0f32;
+            for o in 0..out.frames() {
+                let t = o as f64 * ratio;
+                let center = t.floor() as i64;
+                let (w, norm) = resample_taps(t - center as f64, cutoff);
+                for c in 0..ch {
+                    let mut acc = 0.0f64;
+                    for (wi, wv) in w.iter().enumerate() {
+                        let i = center + wi as i64 - RS_HALF as i64 + 1;
+                        if i >= 0 && (i as usize) < src.frames() {
+                            acc += *wv * f64::from(src.data[i as usize * ch + c]);
+                        }
+                    }
+                    worst = worst.max((out.data[o * ch + c] - (acc * norm) as f32).abs());
+                }
+            }
+            assert!(worst < 1e-6, "{target} Hz: polyphase differs by {worst}");
+        }
+    }
+
+    #[test]
+    fn resampling_is_far_cheaper_than_the_audio_it_converts() {
+        // A cost tripwire as a ratio rather than a clock reading: converting a
+        // buffer must cost only a modest multiple of passing over it, on the
+        // same machine at the same moment. Deriving thirty-two transcendentals
+        // per output frame — which this once did — put the ratio in the
+        // thousands, and made converting a file cost fifty times longer than
+        // the audio lasts.
+        //
+        // Both sides are measured best-of and interleaved, so a burst of load
+        // from another process lands on both and divides out.
+        let src = AudioBuffer::sine(48_000, 1, 997.0, 0.7, 1.0);
+        let out = src.resample(44_100);
+        let mut convert = f64::MAX;
+        let mut reference = f64::MAX;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            std::hint::black_box(src.resample(44_100));
+            convert = convert.min(t.elapsed().as_secs_f64());
+
+            let t = std::time::Instant::now();
+            let mut acc = 0.0f64;
+            for _ in 0..8 {
+                acc += src.data.iter().map(|s| f64::from(*s)).sum::<f64>();
+                acc += out.data.iter().map(|s| f64::from(*s)).sum::<f64>();
+            }
+            std::hint::black_box(acc);
+            reference = reference.min(t.elapsed().as_secs_f64() / 8.0);
+        }
+        let ratio = convert / reference.max(1e-9);
+        assert!(
+            ratio < 400.0,
+            "resampling costs {ratio:.0}x a pass over the same samples \
+             ({:.1} ms vs {:.3} ms); the kernel is being rebuilt per frame",
+            convert * 1e3,
+            reference * 1e3
+        );
     }
 
     #[test]

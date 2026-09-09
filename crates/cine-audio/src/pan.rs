@@ -151,6 +151,11 @@ const S714: &[Speaker] = &[
     Speaker::new("Rtb", -135.0, 45.0),
 ];
 
+/// Channels in the widest supported layout (7.1.4). The gain paths that must
+/// not allocate use fixed buffers of this size; `layouts_fit_max_channels`
+/// keeps the constant honest.
+pub const MAX_CHANNELS: usize = 12;
+
 impl ChannelLayout {
     /// All layouts, smallest first.
     pub const ALL: [ChannelLayout; 6] = [
@@ -298,6 +303,12 @@ pub struct VbapPanner {
     layout: ChannelLayout,
     bases: Vec<Base>,
     three_d: bool,
+    /// Channel indices of the speakers that can be panned to (everything but
+    /// the LFE), and their unit directions. Both are fixed by the layout, so
+    /// deriving them per call — as this once did, with a `Vec` and a `sin_cos`
+    /// per speaker — was work repeated for an answer that never changed.
+    real: Vec<usize>,
+    real_dirs: Vec<[f32; 3]>,
 }
 
 impl VbapPanner {
@@ -314,11 +325,7 @@ impl VbapPanner {
         let mut bases = Vec::new();
         if dirs.len() == 1 {
             // Single speaker: handled specially in `gains`.
-            return VbapPanner {
-                layout,
-                bases,
-                three_d,
-            };
+            return VbapPanner::assemble(layout, bases, three_d);
         }
         if !three_d {
             // Sort by azimuth and pair adjacent speakers (wrapping), skipping
@@ -407,10 +414,19 @@ impl VbapPanner {
                 }
             }
         }
+        VbapPanner::assemble(layout, bases, three_d)
+    }
+
+    fn assemble(layout: ChannelLayout, bases: Vec<Base>, three_d: bool) -> Self {
+        let speakers = layout.speakers();
+        let real: Vec<usize> = (0..speakers.len()).filter(|i| !speakers[*i].lfe).collect();
+        let real_dirs = real.iter().map(|i| speakers[*i].direction()).collect();
         VbapPanner {
             layout,
             bases,
             three_d,
+            real,
+            real_dirs,
         }
     }
 
@@ -431,13 +447,29 @@ impl VbapPanner {
 
     /// Gains for a unit direction vector.
     pub fn gains_for_direction(&self, dir: [f32; 3]) -> Vec<f32> {
-        let n = self.layout.channel_count();
-        let mut out = vec![0.0f32; n];
-        let speakers = self.layout.speakers();
-        let real: Vec<usize> = (0..n).filter(|i| !speakers[*i].lfe).collect();
-        if real.len() == 1 {
-            out[real[0]] = 1.0;
-            return out;
+        let mut out = vec![0.0f32; self.layout.channel_count()];
+        self.gains_for_direction_into(dir, &mut out);
+        out
+    }
+
+    /// [`gains`](Self::gains) into a caller-owned slice of
+    /// [`channel_count`](ChannelLayout::channel_count) floats.
+    pub fn gains_into(&self, azimuth_deg: f32, elevation_deg: f32, out: &mut [f32]) {
+        self.gains_for_direction_into(direction_from_angles(azimuth_deg, elevation_deg), out);
+    }
+
+    /// [`gains_for_direction`](Self::gains_for_direction) into a caller-owned
+    /// slice of [`channel_count`](ChannelLayout::channel_count) floats.
+    ///
+    /// This is the form the renderer uses. Panning a spread source evaluates
+    /// this seventeen to twenty-five times for one control value; returning a
+    /// fresh `Vec` from each was most of what that cost.
+    pub fn gains_for_direction_into(&self, dir: [f32; 3], out: &mut [f32]) {
+        debug_assert_eq!(out.len(), self.layout.channel_count());
+        out.fill(0.0);
+        if self.real.len() == 1 {
+            out[self.real[0]] = 1.0;
+            return;
         }
         let mut p = normalize(dir);
         if !self.three_d {
@@ -460,15 +492,8 @@ impl VbapPanner {
         }
         let Some((_, g, base)) = best else {
             // Degenerate layout: nearest speaker.
-            let nearest = real.iter().copied().max_by(|a, b| {
-                dot(speakers[*a].direction(), p)
-                    .partial_cmp(&dot(speakers[*b].direction(), p))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            if let Some(i) = nearest {
-                out[i] = 1.0;
-            }
-            return out;
+            self.nearest_into(p, out);
+            return;
         };
         let count = if base.idx[2] == usize::MAX && !self.three_d {
             2
@@ -478,36 +503,43 @@ impl VbapPanner {
         let min = g[..count].iter().copied().fold(f32::INFINITY, f32::min);
         if !self.three_d && min < -1e-4 {
             // Outside every speaker arc (e.g. behind a stereo pair): nearest speaker.
-            let nearest = real.iter().copied().max_by(|a, b| {
-                dot(speakers[*a].direction(), p)
-                    .partial_cmp(&dot(speakers[*b].direction(), p))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            if let Some(i) = nearest {
-                out[i] = 1.0;
-            }
-            return out;
+            self.nearest_into(p, out);
+            return;
         }
         for (ch, gi) in base.idx[..count].iter().zip(&g[..count]) {
             if *ch != usize::MAX {
                 out[*ch] = gi.max(0.0);
             }
         }
-        normalize_power(&mut out);
+        normalize_power(out);
         if out.iter().all(|g| *g == 0.0) {
             // Everything went to a virtual speaker (source straight below):
             // spread evenly over the real speakers of that base.
-            let reals: Vec<usize> = base.idx[..count]
-                .iter()
-                .copied()
-                .filter(|i| *i != usize::MAX)
-                .collect();
-            for i in &reals {
-                out[*i] = 1.0;
+            for i in base.idx[..count].iter().copied() {
+                if i != usize::MAX {
+                    out[i] = 1.0;
+                }
             }
-            normalize_power(&mut out);
+            normalize_power(out);
         }
-        out
+    }
+
+    /// All the gain on whichever real speaker points most nearly at `p`.
+    fn nearest_into(&self, p: [f32; 3], out: &mut [f32]) {
+        let nearest = self
+            .real
+            .iter()
+            .copied()
+            .zip(&self.real_dirs)
+            .max_by(|a, b| {
+                dot(*a.1, p)
+                    .partial_cmp(&dot(*b.1, p))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i);
+        if let Some(i) = nearest {
+            out[i] = 1.0;
+        }
     }
 
     /// Gains with angular spread (MDAP): the source is replaced by a ring of
@@ -518,12 +550,30 @@ impl VbapPanner {
         elevation_deg: f32,
         spread_deg: f32,
     ) -> Vec<f32> {
+        let mut out = vec![0.0f32; self.layout.channel_count()];
+        self.gains_with_spread_into(azimuth_deg, elevation_deg, spread_deg, &mut out);
+        out
+    }
+
+    /// [`gains_with_spread`](Self::gains_with_spread) into a caller-owned slice
+    /// of [`channel_count`](ChannelLayout::channel_count) floats.
+    pub fn gains_with_spread_into(
+        &self,
+        azimuth_deg: f32,
+        elevation_deg: f32,
+        spread_deg: f32,
+        out: &mut [f32],
+    ) {
+        let n = self.layout.channel_count();
+        debug_assert_eq!(out.len(), n);
+        debug_assert!(n <= MAX_CHANNELS);
         let spread = spread_deg.clamp(0.0, 360.0);
         if spread < 1.0 {
-            return self.gains(azimuth_deg, elevation_deg);
+            self.gains_into(azimuth_deg, elevation_deg, out);
+            return;
         }
-        let n = self.layout.channel_count();
-        let mut acc = vec![0.0f32; n];
+        let mut acc = [0.0f32; MAX_CHANNELS];
+        let mut g = [0.0f32; MAX_CHANNELS];
         let center = direction_from_angles(azimuth_deg, elevation_deg);
         // Orthonormal frame around the center direction.
         let up = if center[2].abs() > 0.9 {
@@ -535,57 +585,71 @@ impl VbapPanner {
         let v = normalize(cross(center, u));
         let half = (spread * 0.5).to_radians();
         let rings = if spread >= 180.0 { 3 } else { 2 };
-        let add = |acc: &mut Vec<f32>, dir: [f32; 3]| {
-            let g = self.gains_for_direction(dir);
-            for (a, gi) in acc.iter_mut().zip(g) {
-                *a += gi * gi;
-            }
-        };
-        add(&mut acc, center);
+        // The eight ring offsets are the same on every ring and in every call;
+        // taking their sine and cosine per ring per call was sixteen to
+        // twenty-four transcendentals for eight answers.
+        let mut ring = [(0.0f32, 0.0f32); 8];
+        for (k, e) in ring.iter_mut().enumerate() {
+            let phi = k as f32 * std::f32::consts::TAU / 8.0;
+            *e = (phi.cos(), phi.sin());
+        }
+        self.gains_for_direction_into(center, &mut g[..n]);
+        for (a, gi) in acc[..n].iter_mut().zip(&g[..n]) {
+            *a += gi * gi;
+        }
         for r in 1..=rings {
             let ang = half * r as f32 / rings as f32;
             let (s, c) = ang.sin_cos();
-            for k in 0..8 {
-                let phi = k as f32 * std::f32::consts::TAU / 8.0;
+            for (cp, sp) in ring {
                 let dir = [
-                    center[0] * c + (u[0] * phi.cos() + v[0] * phi.sin()) * s,
-                    center[1] * c + (u[1] * phi.cos() + v[1] * phi.sin()) * s,
-                    center[2] * c + (u[2] * phi.cos() + v[2] * phi.sin()) * s,
+                    center[0] * c + (u[0] * cp + v[0] * sp) * s,
+                    center[1] * c + (u[1] * cp + v[1] * sp) * s,
+                    center[2] * c + (u[2] * cp + v[2] * sp) * s,
                 ];
-                add(&mut acc, dir);
+                self.gains_for_direction_into(dir, &mut g[..n]);
+                for (a, gi) in acc[..n].iter_mut().zip(&g[..n]) {
+                    *a += gi * gi;
+                }
             }
         }
-        let mut out: Vec<f32> = acc.iter().map(|p| p.sqrt()).collect();
-        normalize_power(&mut out);
-        out
+        for (o, a) in out.iter_mut().zip(&acc[..n]) {
+            *o = a.sqrt();
+        }
+        normalize_power(out);
     }
 
     /// Gains for an object at `position` (x forward, y left, z up) with
     /// distance attenuation, spread and an optional LFE send.
     pub fn pan_object(&self, position: [f32; 3], params: &ObjectPanParams) -> Vec<f32> {
+        let mut out = vec![0.0f32; self.layout.channel_count()];
+        self.pan_object_into(position, params, &mut out);
+        out
+    }
+
+    /// [`pan_object`](Self::pan_object) into a caller-owned slice of
+    /// [`channel_count`](ChannelLayout::channel_count) floats.
+    pub fn pan_object_into(&self, position: [f32; 3], params: &ObjectPanParams, out: &mut [f32]) {
+        debug_assert_eq!(out.len(), self.layout.channel_count());
         let d = dot(position, position).sqrt();
-        let n = self.layout.channel_count();
         let reference = params.reference_distance.max(1e-3);
         let att = if d > reference {
             (reference / d).powf(params.rolloff.max(0.0))
         } else {
             1.0
         };
-        let mut gains = if d < 1e-4 {
+        if d < 1e-4 {
             // At the listener: omni.
-            self.gains_with_spread(0.0, 0.0, 360.0)
+            self.gains_with_spread_into(0.0, 0.0, 360.0, out);
         } else {
             let (az, el) = angles_from_direction(position);
-            self.gains_with_spread(az, el, params.spread_deg)
-        };
-        for g in gains.iter_mut() {
+            self.gains_with_spread_into(az, el, params.spread_deg, out);
+        }
+        for g in out.iter_mut() {
             *g *= att;
         }
         if let (Some(lfe), Some(db)) = (self.layout.lfe_index(), params.lfe_send_db) {
-            gains[lfe] = att * db_to_lin(db);
+            out[lfe] = att * db_to_lin(db);
         }
-        debug_assert_eq!(gains.len(), n);
-        gains
     }
 }
 
@@ -871,6 +935,42 @@ mod tests {
         assert!((l - 1.0).abs() < 1e-6 && r.abs() < 1e-6);
         let (l, r) = PanLaw::Minus6dB.gains(0.5);
         assert!((l - 0.25).abs() < 1e-6 && (r - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn layouts_fit_max_channels() {
+        for l in ChannelLayout::ALL {
+            assert!(
+                l.channel_count() <= MAX_CHANNELS,
+                "{} has {} channels, past MAX_CHANNELS = {MAX_CHANNELS}",
+                l.label(),
+                l.channel_count()
+            );
+        }
+    }
+
+    #[test]
+    fn gains_into_agrees_with_the_allocating_form() {
+        for l in ChannelLayout::ALL {
+            let p = VbapPanner::new(l);
+            let n = l.channel_count();
+            let mut buf = vec![0.0f32; n];
+            for az in [-170.0f32, -90.0, -33.0, 0.0, 17.0, 95.0, 179.0] {
+                for (el, spread) in [(0.0f32, 0.0f32), (30.0, 0.0), (0.0, 45.0), (20.0, 200.0)] {
+                    p.gains_with_spread_into(az, el, spread, &mut buf);
+                    assert_eq!(
+                        buf,
+                        p.gains_with_spread(az, el, spread),
+                        "{l:?} {az} {el} {spread}"
+                    );
+                }
+            }
+            p.pan_object_into([1.5, 0.5, 0.2], &ObjectPanParams::default(), &mut buf);
+            assert_eq!(
+                buf,
+                p.pan_object([1.5, 0.5, 0.2], &ObjectPanParams::default())
+            );
+        }
     }
 
     #[test]

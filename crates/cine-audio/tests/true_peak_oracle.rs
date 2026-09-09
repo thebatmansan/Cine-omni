@@ -292,9 +292,15 @@ fn true_peak_costs_a_filter_not_a_resampler() {
         std::hint::black_box(buf.rms());
         baseline = baseline.min(t.elapsed());
     }
-    let t = std::time::Instant::now();
-    std::hint::black_box(buf.true_peak_dbtp());
-    let elapsed = t.elapsed();
+    // Best of three on this side too. Measuring the cheap side best-of and the
+    // expensive side once makes the ratio the maximum of the noise rather than
+    // the minimum, which is how this fired on a machine that was merely busy.
+    let mut elapsed = std::time::Duration::MAX;
+    for _ in 0..3 {
+        let t = std::time::Instant::now();
+        std::hint::black_box(buf.true_peak_dbtp());
+        elapsed = elapsed.min(t.elapsed());
+    }
     let ratio = elapsed.as_secs_f64() / baseline.as_secs_f64().max(1e-9);
     println!("20 s of 5.1 at 48 kHz: {elapsed:?} = {ratio:.0}x a plain pass (rms {baseline:?})");
     assert!(
