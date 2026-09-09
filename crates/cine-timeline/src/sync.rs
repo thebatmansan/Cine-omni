@@ -263,11 +263,11 @@ pub fn align_clip(track: &mut Track, index: usize, offset: RationalTime) -> Resu
     let current = clip
         .trimmed_range()
         .map(|r| r.start_time)
-        .unwrap_or(RationalTime::new(0.0, offset.rate));
+        .unwrap_or(RationalTime::new(0.0, offset.rate_hz()));
     let base = clip
         .available_range()
         .map(|r| r.start_time)
-        .unwrap_or(RationalTime::new(0.0, offset.rate));
+        .unwrap_or(RationalTime::new(0.0, offset.rate_hz()));
     let target = base + offset;
     edit::slip(track, index, target - current)
 }

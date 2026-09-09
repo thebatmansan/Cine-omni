@@ -341,7 +341,7 @@ mod tests {
         }
         let frames = align_to_frames(&a, 24.0);
         assert_eq!(frames.len(), s.len());
-        assert!(frames.iter().all(|(_, r)| r.duration.value >= 1.0));
+        assert!(frames.iter().all(|(_, r)| r.duration.value() >= 1.0));
     }
 
     #[test]

@@ -66,8 +66,8 @@ fn perfect_transcript_aligns_exactly() {
     assert_eq!(frames.len(), words.len());
     for (k, (idx, range)) in frames.iter().enumerate() {
         assert_eq!(*idx, k);
-        assert!(range.duration.value >= 1.0);
-        assert_eq!(range.start_time.rate, 24.0);
+        assert!(range.duration.value() >= 1.0);
+        assert_eq!(range.start_time.rate_hz(), 24.0);
     }
 }
 

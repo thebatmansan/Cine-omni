@@ -194,7 +194,7 @@ fn placeholders_follow_the_script() {
             assert!(g.has_edge(*clip, *line, EdgeKind::SyncedTo));
             assert_eq!(ucg::clips_synced_to(&g, *line), vec![*clip]);
             let range = n.get(attrs::RANGE).and_then(Value::as_range).unwrap();
-            assert_eq!(range.start_time.rate, 24.0);
+            assert_eq!(range.start_time.rate_hz(), 24.0);
             let (start, dur) = range.to_seconds();
             assert!(
                 (start - cursor).abs() < 1e-9,

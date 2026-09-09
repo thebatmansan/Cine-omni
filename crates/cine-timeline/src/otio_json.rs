@@ -368,7 +368,7 @@ fn metadata_value(m: &Metadata) -> J {
 
 /// `RationalTime.1`.
 pub fn time_value(t: RationalTime) -> J {
-    json!({ "OTIO_SCHEMA": "RationalTime.1", "rate": t.rate, "value": t.value })
+    json!({ "OTIO_SCHEMA": "RationalTime.1", "rate": t.rate_hz(), "value": t.value() })
 }
 
 /// `TimeRange.1`.

@@ -236,9 +236,9 @@ impl Track {
         self.children
             .iter()
             .find_map(|c| match c {
-                Item::Clip(c) => c.trimmed_range().map(|r| r.start_time.rate),
-                Item::Gap(g) => Some(g.source_range.start_time.rate),
-                Item::Transition(t) => Some(t.in_offset.rate),
+                Item::Clip(c) => c.trimmed_range().map(|r| r.start_time.rate_hz()),
+                Item::Gap(g) => Some(g.source_range.start_time.rate_hz()),
+                Item::Transition(t) => Some(t.in_offset.rate_hz()),
             })
             .unwrap_or(24.0)
     }
@@ -351,20 +351,20 @@ impl Track {
                             clip.name
                         ));
                     };
-                    if tr.duration.value < 0.0 {
+                    if tr.duration.value() < 0.0 {
                         return inv(format!(
                             "clip {i} `{}` has negative duration {}",
                             clip.name, tr.duration
                         ));
                     }
                     if let (Some(sr), Some(ar)) = (clip.source_range, clip.available_range()) {
-                        let s = sr.start_time.rescaled_to(ar.start_time.rate).value;
+                        let s = sr.start_time.rescaled_to(ar.start_time.rate_hz()).value();
                         let e = sr
                             .end_time_exclusive()
-                            .rescaled_to(ar.start_time.rate)
-                            .value;
-                        if s + 1e-9 < ar.start_time.value
-                            || e - 1e-9 > ar.end_time_exclusive().value
+                            .rescaled_to(ar.start_time.rate_hz())
+                            .value();
+                        if s + 1e-9 < ar.start_time.value()
+                            || e - 1e-9 > ar.end_time_exclusive().value()
                         {
                             return inv(format!(
                                 "clip {i} `{}` source range {sr} exceeds available range {ar}",
@@ -374,7 +374,7 @@ impl Track {
                     }
                 }
                 Item::Gap(g) => {
-                    if g.source_range.duration.value < 0.0 {
+                    if g.source_range.duration.value() < 0.0 {
                         return inv(format!(
                             "gap {i} has negative duration {}",
                             g.source_range.duration
@@ -382,7 +382,7 @@ impl Track {
                     }
                 }
                 Item::Transition(t) => {
-                    if t.in_offset.value < 0.0 || t.out_offset.value < 0.0 {
+                    if t.in_offset.value() < 0.0 || t.out_offset.value() < 0.0 {
                         return inv(format!("transition {i} `{}` has a negative offset", t.name));
                     }
                     let (prev, next) = self.neighbors(i);
@@ -701,7 +701,7 @@ impl Clip {
     ) -> Option<RationalTime> {
         let tr = self.trimmed_range()?;
         let offset = track_time - track_start;
-        if offset.value < 0.0 || offset.to_seconds() >= tr.duration.to_seconds() {
+        if offset.value() < 0.0 || offset.to_seconds() >= tr.duration.to_seconds() {
             return None;
         }
         Some(tr.start_time + offset)
@@ -728,7 +728,7 @@ impl Gap {
     /// A gap of `duration` (its source range starts at zero).
     pub fn new(duration: RationalTime) -> Self {
         Gap {
-            source_range: TimeRange::new(RationalTime::new(0.0, duration.rate), duration),
+            source_range: TimeRange::new(RationalTime::new(0.0, duration.rate_hz()), duration),
             ..Default::default()
         }
     }
