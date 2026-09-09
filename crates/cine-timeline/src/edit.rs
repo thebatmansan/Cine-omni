@@ -3,8 +3,16 @@
 //! Every operation is pure with respect to the graph: it mutates a `Track`
 //! in memory, clamps to media bounds where applicable, validates the track's
 //! invariants ([`Track::validate`]) and only then commits the change — a
-//! failed operation leaves the track untouched. Frame arithmetic is exact
-//! because [`RationalTime`] stores integer frame counts as `f64`.
+//! failed operation leaves the track untouched.
+//!
+//! **All arithmetic here is exact.** [`RationalTime`] is an integer tick count
+//! at an exact rational rate, and comparison and arithmetic cross-multiply in
+//! `i128`, so two items at different rates can be combined without conversion
+//! and without drift. This file previously computed in `f64` frames with an
+//! `EPS` of 1e-9 and, in `roll` and `slide`, derived a scale factor by dividing
+//! one rate by another — which is precisely how NTSC rates drift. Both are
+//! gone: there is no epsilon and no rate ratio, because neither is needed once
+//! the arithmetic is exact.
 //!
 //! Sign conventions (all deltas are in track time):
 //!
@@ -33,7 +41,9 @@ pub enum Edge {
 // internals
 // ---------------------------------------------------------------------------
 
-const EPS: f64 = 1e-9;
+/// A trim bound. `None` means unbounded in that direction — a gap has no media
+/// to run out of, so its head can move as far as the caller likes.
+type Bound = Option<RationalTime>;
 
 /// Run `f` on a working copy of the track; commit only if it succeeds and
 /// the result satisfies the invariants.
@@ -71,69 +81,95 @@ fn available_range(item: &Item) -> Option<TimeRange> {
 
 /// Largest transition offset that the item at `index` must keep covering:
 /// the `out_offset` of a transition before it, the `in_offset` of one after.
-fn transition_floor(track: &Track, index: usize, rate: f64) -> f64 {
-    let mut floor = 0.0f64;
+fn transition_floor(track: &Track, index: usize, zero: RationalTime) -> RationalTime {
+    let mut floor = zero;
     if index > 0 {
         if let Some(t) = track.children[index - 1].as_transition() {
-            floor = floor.max(t.out_offset.rescaled_to(rate).value());
+            floor = floor.max(t.out_offset);
         }
     }
     if let Some(t) = track.children.get(index + 1).and_then(Item::as_transition) {
-        floor = floor.max(t.in_offset.rescaled_to(rate).value());
+        floor = floor.max(t.in_offset);
     }
     floor
 }
 
 /// Allowed `[lo, hi]` for a change `d` applied to the tail of `index`
-/// (`duration += d`), in frames at the item's rate.
-fn tail_bounds(track: &Track, index: usize) -> Result<(f64, f64, TimeRange)> {
+/// (`duration += d`).
+fn tail_bounds(track: &Track, index: usize) -> Result<(Bound, Bound, TimeRange)> {
     let tr = materialized_range(track, index)?;
-    let rate = tr.start_time.rate_hz();
-    let lo = -(tr.duration.value() - transition_floor(track, index, rate));
-    let hi = match available_range(&track.children[index]) {
-        Some(ar) => {
-            ar.end_time_exclusive().rescaled_to(rate).value() - tr.end_time_exclusive().value()
-        }
-        None => f64::INFINITY,
-    };
-    Ok((lo, hi, tr))
+    let zero = RationalTime::zero(tr.duration.rate_exact());
+    // Never shorter than nothing, and never shorter than the transition it has
+    // to keep covering.
+    let lo = zero.checked_sub(
+        &tr.duration
+            .checked_sub(&transition_floor(track, index, zero)),
+    );
+    let hi = available_range(&track.children[index]).map(|ar| {
+        ar.end_time_exclusive()
+            .checked_sub(&tr.end_time_exclusive())
+    });
+    Ok((Some(lo), hi, tr))
 }
 
 /// Allowed `[lo, hi]` for a change `d` applied to the head of `index`
-/// (`start += d`, `duration -= d`), in frames at the item's rate.
-fn head_bounds(track: &Track, index: usize) -> Result<(f64, f64, TimeRange)> {
+/// (`start += d`, `duration -= d`).
+fn head_bounds(track: &Track, index: usize) -> Result<(Bound, Bound, TimeRange)> {
     let tr = materialized_range(track, index)?;
-    let rate = tr.start_time.rate_hz();
-    let hi = tr.duration.value() - transition_floor(track, index, rate);
-    let lo = match available_range(&track.children[index]) {
-        Some(ar) => ar.start_time.rescaled_to(rate).value() - tr.start_time.value(),
-        None => f64::NEG_INFINITY,
-    };
-    Ok((lo, hi, tr))
+    let zero = RationalTime::zero(tr.duration.rate_exact());
+    let hi = tr
+        .duration
+        .checked_sub(&transition_floor(track, index, zero));
+    let lo =
+        available_range(&track.children[index]).map(|ar| ar.start_time.checked_sub(&tr.start_time));
+    Ok((lo, Some(hi), tr))
 }
 
-fn clamp(d: f64, lo: f64, hi: f64) -> f64 {
-    if lo > hi {
-        // Already outside the feasible region (e.g. a clip shorter than its
-        // transition); do not make it worse.
-        return 0.0;
+/// Clamp `d` into `[lo, hi]`, where either end may be unbounded.
+///
+/// Bounds may be at different rates from `d` and from each other; comparison is
+/// exact across rates, so nothing is converted.
+fn clamp(d: RationalTime, lo: Bound, hi: Bound, zero: RationalTime) -> RationalTime {
+    if let (Some(l), Some(h)) = (lo, hi) {
+        if l > h {
+            // Already outside the feasible region (e.g. a clip shorter than its
+            // transition); do not make it worse.
+            return zero;
+        }
     }
-    d.clamp(lo, hi)
+    let mut d = d;
+    if let Some(l) = lo {
+        if d < l {
+            d = l;
+        }
+    }
+    if let Some(h) = hi {
+        if d > h {
+            d = h;
+        }
+    }
+    d
 }
 
-fn set_tail(track: &mut Track, index: usize, tr: TimeRange, d: f64) {
-    let rate = tr.start_time.rate_hz();
-    track.children[index].set_source_range(TimeRange::new(
-        tr.start_time,
-        RationalTime::new(tr.duration.value() + d, rate),
-    ));
+/// Combine two bounds, keeping whichever is tighter. An absent bound imposes
+/// no constraint, so the present one wins.
+fn tighter(a: Bound, b: Bound, pick: fn(RationalTime, RationalTime) -> RationalTime) -> Bound {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(pick(x, y)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }
 }
 
-fn set_head(track: &mut Track, index: usize, tr: TimeRange, d: f64) {
-    let rate = tr.start_time.rate_hz();
+fn set_tail(track: &mut Track, index: usize, tr: TimeRange, d: RationalTime) {
+    track.children[index]
+        .set_source_range(TimeRange::new(tr.start_time, tr.duration.checked_add(&d)));
+}
+
+fn set_head(track: &mut Track, index: usize, tr: TimeRange, d: RationalTime) {
     track.children[index].set_source_range(TimeRange::new(
-        RationalTime::new(tr.start_time.value() + d, rate),
-        RationalTime::new(tr.duration.value() - d, rate),
+        tr.start_time.checked_add(&d),
+        tr.duration.checked_sub(&d),
     ));
 }
 
@@ -159,13 +195,13 @@ pub fn ripple_trim(
             Edge::Head => head_bounds(t, index)?,
             Edge::Tail => tail_bounds(t, index)?,
         };
-        let rate = tr.start_time.rate_hz();
-        let d = clamp(delta.rescaled_to(rate).value(), lo, hi);
+        let zero = RationalTime::zero(tr.duration.rate_exact());
+        let d = clamp(delta, lo, hi, zero);
         match edge {
             Edge::Head => set_head(t, index, tr, d),
             Edge::Tail => set_tail(t, index, tr, d),
         }
-        Ok(RationalTime::new(d, rate))
+        Ok(d)
     })
 }
 
@@ -197,14 +233,16 @@ pub fn roll(track: &mut Track, cut: usize, delta: RationalTime) -> Result<Ration
         let right = right_of_cut(t, cut)?;
         let (llo, lhi, ltr) = tail_bounds(t, cut)?;
         let (rlo, rhi, rtr) = head_bounds(t, right)?;
-        let rate = ltr.start_time.rate_hz();
-        let rscale = rate / rtr.start_time.rate_hz();
-        let lo = llo.max(rlo * rscale);
-        let hi = lhi.min(rhi * rscale);
-        let d = clamp(delta.rescaled_to(rate).value(), lo, hi);
+        // The two items may be at different rates. `d` is a duration, and
+        // comparison and addition are exact across rates, so it applies to both
+        // ends of the cut unconverted — no scale factor, and nothing to drift.
+        let zero = RationalTime::zero(ltr.duration.rate_exact());
+        let lo = tighter(llo, rlo, RationalTime::max);
+        let hi = tighter(lhi, rhi, RationalTime::min);
+        let d = clamp(delta, lo, hi, zero);
         set_tail(t, cut, ltr, d);
-        set_head(t, right, rtr, d / rscale);
-        Ok(RationalTime::new(d, rate))
+        set_head(t, right, rtr, d);
+        Ok(d)
     })
 }
 
@@ -214,23 +252,24 @@ pub fn roll(track: &mut Track, cut: usize, delta: RationalTime) -> Result<Ration
 pub fn slip(track: &mut Track, index: usize, delta: RationalTime) -> Result<RationalTime> {
     commit(track, |t| {
         let tr = materialized_range(t, index)?;
-        let rate = tr.start_time.rate_hz();
+        let zero = RationalTime::zero(tr.duration.rate_exact());
         if t.children[index].is_gap() {
-            return Ok(RationalTime::new(0.0, rate));
+            return Ok(zero);
         }
         let (lo, hi) = match available_range(&t.children[index]) {
             Some(ar) => (
-                ar.start_time.rescaled_to(rate).value() - tr.start_time.value(),
-                ar.end_time_exclusive().rescaled_to(rate).value() - tr.end_time_exclusive().value(),
+                Some(ar.start_time.checked_sub(&tr.start_time)),
+                Some(
+                    ar.end_time_exclusive()
+                        .checked_sub(&tr.end_time_exclusive()),
+                ),
             ),
-            None => (f64::NEG_INFINITY, f64::INFINITY),
+            None => (None, None),
         };
-        let d = clamp(delta.rescaled_to(rate).value(), lo, hi);
-        t.children[index].set_source_range(TimeRange::new(
-            RationalTime::new(tr.start_time.value() + d, rate),
-            tr.duration,
-        ));
-        Ok(RationalTime::new(d, rate))
+        let d = clamp(delta, lo, hi, zero);
+        t.children[index]
+            .set_source_range(TimeRange::new(tr.start_time.checked_add(&d), tr.duration));
+        Ok(d)
     })
 }
 
@@ -242,21 +281,24 @@ pub fn slip(track: &mut Track, index: usize, delta: RationalTime) -> Result<Rati
 pub fn slide(track: &mut Track, index: usize, delta: RationalTime) -> Result<RationalTime> {
     commit(track, |t| {
         let tr = materialized_range(t, index)?;
-        let rate = tr.start_time.rate_hz();
-        let mut lo = f64::NEG_INFINITY;
-        let mut hi = f64::INFINITY;
+        let zero = RationalTime::zero(tr.duration.rate_exact());
+        // Neighbours may be at other rates; `d` is a duration and applies to
+        // each of them unconverted, because the arithmetic is exact.
+        let mut lo: Bound = None;
+        let mut hi: Bound = None;
 
         let prev = if index == 0 { None } else { Some(index - 1) };
         if let Some(p) = prev {
             if t.children[p].is_transition() {
                 return Err(Error::NotAnItem(p));
             }
-            let (plo, phi, ptr) = tail_bounds(t, p)?;
-            let s = rate / ptr.start_time.rate_hz();
-            lo = lo.max(plo * s);
-            hi = hi.min(phi * s);
+            let (plo, phi, _) = tail_bounds(t, p)?;
+            lo = tighter(lo, plo, RationalTime::max);
+            hi = tighter(hi, phi, RationalTime::min);
         } else {
-            lo = lo.max(0.0);
+            // Nothing before it: sliding earlier than the head of the track
+            // would place it at a negative time.
+            lo = tighter(lo, Some(zero), RationalTime::max);
         }
 
         let next = index + 1;
@@ -265,29 +307,27 @@ pub fn slide(track: &mut Track, index: usize, delta: RationalTime) -> Result<Rat
             if t.children[next].is_transition() {
                 return Err(Error::NotAnItem(next));
             }
-            let (nlo, nhi, ntr) = head_bounds(t, next)?;
-            let s = rate / ntr.start_time.rate_hz();
-            lo = lo.max(nlo * s);
-            hi = hi.min(nhi * s);
+            let (nlo, nhi, _) = head_bounds(t, next)?;
+            lo = tighter(lo, nlo, RationalTime::max);
+            hi = tighter(hi, nhi, RationalTime::min);
         }
 
-        let d = clamp(delta.rescaled_to(rate).value(), lo, hi);
+        let d = clamp(delta, lo, hi, zero);
         if has_next {
             let (_, _, ntr) = head_bounds(t, next)?;
-            set_head(t, next, ntr, d * ntr.start_time.rate_hz() / rate);
+            set_head(t, next, ntr, d);
         }
         match prev {
             Some(p) => {
                 let (_, _, ptr) = tail_bounds(t, p)?;
-                set_tail(t, p, ptr, d * ptr.start_time.rate_hz() / rate);
+                set_tail(t, p, ptr, d);
             }
-            None if d > 0.0 => {
-                t.children
-                    .insert(0, Item::Gap(Gap::new(RationalTime::new(d, rate))));
+            None if d > zero => {
+                t.children.insert(0, Item::Gap(Gap::new(d)));
             }
             None => {}
         }
-        Ok(RationalTime::new(d, rate))
+        Ok(d)
     })
 }
 
@@ -309,31 +349,32 @@ fn split_in_place(t: &mut Track, time: RationalTime) -> Result<usize> {
     if t.transition_at_time(time).is_some() {
         return Err(Error::TransitionAtCut(time));
     }
-    let rate = t.rate();
-    let time_v = time.rescaled_to(rate).value();
-    let total = t.duration().value();
-    if time_v < -EPS || time_v > total + EPS {
+    let total = t.duration();
+    let mut start = RationalTime::zero(total.rate_exact());
+    if time < start || time > total {
         return Err(Error::TimeOutOfRange(time));
     }
-    let mut start = 0.0;
     for i in 0..t.children.len() {
         if t.children[i].is_transition() {
             continue;
         }
-        if (time_v - start).abs() <= EPS {
+        // Exact equality, not a tolerance: a cut either falls on a boundary or
+        // it does not, and an epsilon here decided that question by how the
+        // arithmetic happened to round.
+        if time == start {
             if i > 0 && t.children[i - 1].is_transition() {
                 return Err(Error::TransitionAtCut(time));
             }
             return Ok(i);
         }
-        let dur = t.children[i].duration().rescaled_to(rate).value();
-        if time_v > start && time_v < start + dur - EPS {
-            let offset = time_v - start;
-            let second = split_item(&mut t.children[i], RationalTime::new(offset, rate));
+        let dur = t.children[i].duration();
+        let end = start.checked_add(&dur);
+        if time > start && time < end {
+            let second = split_item(&mut t.children[i], time.checked_sub(&start));
             t.children.insert(i + 1, second);
             return Ok(i + 1);
         }
-        start += dur;
+        start = end;
     }
     // time == total duration
     if let Some(last) = t.children.last() {
@@ -349,23 +390,19 @@ fn split_in_place(t: &mut Track, time: RationalTime) -> Result<usize> {
 /// range contains them; the `ucg_id` stays with the first half only.
 fn split_item(item: &mut Item, offset: RationalTime) -> Item {
     let tr = item.trimmed_range().unwrap_or_default();
-    let rate = tr.start_time.rate_hz();
-    let off = offset.rescaled_to(rate).value();
-    let first = TimeRange::new(tr.start_time, RationalTime::new(off, rate));
+    let first = TimeRange::new(tr.start_time, offset);
     let second = TimeRange::new(
-        RationalTime::new(tr.start_time.value() + off, rate),
-        RationalTime::new(tr.duration.value() - off, rate),
+        tr.start_time.checked_add(&offset),
+        tr.duration.checked_sub(&offset),
     );
     let mut other = item.clone();
     item.set_source_range(first);
     other.set_source_range(second);
     other.metadata_mut().shift_remove(UCG_ID_KEY);
     if let (Item::Clip(a), Item::Clip(b)) = (&mut *item, &mut other) {
-        let cut = second.start_time.to_seconds();
-        a.markers
-            .retain(|m| m.marked_range.start_time.to_seconds() < cut);
-        b.markers
-            .retain(|m| m.marked_range.start_time.to_seconds() >= cut);
+        let cut = second.start_time;
+        a.markers.retain(|m| m.marked_range.start_time < cut);
+        b.markers.retain(|m| m.marked_range.start_time >= cut);
     }
     other
 }
@@ -382,7 +419,9 @@ pub fn join(track: &mut Track, index: usize) -> Result<()> {
         let joinable = match (&a, &b) {
             (Item::Clip(ca), Item::Clip(cb)) => {
                 ca.media_reference.same_media(&cb.media_reference)
-                    && ra.end_time_exclusive().almost_equal(&rb.start_time, EPS)
+                    // Contiguity is an exact question: the first ends where the
+                    // second begins, or it does not.
+                    && ra.end_time_exclusive() == rb.start_time
             }
             // Empty time has no media: two gaps always join.
             (Item::Gap(_), Item::Gap(_)) => true,
@@ -409,21 +448,16 @@ pub fn join(track: &mut Track, index: usize) -> Result<()> {
 /// time): material removed or overwritten across a cut takes the transition
 /// on that cut with it, as an NLE does.
 fn drop_transitions_on_cuts(t: &mut Track, start: RationalTime, end: RationalTime) {
-    let rate = t.rate();
-    let (s, e) = (
-        start.rescaled_to(rate).value(),
-        end.rescaled_to(rate).value(),
-    );
-    let mut cut = 0.0;
+    let mut cut = RationalTime::zero(t.duration().rate_exact());
     let mut i = 0;
     while i < t.children.len() {
         if t.children[i].is_transition() {
-            if cut >= s - EPS && cut <= e + EPS {
+            if cut >= start && cut <= end {
                 t.children.remove(i);
                 continue;
             }
         } else {
-            cut += t.children[i].duration().rescaled_to(rate).value();
+            cut = cut.checked_add(&t.children[i].duration());
         }
         i += 1;
     }
@@ -431,15 +465,12 @@ fn drop_transitions_on_cuts(t: &mut Track, start: RationalTime, end: RationalTim
 
 /// Pad the track with a gap so that it is at least `time` long; returns the
 /// track rate.
-fn pad_to(t: &mut Track, time: RationalTime) -> f64 {
-    let rate = t.rate();
-    let total = t.duration().value();
-    let tv = time.rescaled_to(rate).value();
-    if tv > total + EPS {
+fn pad_to(t: &mut Track, time: RationalTime) {
+    let total = t.duration();
+    if time > total {
         t.children
-            .push(Item::Gap(Gap::new(RationalTime::new(tv - total, rate))));
+            .push(Item::Gap(Gap::new(time.checked_sub(&total))));
     }
-    rate
 }
 
 /// Ripple insert `item` at `at_time`: the clip under that time is split and
@@ -464,12 +495,12 @@ pub fn overwrite(track: &mut Track, at_time: RationalTime, item: Item) -> Result
         ));
     }
     commit(track, |t| {
-        let rate = pad_to(t, at_time);
-        let end = at_time.rescaled_to(rate) + item.duration();
+        pad_to(t, at_time);
+        let end = at_time.checked_add(&item.duration());
         let total = t.duration();
         drop_transitions_on_cuts(t, at_time, end);
         let i = split_in_place(t, at_time)?;
-        let j = if end.value() >= total.value() - EPS {
+        let j = if end >= total {
             t.children.len()
         } else {
             split_in_place(t, end)?
@@ -485,20 +516,14 @@ pub fn overwrite(track: &mut Track, at_time: RationalTime, item: Item) -> Result
 /// are returned as their covered portion).
 pub fn lift(track: &mut Track, range: TimeRange) -> Result<Vec<Item>> {
     commit(track, |t| {
-        let rate = t.rate();
         let total = t.duration();
-        let end = range.end_time_exclusive().rescaled_to(rate);
-        let end = if end.value() > total.value() {
-            total
-        } else {
-            end
-        };
+        let end = range.end_time_exclusive().min(total);
         drop_transitions_on_cuts(t, range.start_time, end);
         let i = split_in_place(t, range.start_time)?;
         let j = split_in_place(t, end)?;
         let removed: Vec<Item> = t.children.drain(i..j).collect();
-        let dur = end - range.start_time.rescaled_to(rate);
-        if dur.value() > EPS {
+        let dur = end.checked_sub(&range.start_time);
+        if dur > RationalTime::zero(dur.rate_exact()) {
             t.children.insert(i, Item::Gap(Gap::new(dur)));
         }
         Ok(removed)
@@ -510,14 +535,8 @@ pub fn lift(track: &mut Track, range: TimeRange) -> Result<Vec<Item>> {
 /// removed items.
 pub fn extract(track: &mut Track, range: TimeRange) -> Result<Vec<Item>> {
     commit(track, |t| {
-        let rate = t.rate();
         let total = t.duration();
-        let end = range.end_time_exclusive().rescaled_to(rate);
-        let end = if end.value() > total.value() {
-            total
-        } else {
-            end
-        };
+        let end = range.end_time_exclusive().min(total);
         drop_transitions_on_cuts(t, range.start_time, end);
         let i = split_in_place(t, range.start_time)?;
         let j = split_in_place(t, end)?;
