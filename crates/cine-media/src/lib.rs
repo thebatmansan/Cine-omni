@@ -17,6 +17,7 @@
 
 pub mod cache;
 pub mod capability;
+pub mod clock;
 pub mod decoder;
 pub mod error;
 pub mod frame;
@@ -29,6 +30,7 @@ pub mod video;
 
 pub use cache::{CacheStats, FrameCache, FrameKey};
 pub use capability::{BackendKind, Capability, Chroma, Verification};
+pub use clock::{PlaybackClock, PlaybackRate, PlaybackTelemetry, TransportState};
 pub use decoder::{Packet, VideoDecoder};
 pub use error::{Error, Result};
 pub use frame::{AlphaMode, AudioFrame, ColorMetadata, Frame, PixelFormat, VideoFrame};
