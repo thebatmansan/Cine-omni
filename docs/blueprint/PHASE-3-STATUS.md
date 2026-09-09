@@ -108,7 +108,8 @@ argument for the evidence discipline, not against it.
 | Matrix provenance (declared vs assumed) | Yes | 🟢 VERIFIED | `MatrixChoice`; BT.2020 never assumed |
 | Swapchain / presentation | Yes | 🟢 VERIFIED | Real window on Wayland, Bgra8Unorm surface, real frames presented and dumped for inspection |
 | HDR surfaces | Yes | 🔵 PLANNED | egui composites in gamma space; needs a dedicated surface |
-| ACES output transform | Yes | 🟡 PARTIAL | 18% grey exact to 6 decimals; **pure green off by 0.30 (30% of full scale)**. Tonescale right, chroma and gamut compression absent |
+| ACES output transform | Yes | 🟡 PARTIAL | Measured against OpenColorIO 2.5.2 over 1441 samples and 38 transforms, committed as a permanent harness. ACES 2.0 SDR: **neutral axis exact to 5e-6**, worst saturated sample **0.556** — the missing chroma/gamut compression. Colorimetry and log curves are right; the camera-gamut→AP0 matrices differ (ARRI LogC4 worst at 0.664) |
+| Colour conformance harness | Yes | 🟢 VERIFIED | 1441 reference samples from OCIO 2.5.2 committed with their generator, so the gap is measured on every change rather than once |
 | OpenColorIO config loading | Yes | 🔴 NOT IMPLEMENTED | Cannot load **any** released OCIO ACES config — `shared_views` and `!<Views>` unimplemented |
 
 ### Editorial, production, audio
@@ -124,7 +125,7 @@ argument for the evidence discipline, not against it.
 | Offload verification state machine | Yes | 🔵 PLANNED | Designed: `discovered → copying → copied → verifying → verified`, `failed` absorbing |
 | Loudness (EBU R128 / BS.1770) | Yes | 🟢 VERIFIED | `lufs_integrated` agrees with `ebur128` to **0.000 LU** across five signals including 5.1 |
 | True-peak metering | Yes | 🟢 VERIFIED | Within **0.05 dB** of an exact Whittaker–Shannon reconstruction oracle on band-limited programme material, and inside EBU Tech 3341's +0.2/−0.4 dBTP window. The earlier "reads 0.3–0.5 dB high" finding was **misattributed** — see §6 |
-| Real-time audio | Yes | 🟠 **Known inadequate** | One 512-frame block of 48 stereo tracks takes **12.228 ms against a 10.667 ms budget (114.6%)** |
+| Real-time audio | Yes | 🟡 PARTIAL — and the old figure was wrong | **48 tracks stereo now holds a 512-frame deadline on one core with 3x margin** (worst of 400 consecutive blocks: 3.585 ms against 10.667 ms). 128 x 7.1.4 does **not** (13.576 ms median, 127%), and 128 stereo is marginal at 96% and is not claimed. See §6 for what the old 114.6% figure actually measured |
 | Plugin hosting | Yes | 🔵 PLANNED | CLAP and VST3 now both viable — see §5 |
 | Sample-accurate splices | Yes | 🟢 VERIFIED | Reproduced the defect at 29.97 and fixed it |
 
@@ -135,7 +136,8 @@ argument for the evidence discipline, not against it.
 | Deterministic CI regression gates | Yes | 🟢 VERIFIED | Assert work done, not wall-clock: stable on any machine |
 | Bounded op log | Yes | 🟢 VERIFIED | Gate derives its workload from the configured limit |
 | Reactor convergence / idempotence | Yes | 🟢 VERIFIED | Gated |
-| Exact time in `ucg-core` | Yes | 🟡 PARTIAL — migration underway | The exact core (`ucg_core::exact_time`) is landed and proven by 25 adversarial tests across every rate. **It has no callers yet**: stages 0 and 1 of five are done. `RationalTime` is still `{f64, f64}` and still the type in use, so the defect is still live. See `EXACT-TIME-MIGRATION.md` |
+| Exact time in `ucg-core` | Yes | 🟢 VERIFIED | **`RationalTime` is now the exact type**: an integer tick count at an exact rational rate, with equality, ordering and hashing all by value. One time model, no duplicate. 25 adversarial tests across every rate; the workload that defined the defect (200,000 frames at 23.976↔25) is now lossless. See `EXACT-TIME-MIGRATION.md` |
+| Reactor idempotence under recomputation | Yes | 🟢 VERIFIED | A thousand cascade recomputations write **zero** temporal operations (`temporal_idempotence`) |
 | Application shell | Yes | 🟡 PARTIAL | `cine-shell` opens a real window and presents real decoded frames with frame stepping. No docking UI, no transport, no playback clock |
 | One-command startup | Yes | 🟢 VERIFIED | `cine start` — see `APPLICATION-RUNTIME.md` |
 | One runtime, many clients | Yes | 🟢 VERIFIED | Two clients over real sockets, neither diverging |
@@ -210,9 +212,11 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 
 | Defect | Impact | Evidence |
 |---|---|---|
-| `ucg-core::RationalTime` is float-based | Wrong frames and failed equality at NTSC rates. **It is a live engine bug, not only editorial**: `Tx::set` decides reactor idempotence with `f64` equality, so a recomputed time that is arithmetically identical can compare unequal, emit an operation for a value that did not change, dirty everything downstream, and append to the op log forever | Measured: 12.1% wrong frames and 24.2% equality failures over 200,000 frames at 23.976↔25, first wrong frame at 27. The exact replacement exists and passes 25 adversarial tests; the migration is at stage 1 of 5 |
+| ~~`ucg-core::RationalTime` is float-based~~ | **Fixed.** The engine bug is closed: `Tx::set` decides idempotence with `Value: PartialEq`, and time equality is now exact, so a recomputed value that is arithmetically identical compares equal and emits nothing | Was 12.1% wrong frames and 24.2% equality failures over 200,000 frames at 23.976↔25. Now zero, and a thousand cascade recomputations write no temporal ops |
 | ~~`true_peak_dbtp()` reads 0.3–0.5 dB high~~ | **Withdrawn — the attribution was wrong** | An exact Whittaker–Shannon reconstruction (zero-padded DFT, verified exact to 1e-6 dB on single-bin sinusoids) settles which meter is right. cine-audio was already within 0.05 dB of truth; **`ebur128` was the one under-reading**, by up to 0.238 dB. Two real defects were found in the same function and fixed instead: a 4× grid too coarse to resolve inter-sample peaks (−0.301 dB worst case on a phase sweep, outside the EBU budget before filter error is even counted) and a resampler recomputing sinc weights per frame at 578× the cost of an arithmetic pass. Now −0.094 dB worst case at 104×. |
-| `cine-audio::render` at 114.6% of budget | Cannot meet a real-time deadline | 12.228 ms vs 10.667 ms, 48 stereo tracks |
+| ~~`cine-audio::render` at 114.6% of budget~~ | **Withdrawn — the figure measured machine contention, not the mixer.** Same binary, same fixture, before any change: **13.642 ms (127.9%) at load average 20, and 1.814 ms (17.0%) at load average 3** — 7.5x apart. This box is a 2-core i3-10110U that was shared with other builds all session. The sensitivity was itself real (the old `render` allocated ~150 buffers and dispatched rayon per call, and both degrade badly under contention) but that is not the same claim as "over budget" | Second documented defect this session to dissolve under adjudication, after true peak. **A number taken on a contended machine is not a measurement of the code** |
+| 128 tracks at 7.1.4 misses the deadline | Cannot mix a large immersive session in real time | 13.576 ms median against 10.667 ms. Threading does not rescue it — median falls to 6.8 ms but p99 is 21.2 ms, so the pool's wake latency becomes the deadline. Closing it needs roughly 1.3x on the per-frame path: SIMD on the pan/accumulate loops, f32 biquads, and a spinning rather than parking pool |
+| ACES 1.0 output transform | Not implemented, and now refused rather than substituted | Answering it with ACES 2.0 was measured **0.18 wrong on the neutral axis** — visibly wrong greys, where every other output path matches OCIO's neutrals to 5e-6 |
 | Full-band true peak under-reads | A reading on deliberately full-band material is not a delivery pass | Inherent to any oversampling meter (BS.1770 Annex 2, Attachment 1). Measured: cine-audio 1.0–1.5 dB low, `ebur128` 1.4–1.9 dB low. Documented on the function |
 | `cine-comp::hashes()` superlinear, on every evaluation | 53 ms at 2,001 nodes | Third occurrence of "derived value recomputed in a hot loop" |
 | `cine-comp::evaluate_roi` returns the full frame | ROI plumbing saves nothing and fragments the cache | 64×64 request returned 16.7M floats |
@@ -270,7 +274,9 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * "OpenColorIO-compatible" — cannot load any released ACES config
 * "OpenUSD" — `cine-previs` emits a USDA-shaped subset
 * "OTIO-compatible" — Tier 1 of 5
-* "Real-time" for audio — 114.6% of budget
+* "Real-time" for audio in general — 48 stereo tracks hold a 512-frame
+  deadline with 3x margin and may be claimed; 128 x 7.1.4 does not and 128
+  stereo is marginal, so neither may be
 * "Production playback" — no presentation clock exists
 * "Hardware accelerated" — no hardware path exists
 * "Production-ready" for any subsystem
