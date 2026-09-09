@@ -1,7 +1,52 @@
 # Exact time migration — usage map, measured hazards, canonical type, staged plan
 
-**Status:** design document. Read-only analysis; no code in `crates/` or `ui/`
-was changed to produce it.
+**Status: stages 0–3 are DONE.** This began as a read-only analysis; the
+migration it planned has since been carried out. What follows is preserved as
+the evidence and the design rationale, with the outcome recorded here.
+
+| Stage | What it was | Outcome |
+|---|---|---|
+| **S0** | Fix `Eq`/`Ord`/`Hash` disagreeing on the exact type | 🟢 Done. Equality, ordering and hashing now all agree, all by value |
+| **S1** | Land the exact core, no callers | 🟢 Done, then superseded: rather than keep a second type, the exact model **became** `RationalTime` |
+| **S2** | Hide the representation behind accessors | 🟢 Done. 53 call sites migrated; fields private; 614 tests unchanged, proving it was behaviour-preserving |
+| **S3** | Flip the representation | 🟢 Done. `RationalTime` is now `{ value: i64, rate: Rate }` |
+| **S3a/S3b** | Read both serialization shapes, then write the new one | 🟢 Done in one step. `Deserialize` accepts the legacy `{value: f64, rate: f64}` and recovers the exact rate from the decimal; `Serialize` writes the exact form |
+| **S4–S8** | Follow-on cleanups | 🟡 Partly. See "What remains" below |
+
+**The outcome that matters.** The engine bug is closed. `Tx::set` decides
+reactor idempotence with `Value: PartialEq`, and time equality is now exact, so
+a recomputed value that is arithmetically identical compares equal and emits
+nothing. `crates/cine-pipeline/tests/temporal_idempotence.rs` drives a thousand
+cascade recomputations and asserts **zero** temporal operations.
+
+**One model, not two.** The `ExactTime` type that stage 1 introduced was deleted
+once `RationalTime` became exact — carrying two exact time types would have been
+the same duplication in a new costume. `ucg_core::exact_time` now owns only the
+rate primitives (`Rate`, `Rounding`); the time value lives in `ucg_core::time`.
+
+**Two test expectations were wrong, not the code.** Round-tripping through a
+*coarser* rate cannot be lossless — 1001 frames at 24 fps collide onto 1000 at
+23.976, which is arithmetic. What the model guarantees instead, and what is now
+tested, is that every lossy conversion reports itself inexact. And 107,892
+frames at 30000/1001 is 3599.9964 s, not 3600; that ~3.6 ms residual is what
+drop-frame timecode exists to manage.
+
+**A real off-by-one was caught during the flip.** Timecode was rescaling to the
+nominal integer rate before labelling, so a 29.97 signal was being counted in
+30 fps frames and every label near a second boundary shifted by one. Labels
+count frames *of the signal*; frame 1798 is `00:00:59;28`, not `;29`.
+
+**What remains** (S4–S8): `cine-media` still has its own `Timestamp`/`TimeBase`
+alongside `RationalTime`, and the lossy `to_ucg_time` bridge still exists;
+`cine-timeline/src/edit.rs` still computes in `f64` frames with `EPS = 1e-9`
+rather than exact integers, and still derives one scale factor by dividing two
+rates; `from_seconds` promotes a sub-frame value's rate to microsecond
+resolution rather than representing it exactly, which is a bounded and
+documented approximation but an approximation.
+
+---
+
+## Original analysis
 
 **Scope.** CINE-OMNI carries two incompatible time models:
 

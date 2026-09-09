@@ -1,4 +1,4 @@
-//! Exact rational time.
+//! Exact rational rates.
 //!
 //! ## Why this exists
 //!
@@ -21,10 +21,10 @@
 //!
 //! ## The model
 //!
-//! A [`Rate`] is an exact rational: 23.976 is `24000/1001`, never a decimal. An
-//! [`ExactTime`] is an integer count of ticks at a rate. Comparison and
-//! arithmetic cross-multiply in `i128`, so they are exact for any duration a
-//! film can have.
+//! A [`Rate`] is an exact rational: 23.976 is `24000/1001`, never a decimal.
+//! [`crate::RationalTime`] is an integer count of ticks at such a rate.
+//! Comparison and arithmetic cross-multiply in `i128`, so they are exact for
+//! any duration a film can have.
 //!
 //! Equality, ordering and hashing all agree and are all **by value**: the same
 //! instant expressed at two rates is one instant. Deriving any of the three
@@ -33,12 +33,12 @@
 //!
 //! ## Status
 //!
-//! This type has no callers yet. It is stage 1 of the migration in
-//! `docs/blueprint/EXACT-TIME-MIGRATION.md`: land the exact core and prove it
-//! against the adversarial suite before anything depends on it.
+//! This module owns the rate primitives. The time value itself lives in
+//! [`crate::time`], which is the single model the whole project uses. An
+//! earlier stage of the migration had a second `ExactTime` type here while the
+//! float `RationalTime` was still in use; that duplication is gone.
 
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::fmt;
 
 /// Greatest common divisor.
@@ -211,285 +211,4 @@ pub enum Rounding {
     Nearest,
     /// Toward positive infinity.
     Ceil,
-}
-
-/// An exact instant or duration: `value` ticks at `rate`.
-///
-/// Equality, ordering and hashing are by **value**, so one second at 48 kHz and
-/// one second at 24 fps are the same instant and the same hash key.
-#[derive(Clone, Copy, Serialize, Deserialize)]
-pub struct ExactTime {
-    value: i64,
-    rate: Rate,
-}
-
-impl ExactTime {
-    pub fn new(value: i64, rate: Rate) -> ExactTime {
-        ExactTime { value, rate }
-    }
-
-    /// A count of frames at a frame rate.
-    pub fn from_frames(frames: i64, rate: Rate) -> ExactTime {
-        ExactTime {
-            value: frames,
-            rate,
-        }
-    }
-
-    pub fn zero(rate: Rate) -> ExactTime {
-        ExactTime { value: 0, rate }
-    }
-
-    pub fn value(&self) -> i64 {
-        self.value
-    }
-    pub fn rate(&self) -> Rate {
-        self.rate
-    }
-    pub fn is_zero(&self) -> bool {
-        self.value == 0
-    }
-
-    /// The instant in seconds as an exact fraction `(numerator, denominator)`.
-    ///
-    /// `value` ticks at `num/den` hertz is `value * den / num` seconds.
-    fn as_seconds_fraction(&self) -> (i128, i128) {
-        (
-            i128::from(self.value) * i128::from(self.rate.den),
-            i128::from(self.rate.num),
-        )
-    }
-
-    /// The same fraction in lowest terms, sign on the numerator. This is the
-    /// canonical form: two instants are equal exactly when these match.
-    fn canonical(&self) -> (i128, i128) {
-        let (mut n, mut d) = self.as_seconds_fraction();
-        if d < 0 {
-            n = -n;
-            d = -d;
-        }
-        if n == 0 {
-            return (0, 1);
-        }
-        let g = gcd(n.unsigned_abs(), d.unsigned_abs()) as i128;
-        (n / g, d / g)
-    }
-
-    /// Seconds as a float. **Display only.**
-    pub fn as_seconds_f64(&self) -> f64 {
-        let (n, d) = self.as_seconds_fraction();
-        n as f64 / d as f64
-    }
-
-    /// Convert to another rate.
-    ///
-    /// Returns the converted value and whether it was **exact**. A caller that
-    /// ignores the flag is choosing to lose information; making it a return
-    /// value rather than a silent rounding is the point.
-    pub fn rescale(&self, to: Rate, rounding: Rounding) -> (ExactTime, bool) {
-        if to == self.rate {
-            return (*self, true);
-        }
-        // value * (den/num) * (to.num/to.den)
-        let n = i128::from(self.value) * i128::from(self.rate.den) * i128::from(to.num);
-        let d = i128::from(self.rate.num) * i128::from(to.den);
-        let exact = n % d == 0;
-        let q = match rounding {
-            Rounding::Floor => n.div_euclid(d),
-            Rounding::Ceil => -((-n).div_euclid(d)),
-            Rounding::Nearest => {
-                // Ties away from zero, matching SMPTE convention.
-                let half = d / 2;
-                if n >= 0 {
-                    (n + half) / d
-                } else {
-                    (n - half) / d
-                }
-            }
-        };
-        (
-            ExactTime {
-                value: q as i64,
-                rate: to,
-            },
-            exact,
-        )
-    }
-
-    /// The frame index this instant falls within, at `rate`.
-    pub fn to_frames_at(&self, rate: Rate) -> i64 {
-        self.rescale(rate, Rounding::Floor).0.value
-    }
-
-    /// Add, in the rate that loses nothing.
-    ///
-    /// Mixed-rate addition resolves at a rate that represents both exactly
-    /// where one exists, rather than at whichever operand happened to be on the
-    /// left. The float model used the left-hand rate, which made `a + b` and
-    /// `b + a` different values.
-    pub fn add(&self, other: &ExactTime) -> ExactTime {
-        let rate = common_rate(self.rate, other.rate);
-        let (a, _) = self.rescale(rate, Rounding::Nearest);
-        let (b, _) = other.rescale(rate, Rounding::Nearest);
-        ExactTime {
-            value: a.value + b.value,
-            rate,
-        }
-    }
-
-    pub fn sub(&self, other: &ExactTime) -> ExactTime {
-        let rate = common_rate(self.rate, other.rate);
-        let (a, _) = self.rescale(rate, Rounding::Nearest);
-        let (b, _) = other.rescale(rate, Rounding::Nearest);
-        ExactTime {
-            value: a.value - b.value,
-            rate,
-        }
-    }
-
-    pub fn neg(&self) -> ExactTime {
-        ExactTime {
-            value: -self.value,
-            rate: self.rate,
-        }
-    }
-
-    /// SMPTE non-drop timecode, `HH:MM:SS:FF`.
-    pub fn to_timecode(&self) -> String {
-        let rate = self.rate.timecode_rate().max(1) as i64;
-        let total = self.to_frames_at(self.rate);
-        format_timecode(total, rate, false)
-    }
-
-    /// SMPTE drop-frame timecode, `HH:MM:SS;FF`.
-    ///
-    /// Drop-frame is a **labelling** scheme, not a rate change: it drops two
-    /// labels every minute except every tenth, so that the label tracks wall
-    /// clock on a 30000/1001 signal. It is only defined for NTSC rates whose
-    /// nominal rate is a multiple of 30.
-    pub fn to_drop_frame_timecode(&self) -> Option<String> {
-        let nominal = self.rate.timecode_rate();
-        if !self.rate.is_ntsc() || !nominal.is_multiple_of(30) {
-            return None;
-        }
-        let frames = self.to_frames_at(self.rate);
-        Some(format_drop_frame(frames, nominal))
-    }
-}
-
-/// A rate that represents both inputs exactly, if one exists within `u32`.
-///
-/// For rates `a/b` and `c/d` the exact common rate is `lcm(a,c) / gcd(b,d)`.
-/// When that overflows, the higher of the two is used — which is OTIO's rule,
-/// and loses less than the lower would.
-fn common_rate(a: Rate, b: Rate) -> Rate {
-    if a == b {
-        return a;
-    }
-    let lcm_num = (a.num as u128 / gcd(a.num as u128, b.num as u128)) * b.num as u128;
-    let gcd_den = gcd(a.den as u128, b.den as u128);
-    if lcm_num <= u32::MAX as u128 && gcd_den <= u32::MAX as u128 {
-        if let Some(r) = Rate::new(lcm_num as u32, gcd_den as u32) {
-            return r;
-        }
-    }
-    if a.as_f64() >= b.as_f64() {
-        a
-    } else {
-        b
-    }
-}
-
-fn format_timecode(total: i64, rate: i64, drop: bool) -> String {
-    let neg = total < 0;
-    let t = total.abs();
-    let ff = t % rate;
-    let s = t / rate;
-    let sep = if drop { ';' } else { ':' };
-    format!(
-        "{}{:02}:{:02}:{:02}{}{:02}",
-        if neg { "-" } else { "" },
-        s / 3600,
-        (s / 60) % 60,
-        s % 60,
-        sep,
-        ff
-    )
-}
-
-/// Convert a frame count to a drop-frame label.
-fn format_drop_frame(frames: i64, nominal: u32) -> String {
-    let neg = frames < 0;
-    let f = frames.abs();
-    // Two labels are dropped per minute at 30, scaled for 60 etc.
-    let drop_per_min = i64::from(nominal / 15);
-    let frames_per_10min = i64::from(nominal) * 600 - 9 * drop_per_min;
-    let frames_per_min = i64::from(nominal) * 60 - drop_per_min;
-
-    let ten_minute_blocks = f / frames_per_10min;
-    let mut remainder = f % frames_per_10min;
-    // The first minute of each ten drops nothing.
-    let first_minute = i64::from(nominal) * 60;
-    let extra_minutes = if remainder < first_minute {
-        0
-    } else {
-        remainder -= first_minute;
-        1 + remainder / frames_per_min
-    };
-    let dropped = drop_per_min * (9 * ten_minute_blocks + extra_minutes);
-    let labelled = f + dropped;
-
-    let n = i64::from(nominal);
-    let ff = labelled % n;
-    let s = labelled / n;
-    format!(
-        "{}{:02}:{:02}:{:02};{:02}",
-        if neg { "-" } else { "" },
-        s / 3600,
-        (s / 60) % 60,
-        s % 60,
-        ff
-    )
-}
-
-impl PartialEq for ExactTime {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for ExactTime {}
-
-impl std::hash::Hash for ExactTime {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let (n, d) = self.canonical();
-        n.hash(state);
-        d.hash(state);
-    }
-}
-
-impl PartialOrd for ExactTime {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ExactTime {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let (an, ad) = self.as_seconds_fraction();
-        let (bn, bd) = other.as_seconds_fraction();
-        (an * bd).cmp(&(bn * ad))
-    }
-}
-
-impl fmt::Debug for ExactTime {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{:?}", self.value, self.rate)
-    }
-}
-
-impl fmt::Display for ExactTime {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.value, self.rate)
-    }
 }

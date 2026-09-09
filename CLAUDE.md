@@ -45,6 +45,12 @@ cd ui && npm test && npm run build
 * JSON-RPC lives in `cine-runtime::rpc` and nowhere else. Both transports
   (`cine start` over WebSocket, `cine serve` over stdio) dispatch through it;
   adding a method to one transport only recreates the two-truths defect.
+* Time is `ucg_core::RationalTime`: integer ticks at an exact rational `Rate`.
+  There is exactly one time model. Never construct a rate from a decimal
+  (`29.97` is not `30000/1001`), never derive a scale factor by dividing two
+  rates, and never reach for `f64` seconds except to display. `rescale_checked`
+  reports whether a conversion was exact — ignoring that flag is a choice to
+  lose information.
 * A cross-check is not an oracle. When two implementations disagree, adjudicate
   against something exact before deciding which is wrong — the true-peak
   "defect" was real divergence with the blame reversed.

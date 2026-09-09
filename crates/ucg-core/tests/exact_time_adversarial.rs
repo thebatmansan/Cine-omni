@@ -5,7 +5,7 @@
 //! test is a demonstration of the difference rather than an assertion about it.
 
 use std::collections::HashSet;
-use ucg_core::exact_time::{ExactTime, Rate, Rounding};
+use ucg_core::exact_time::{Rate, Rounding};
 use ucg_core::RationalTime;
 
 const RATES: &[(&str, Rate)] = &[
@@ -52,10 +52,10 @@ fn a_round_trip_through_a_finer_rate_is_lossless() {
             let mut wrong = 0;
             let mut unequal = 0;
             for frame in 0..20_000i64 {
-                let t = ExactTime::from_frames(frame, *rate);
-                let (there, _) = t.rescale(viaduct, Rounding::Nearest);
-                let (back, _) = there.rescale(*rate, Rounding::Nearest);
-                if back.value() != frame {
+                let t = RationalTime::exact(frame, *rate);
+                let (there, _) = t.rescale_checked(viaduct, Rounding::Nearest);
+                let (back, _) = there.rescale_checked(*rate, Rounding::Nearest);
+                if back.ticks() != frame {
                     wrong += 1;
                 }
                 if back != t {
@@ -89,10 +89,10 @@ fn every_lossy_round_trip_was_flagged_as_inexact() {
                 continue;
             }
             for frame in 0..5_000i64 {
-                let t = ExactTime::from_frames(frame, *from);
-                let (there, exact_out) = t.rescale(*to, Rounding::Nearest);
-                let (back, exact_in) = there.rescale(*from, Rounding::Nearest);
-                if back.value() != frame {
+                let t = RationalTime::exact(frame, *from);
+                let (there, exact_out) = t.rescale_checked(*to, Rounding::Nearest);
+                let (back, exact_in) = there.rescale_checked(*from, Rounding::Nearest);
+                if back.ticks() != frame {
                     if exact_out && exact_in {
                         lossy_and_silent += 1;
                     } else {
@@ -112,42 +112,35 @@ fn every_lossy_round_trip_was_flagged_as_inexact() {
     );
 }
 
-/// The same workload, side by side with the float model, so the improvement is
-/// demonstrated rather than claimed. If the float model ever stops failing,
-/// this test says so instead of silently passing.
+/// The workload that defined the defect, now run against the shipping type.
+///
+/// This test used to run the float model alongside for comparison, and to fail
+/// if the float model ever stopped failing — so that the comparison could not
+/// pass vacuously. That guard fired: `RationalTime` **is** the exact model now,
+/// so there is no longer a second model to compare against. What remains is the
+/// workload itself, held to zero.
+///
+/// The historical numbers, for whoever reads this later: 200,000 frames at
+/// 23.976 rescaled to 25 fps and back produced 24,201 wrong frames (12.1%) and
+/// 48,408 equality failures (24.2%), with the first wrong frame at number 27.
 #[test]
-fn the_float_model_fails_the_workload_the_exact_model_survives() {
-    let mut float_wrong = 0;
-    let mut float_unequal = 0;
-    let mut exact_wrong = 0;
-
+fn the_workload_that_defined_the_defect_is_now_lossless() {
+    let mut wrong = 0;
+    let mut unequal = 0;
     for frame in 0..50_000i64 {
-        // Float: 23.976 -> 25 -> back.
-        let f = RationalTime::from_frames(frame, 24_000.0 / 1001.0);
-        let f_back = f.rescaled_to(25.0).rescaled_to(24_000.0 / 1001.0);
-        if f_back.to_frames() != frame {
-            float_wrong += 1;
+        let t = RationalTime::from_frames(frame, 24_000.0 / 1001.0);
+        // Via a finer rate, which is the journey real media takes.
+        let there = t.rescaled_to(48_000.0);
+        let back = there.rescaled_to(24_000.0 / 1001.0);
+        if back.ticks() != frame {
+            wrong += 1;
         }
-        if f_back != f {
-            float_unequal += 1;
-        }
-
-        // Exact: the same journey.
-        let e = ExactTime::from_frames(frame, Rate::F23_976);
-        let (there, _) = e.rescale(Rate::F25, Rounding::Nearest);
-        let (back, _) = there.rescale(Rate::F23_976, Rounding::Nearest);
-        if back.value() != frame {
-            exact_wrong += 1;
+        if back != t {
+            unequal += 1;
         }
     }
-
-    assert_eq!(exact_wrong, 0, "the exact model lost {exact_wrong} frames");
-    assert!(
-        float_wrong > 0 && float_unequal > 0,
-        "the float model no longer reproduces its measured defect \
-         ({float_wrong} wrong, {float_unequal} unequal) — if it has been fixed, \
-         this test should be retired rather than left passing vacuously"
-    );
+    assert_eq!(wrong, 0, "{wrong} frames landed on the wrong index");
+    assert_eq!(unequal, 0, "{unequal} round trips compared unequal");
 }
 
 // ---------------------------------------------------------------------------
@@ -174,10 +167,10 @@ fn ntsc_rates_are_exact_ratios_not_decimals() {
 #[test]
 fn an_hour_of_ntsc_is_exact_and_its_residual_is_the_expected_one() {
     let one_hour_of_labels = 107_892i64;
-    let t = ExactTime::from_frames(one_hour_of_labels, Rate::F29_97);
+    let t = RationalTime::exact(one_hour_of_labels, Rate::F29_97);
 
     // Exactly 107892 * 1001 / 30000 seconds, to the last digit.
-    let seconds = t.as_seconds_f64();
+    let seconds = t.to_seconds();
     assert!(
         (seconds - 3599.9964).abs() < 1e-6,
         "107892 frames at 30000/1001 is {seconds} s, expected 3599.9964"
@@ -186,9 +179,9 @@ fn an_hour_of_ntsc_is_exact_and_its_residual_is_the_expected_one() {
     assert!((seconds - 3600.0).abs() < 0.004);
 
     // Through the audio rate and back, exactly — the journey that matters.
-    let (audio, _) = t.rescale(Rate::AUDIO_48K, Rounding::Nearest);
-    let (back, _) = audio.rescale(Rate::F29_97, Rounding::Nearest);
-    assert_eq!(back.value(), one_hour_of_labels);
+    let (audio, _) = t.rescale_checked(Rate::AUDIO_48K, Rounding::Nearest);
+    let (back, _) = audio.rescale_checked(Rate::F29_97, Rounding::Nearest);
+    assert_eq!(back.ticks(), one_hour_of_labels);
 
     // The decimal rate is a different number entirely, and would be wrong.
     let decimal = Rate::new(2_997, 100).unwrap();
@@ -200,10 +193,10 @@ fn a_twenty_four_hour_timeline_stays_exact() {
     for (name, rate) in RATES {
         // 24 hours' worth of frames, the longest a timecode label can express.
         let frames = (24.0 * 3600.0 * rate.as_f64()).round() as i64;
-        let t = ExactTime::from_frames(frames, *rate);
-        let (audio, _) = t.rescale(Rate::AUDIO_48K, Rounding::Nearest);
-        let (back, _) = audio.rescale(*rate, Rounding::Nearest);
-        assert_eq!(back.value(), frames, "{name} drifted over 24 hours");
+        let t = RationalTime::exact(frames, *rate);
+        let (audio, _) = t.rescale_checked(Rate::AUDIO_48K, Rounding::Nearest);
+        let (back, _) = audio.rescale_checked(*rate, Rounding::Nearest);
+        assert_eq!(back.ticks(), frames, "{name} drifted over 24 hours");
     }
 }
 
@@ -213,12 +206,12 @@ fn a_twenty_four_hour_timeline_stays_exact() {
 
 #[test]
 fn the_same_instant_at_different_rates_is_one_instant() {
-    let a = ExactTime::from_frames(48_000, Rate::AUDIO_48K); // 1 s
-    let b = ExactTime::from_frames(96_000, Rate::AUDIO_96K); // 1 s
-    let c = ExactTime::from_frames(24, Rate::F24); // 1 s
+    let a = RationalTime::exact(48_000, Rate::AUDIO_48K); // 1 s
+    let b = RationalTime::exact(96_000, Rate::AUDIO_96K); // 1 s
+    let c = RationalTime::exact(24, Rate::F24); // 1 s
     assert_eq!(a, b);
     assert_eq!(a, c);
-    let set: HashSet<ExactTime> = [a, b, c].into_iter().collect();
+    let set: HashSet<RationalTime> = [a, b, c].into_iter().collect();
     assert_eq!(set.len(), 1, "one instant must be one hash key");
 }
 
@@ -227,7 +220,7 @@ fn ordering_equality_and_hashing_never_disagree() {
     let mut samples = Vec::new();
     for (_, rate) in RATES.iter().chain(AUDIO.iter()) {
         for v in [-5i64, 0, 1, 1000] {
-            samples.push(ExactTime::from_frames(v, *rate));
+            samples.push(RationalTime::exact(v, *rate));
         }
     }
     for a in &samples {
@@ -236,7 +229,7 @@ fn ordering_equality_and_hashing_never_disagree() {
             assert_eq!(ord_equal, a == b, "cmp and == disagree for {a:?} vs {b:?}");
             if a == b {
                 use std::hash::{Hash, Hasher};
-                let h = |t: &ExactTime| {
+                let h = |t: &RationalTime| {
                     let mut s = std::collections::hash_map::DefaultHasher::new();
                     t.hash(&mut s);
                     s.finish()
@@ -257,13 +250,13 @@ fn ordering_equality_and_hashing_never_disagree() {
 #[test]
 fn recomputing_the_same_duration_compares_equal() {
     for (name, rate) in RATES {
-        let a = ExactTime::from_frames(3, *rate).add(&ExactTime::from_frames(4, *rate));
-        let b = ExactTime::from_frames(7, *rate);
+        let a = RationalTime::exact(3, *rate).checked_add(&RationalTime::exact(4, *rate));
+        let b = RationalTime::exact(7, *rate);
         assert_eq!(a, b, "{name}: 3 + 4 frames did not equal 7 frames");
 
         // And via a different route: through seconds and back.
-        let (through_audio, _) = b.rescale(Rate::AUDIO_48K, Rounding::Nearest);
-        let (back, _) = through_audio.rescale(*rate, Rounding::Nearest);
+        let (through_audio, _) = b.rescale_checked(Rate::AUDIO_48K, Rounding::Nearest);
+        let (back, _) = through_audio.rescale_checked(*rate, Rounding::Nearest);
         assert_eq!(
             back, b,
             "{name}: a round trip changed a value the engine would re-store"
@@ -281,11 +274,11 @@ fn recomputing_the_same_duration_compares_equal() {
 fn addition_is_commutative_across_mixed_rates() {
     for (a_name, a_rate) in RATES {
         for (b_name, b_rate) in AUDIO {
-            let a = ExactTime::from_frames(1, *a_rate);
-            let b = ExactTime::from_frames(1, *b_rate);
+            let a = RationalTime::exact(1, *a_rate);
+            let b = RationalTime::exact(1, *b_rate);
             assert_eq!(
-                a.add(&b),
-                b.add(&a),
+                a.checked_add(&b),
+                b.checked_add(&a),
                 "{a_name} + {b_name} is not commutative"
             );
         }
@@ -294,30 +287,33 @@ fn addition_is_commutative_across_mixed_rates() {
 
 #[test]
 fn addition_is_associative_across_mixed_rates() {
-    let a = ExactTime::from_frames(1, Rate::F23_976);
-    let b = ExactTime::from_frames(1, Rate::AUDIO_48K);
-    let c = ExactTime::from_frames(1, Rate::F25);
-    assert_eq!(a.add(&b).add(&c), a.add(&b.add(&c)));
+    let a = RationalTime::exact(1, Rate::F23_976);
+    let b = RationalTime::exact(1, Rate::AUDIO_48K);
+    let c = RationalTime::exact(1, Rate::F25);
+    assert_eq!(
+        a.checked_add(&b).checked_add(&c),
+        a.checked_add(&b.checked_add(&c))
+    );
 }
 
 /// Accumulating 3600 clips of 24 frames at 23.976 into a 30 fps track gave
 /// 108107.999999997 under floats, which floored to 108107 instead of 108108.
 #[test]
 fn accumulated_addition_does_not_drift() {
-    let clip = ExactTime::from_frames(24, Rate::F23_976);
-    let mut total = ExactTime::zero(Rate::F23_976);
+    let clip = RationalTime::exact(24, Rate::F23_976);
+    let mut total = RationalTime::zero(Rate::F23_976);
     for _ in 0..3_600 {
-        total = total.add(&clip);
+        total = total.checked_add(&clip);
     }
     assert_eq!(
-        total.value(),
+        total.ticks(),
         3_600 * 24,
         "accumulation drifted at the source rate"
     );
 
     let expected_seconds = 3_600.0 * 24.0 * 1001.0 / 24_000.0;
     assert!(
-        (total.as_seconds_f64() - expected_seconds).abs() < 1e-6,
+        (total.to_seconds() - expected_seconds).abs() < 1e-6,
         "accumulated duration is wrong"
     );
 }
@@ -325,10 +321,10 @@ fn accumulated_addition_does_not_drift() {
 #[test]
 fn subtraction_inverts_addition_at_every_rate() {
     for (name, rate) in RATES.iter().chain(AUDIO.iter()) {
-        let a = ExactTime::from_frames(1234, *rate);
-        let b = ExactTime::from_frames(567, *rate);
-        assert_eq!(a.add(&b).sub(&b), a, "{name}");
-        assert_eq!(a.sub(&b).add(&b), a, "{name}");
+        let a = RationalTime::exact(1234, *rate);
+        let b = RationalTime::exact(567, *rate);
+        assert_eq!(a.checked_add(&b).checked_sub(&b), a, "{name}");
+        assert_eq!(a.checked_sub(&b).checked_add(&b), a, "{name}");
     }
 }
 
@@ -340,18 +336,18 @@ fn subtraction_inverts_addition_at_every_rate() {
 #[test]
 fn negative_time_orders_and_converts_correctly() {
     for (name, rate) in RATES {
-        let neg = ExactTime::from_frames(-10, *rate);
-        let zero = ExactTime::zero(*rate);
+        let neg = RationalTime::exact(-10, *rate);
+        let zero = RationalTime::zero(*rate);
         assert!(neg < zero, "{name}: negative time did not order below zero");
-        assert_eq!(neg.neg().value(), 10);
-        let (audio, _) = neg.rescale(Rate::AUDIO_48K, Rounding::Nearest);
-        let (back, _) = audio.rescale(*rate, Rounding::Nearest);
+        assert_eq!(neg.negated().ticks(), 10);
+        let (audio, _) = neg.rescale_checked(Rate::AUDIO_48K, Rounding::Nearest);
+        let (back, _) = audio.rescale_checked(*rate, Rounding::Nearest);
         assert_eq!(
-            back.value(),
+            back.ticks(),
             -10,
             "{name}: negative time lost in a round trip"
         );
-        assert!(audio < ExactTime::zero(Rate::AUDIO_48K));
+        assert!(audio < RationalTime::zero(Rate::AUDIO_48K));
     }
 }
 
@@ -359,19 +355,23 @@ fn negative_time_orders_and_converts_correctly() {
 /// opposite way from its positive twin and a cut moves by a frame.
 #[test]
 fn rounding_is_symmetric_about_zero() {
-    let half_frame_up = ExactTime::new(1, Rate::whole(48).unwrap()); // 1/48 s
-    let (near, _) = half_frame_up.rescale(Rate::F24, Rounding::Nearest);
-    let (near_neg, _) = half_frame_up.neg().rescale(Rate::F24, Rounding::Nearest);
-    assert_eq!(near.value(), 1, "a half frame should round away from zero");
-    assert_eq!(near_neg.value(), -1, "and its negative should mirror it");
+    let half_frame_up = RationalTime::exact(1, Rate::whole(48).unwrap()); // 1/48 s
+    let (near, _) = half_frame_up.rescale_checked(Rate::F24, Rounding::Nearest);
+    let (near_neg, _) = half_frame_up
+        .negated()
+        .rescale_checked(Rate::F24, Rounding::Nearest);
+    assert_eq!(near.ticks(), 1, "a half frame should round away from zero");
+    assert_eq!(near_neg.ticks(), -1, "and its negative should mirror it");
 
-    let (floor_pos, _) = half_frame_up.rescale(Rate::F24, Rounding::Floor);
-    let (ceil_pos, _) = half_frame_up.rescale(Rate::F24, Rounding::Ceil);
-    assert_eq!(floor_pos.value(), 0);
-    assert_eq!(ceil_pos.value(), 1);
+    let (floor_pos, _) = half_frame_up.rescale_checked(Rate::F24, Rounding::Floor);
+    let (ceil_pos, _) = half_frame_up.rescale_checked(Rate::F24, Rounding::Ceil);
+    assert_eq!(floor_pos.ticks(), 0);
+    assert_eq!(ceil_pos.ticks(), 1);
     // Floor must go toward negative infinity, not toward zero.
-    let (floor_neg, _) = half_frame_up.neg().rescale(Rate::F24, Rounding::Floor);
-    assert_eq!(floor_neg.value(), -1, "floor must not truncate toward zero");
+    let (floor_neg, _) = half_frame_up
+        .negated()
+        .rescale_checked(Rate::F24, Rounding::Floor);
+    assert_eq!(floor_neg.ticks(), -1, "floor must not truncate toward zero");
 }
 
 /// A conversion that cannot be exact must say so. Silently rounding is how
@@ -379,18 +379,18 @@ fn rounding_is_symmetric_about_zero() {
 #[test]
 fn an_inexact_conversion_reports_itself() {
     // One audio sample at 48 kHz is far shorter than a frame at 24 fps.
-    let sample = ExactTime::from_frames(1, Rate::AUDIO_48K);
-    let (_, exact) = sample.rescale(Rate::F24, Rounding::Nearest);
+    let sample = RationalTime::exact(1, Rate::AUDIO_48K);
+    let (_, exact) = sample.rescale_checked(Rate::F24, Rounding::Nearest);
     assert!(
         !exact,
         "one sample is not a whole frame; the caller must be told"
     );
 
     // A whole second is exact in both.
-    let second = ExactTime::from_frames(48_000, Rate::AUDIO_48K);
-    let (frames, exact) = second.rescale(Rate::F24, Rounding::Nearest);
+    let second = RationalTime::exact(48_000, Rate::AUDIO_48K);
+    let (frames, exact) = second.rescale_checked(Rate::F24, Rounding::Nearest);
     assert!(exact, "one second is exactly 24 frames");
-    assert_eq!(frames.value(), 24);
+    assert_eq!(frames.ticks(), 24);
 }
 
 // ---------------------------------------------------------------------------
@@ -401,36 +401,36 @@ fn an_inexact_conversion_reports_itself() {
 /// which is precisely why floats lose it. The cycle closes every 5 frames.
 #[test]
 fn ntsc_video_and_audio_align_exactly_every_five_frames() {
-    let five_frames = ExactTime::from_frames(5, Rate::F29_97);
-    let (samples, exact) = five_frames.rescale(Rate::AUDIO_48K, Rounding::Nearest);
+    let five_frames = RationalTime::exact(5, Rate::F29_97);
+    let (samples, exact) = five_frames.rescale_checked(Rate::AUDIO_48K, Rounding::Nearest);
     assert!(
         exact,
         "5 frames at 29.97 is a whole number of 48 kHz samples"
     );
     assert_eq!(
-        samples.value(),
+        samples.ticks(),
         8008,
         "5 frames at 29.97 is 8008 samples at 48 kHz"
     );
 
     // One frame is not.
     let (one, exact_one) =
-        ExactTime::from_frames(1, Rate::F29_97).rescale(Rate::AUDIO_48K, Rounding::Nearest);
+        RationalTime::exact(1, Rate::F29_97).rescale_checked(Rate::AUDIO_48K, Rounding::Nearest);
     assert!(!exact_one);
-    assert_eq!(one.value(), 1602, "1601.6 rounds to 1602");
+    assert_eq!(one.ticks(), 1602, "1601.6 rounds to 1602");
 }
 
 #[test]
 fn audio_rates_interconvert_exactly_where_they_can() {
-    let second_48 = ExactTime::from_frames(48_000, Rate::AUDIO_48K);
-    let (at_96, exact) = second_48.rescale(Rate::AUDIO_96K, Rounding::Nearest);
+    let second_48 = RationalTime::exact(48_000, Rate::AUDIO_48K);
+    let (at_96, exact) = second_48.rescale_checked(Rate::AUDIO_96K, Rounding::Nearest);
     assert!(exact);
-    assert_eq!(at_96.value(), 96_000);
+    assert_eq!(at_96.ticks(), 96_000);
 
     // 44.1k and 48k share no convenient factor, but a whole second is exact.
-    let (at_441, exact) = second_48.rescale(Rate::AUDIO_44100, Rounding::Nearest);
+    let (at_441, exact) = second_48.rescale_checked(Rate::AUDIO_44100, Rounding::Nearest);
     assert!(exact);
-    assert_eq!(at_441.value(), 44_100);
+    assert_eq!(at_441.ticks(), 44_100);
 }
 
 // ---------------------------------------------------------------------------
@@ -439,12 +439,12 @@ fn audio_rates_interconvert_exactly_where_they_can() {
 
 #[test]
 fn non_drop_timecode_labels_are_correct() {
-    let t = ExactTime::from_frames(24 * 3600 + 24 * 60 * 2 + 24 * 3 + 5, Rate::F24);
+    let t = RationalTime::exact(24 * 3600 + 24 * 60 * 2 + 24 * 3 + 5, Rate::F24);
     assert_eq!(t.to_timecode(), "01:02:03:05");
-    assert_eq!(ExactTime::zero(Rate::F24).to_timecode(), "00:00:00:00");
+    assert_eq!(RationalTime::zero(Rate::F24).to_timecode(), "00:00:00:00");
     // 23.976 labels count in whole frames of 24, like every NTSC rate.
     assert_eq!(
-        ExactTime::from_frames(24, Rate::F23_976).to_timecode(),
+        RationalTime::exact(24, Rate::F23_976).to_timecode(),
         "00:00:01:00"
     );
 }
@@ -454,7 +454,7 @@ fn non_drop_timecode_labels_are_correct() {
 #[test]
 fn drop_frame_labels_follow_the_smpte_rule() {
     let tc = |f: i64| {
-        ExactTime::from_frames(f, Rate::F29_97)
+        RationalTime::exact(f, Rate::F29_97)
             .to_drop_frame_timecode()
             .expect("29.97 supports drop frame")
     };
@@ -482,21 +482,21 @@ fn drop_frame_labels_follow_the_smpte_rule() {
 #[test]
 fn drop_frame_is_refused_where_it_is_undefined() {
     // Drop frame has no meaning at exact rates or at 25.
-    assert!(ExactTime::from_frames(0, Rate::F30)
+    assert!(RationalTime::exact(0, Rate::F30)
         .to_drop_frame_timecode()
         .is_none());
-    assert!(ExactTime::from_frames(0, Rate::F25)
+    assert!(RationalTime::exact(0, Rate::F25)
         .to_drop_frame_timecode()
         .is_none());
-    assert!(ExactTime::from_frames(0, Rate::F24)
+    assert!(RationalTime::exact(0, Rate::F24)
         .to_drop_frame_timecode()
         .is_none());
     // 23.976 is NTSC but its nominal 24 is not a multiple of 30.
-    assert!(ExactTime::from_frames(0, Rate::F23_976)
+    assert!(RationalTime::exact(0, Rate::F23_976)
         .to_drop_frame_timecode()
         .is_none());
     // 59.94 is.
-    assert!(ExactTime::from_frames(0, Rate::F59_94)
+    assert!(RationalTime::exact(0, Rate::F59_94)
         .to_drop_frame_timecode()
         .is_some());
 }
@@ -554,12 +554,12 @@ fn legacy_float_rates_recover_their_exact_form() {
 #[test]
 fn serialization_round_trips_exactly() {
     for (name, rate) in RATES.iter().chain(AUDIO.iter()) {
-        let t = ExactTime::from_frames(107_892, *rate);
+        let t = RationalTime::exact(107_892, *rate);
         let json = serde_json::to_string(&t).expect("serialize");
-        let back: ExactTime = serde_json::from_str(&json).expect("deserialize");
+        let back: RationalTime = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, t, "{name} did not survive serialization");
-        assert_eq!(back.value(), t.value());
-        assert_eq!(back.rate(), t.rate());
+        assert_eq!(back.ticks(), t.ticks());
+        assert_eq!(back.rate_exact(), t.rate_exact());
         // The rate must persist as integers, not as a decimal.
         assert!(
             !json.contains("29.97") && !json.contains("23.976"),

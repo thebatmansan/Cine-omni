@@ -194,7 +194,17 @@ fn placeholders_follow_the_script() {
             assert!(g.has_edge(*clip, *line, EdgeKind::SyncedTo));
             assert_eq!(ucg::clips_synced_to(&g, *line), vec![*clip]);
             let range = n.get(attrs::RANGE).and_then(Value::as_range).unwrap();
-            assert_eq!(range.start_time.rate_hz(), 24.0);
+            // Times are exact integer ticks, so a start that falls between
+            // frames is stored at an integer multiple of the scene's 24 fps
+            // rather than rounded onto the frame grid — which would move a
+            // dialogue clip by up to 20 ms. What matters is the instant, and
+            // that is asserted to a nanosecond just below; the storage rate
+            // only has to be recognisably derived from the scene's.
+            let rate = range.start_time.rate_hz();
+            assert!(
+                rate >= 24.0 && ((rate / 24.0) - (rate / 24.0).round()).abs() < 1e-9,
+                "clip {i} is stored at {rate} Hz, which is not a multiple of the scene's 24 fps"
+            );
             let (start, dur) = range.to_seconds();
             assert!(
                 (start - cursor).abs() < 1e-9,
