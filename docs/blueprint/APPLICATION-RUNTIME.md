@@ -169,8 +169,60 @@ behave differently depending on how it was called.
 | Stale-lock reclamation | 🟢 VERIFIED |
 | Port fallback | 🟢 VERIFIED |
 | Path-traversal refusal on static files | 🟢 VERIFIED — including symlink escape |
+| Crash recovery | 🟢 VERIFIED — see §8 |
 | Authentication / authorisation | 🔴 NOT IMPLEMENTED — loopback only is the whole of the security model |
 | Reconnect with state resync | 🔴 NOT IMPLEMENTED — a client that drops must reload |
 | Per-client permissions or roles | 🔴 NOT IMPLEMENTED |
 | Conflict resolution between clients | 🔴 NOT IMPLEMENTED — last write wins within one engine, which is coherent but not collaborative |
 | TLS | 🔴 NOT IMPLEMENTED |
+
+---
+
+## 8. Crash recovery
+
+Every commit is appended to the op log as it happens, so durability does not
+depend on anyone remembering to save. A snapshot is written on a clean
+shutdown; between snapshots the log is the record.
+
+**Tested by actually killing the process.** A crash test that calls a shutdown
+function tests the shutdown function. `crates/cine-runtime/tests/crash_recovery.rs`
+spawns the real binary, edits a project through its WebSocket API *without
+saving*, sends `SIGKILL` — uncatchable, so no handler runs and no snapshot is
+written — and starts it again. It first asserts the op log is newer than the
+snapshot, so a run where the edits happened to have been saved cannot pass
+vacuously.
+
+| Guarantee | State |
+|---|---|
+| Committed edits survive a `SIGKILL` | 🟢 VERIFIED — recovered from the op log alone |
+| A lock the dead process could not release is reclaimed | 🟢 VERIFIED — a crash never makes a project permanently unopenable |
+| A record torn by an interrupted write is discarded | 🟢 VERIFIED |
+| …and **reported**, not silently swallowed | 🟢 VERIFIED |
+
+The report matters. Recovery used to discard a partial record without a word,
+which tells the user nothing happened when something did. Startup now says:
+
+```
+      recovered 11 operation(s) from the op log
+      NOTE: the previous session ended mid-write. A partial record
+            of 114 bytes was discarded -- it was never a completed
+            transaction, so nothing committed has been lost.
+```
+
+The distinction the recovery makes is deliberate: a **torn tail** is the last
+line of the last segment, which is what an interrupted append leaves, and
+discarding it loses nothing that was ever committed. Corruption *anywhere else*
+has valid records after it, which means something other than a crash, and that
+fails loudly instead.
+
+### What is not covered
+
+`append_delta` writes without `fsync`. A killed process cannot lose data — the
+bytes are already in the page cache and the kernel outlives it — but a **power
+failure or kernel panic** can lose recent commits. That is a different
+guarantee, needs `sync_all` per append, and would cost a disk round trip on
+every edit. Not done, and not claimed.
+
+Autosave is currently "append every commit", which is durable but never
+compacts until a clean save. A long session without one grows the log
+indefinitely. Checkpoint policy is 🔵 PLANNED.

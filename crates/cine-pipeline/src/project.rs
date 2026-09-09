@@ -91,6 +91,18 @@ impl OmniProject {
         Ok(root)
     }
 
+    /// What replaying the op log had to tolerate when this project was opened.
+    ///
+    /// A torn tail means the previous session ended mid-write. Callers should
+    /// report it rather than let a project quietly open having discarded a
+    /// partial record.
+    pub fn recovery(&self) -> ucg_core::OplogReport {
+        self.disk
+            .as_ref()
+            .map(|d| d.recovery.clone())
+            .unwrap_or_default()
+    }
+
     pub fn save(&self) -> Result<()> {
         if let Some(d) = &self.disk {
             d.save()?;

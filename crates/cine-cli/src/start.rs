@@ -103,6 +103,26 @@ pub fn run(opts: StartOptions) -> Result<(), Box<dyn std::error::Error>> {
         stats.revision, stats.nodes, stats.edges
     );
 
+    // Recovery is reported, never silent. A torn tail means the last session
+    // ended mid-write -- killed, or the machine lost power -- and a project
+    // that opens without saying so tells the user nothing happened when
+    // something did.
+    let recovery = project.recovery();
+    if recovery.recovered > 0 {
+        eprintln!(
+            "      recovered {} operation(s) from the op log",
+            recovery.recovered
+        );
+    }
+    if let Some(torn) = &recovery.torn_tail {
+        eprintln!(
+            "      NOTE: the previous session ended mid-write. A partial record\n\
+             \x20           of {} bytes was discarded -- it was never a completed\n\
+             \x20           transaction, so nothing committed has been lost.",
+            torn.len()
+        );
+    }
+
     eprintln!("[2/5] locating UI");
     let ui_dir = if opts.serve_ui {
         find_ui_dir(&dir)

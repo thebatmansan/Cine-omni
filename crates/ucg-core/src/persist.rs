@@ -109,6 +109,13 @@ pub struct Project {
     pub path: PathBuf,
     pub manifest: Manifest,
     pub engine: Arc<Engine>,
+    /// What replaying the op log had to tolerate when this project was opened.
+    ///
+    /// Kept rather than discarded because a torn tail means the last session
+    /// ended mid-write -- the process was killed or the machine lost power --
+    /// and silently swallowing that tells the user nothing happened when
+    /// something did. A caller is expected to report it.
+    pub recovery: OplogReport,
 }
 
 impl Project {
@@ -130,6 +137,8 @@ impl Project {
             path,
             manifest,
             engine,
+            // A new project has no history to recover.
+            recovery: OplogReport::default(),
         };
         p.save()?;
         Ok(p)
@@ -149,7 +158,7 @@ impl Project {
             Graph::new()
         };
         let engine = Arc::new(Engine::with_graph(graph));
-        let all = read_oplog(&Self::oplog_dir(&path), 0)?;
+        let (all, recovery) = read_oplog_with_report(&Self::oplog_dir(&path), 0)?;
         let pending: Vec<Delta> = all
             .iter()
             .filter(|d| d.revision > manifest.snapshot_revision)
@@ -162,6 +171,7 @@ impl Project {
             path,
             manifest,
             engine,
+            recovery,
         })
     }
 
