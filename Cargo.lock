@@ -410,6 +410,7 @@ dependencies = [
  "cine-color",
  "cine-comp",
  "cine-logistics",
+ "cine-media",
  "cine-previs",
  "cine-script",
  "cine-timeline",

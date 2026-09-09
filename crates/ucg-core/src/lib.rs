@@ -18,6 +18,7 @@
 
 pub mod engine;
 pub mod error;
+pub mod exact_time;
 pub mod graph;
 pub mod id;
 pub mod node;
@@ -28,6 +29,7 @@ pub mod value;
 
 pub use engine::{ChangeSet, Engine, EngineLimits, EngineStats, Plan, Reactor, UndoGroup};
 pub use error::{Result, UcgError};
+pub use exact_time::{ExactTime, Rate, Rounding};
 pub use graph::Graph;
 pub use id::EntityId;
 pub use node::{Edge, EdgeKind, Node, NodeKind};

@@ -22,3 +22,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# Test-only: the end-to-end film fixture wires real media into the graph. The
+# production dependency graph is deliberately unchanged -- cine-pipeline owns
+# reactors, not media decoding.
+cine-media.workspace = true

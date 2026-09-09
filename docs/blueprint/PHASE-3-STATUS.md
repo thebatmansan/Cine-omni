@@ -135,8 +135,11 @@ argument for the evidence discipline, not against it.
 | Deterministic CI regression gates | Yes | 🟢 VERIFIED | Assert work done, not wall-clock: stable on any machine |
 | Bounded op log | Yes | 🟢 VERIFIED | Gate derives its workload from the configured limit |
 | Reactor convergence / idempotence | Yes | 🟢 VERIFIED | Gated |
-| Exact time in `ucg-core` | Yes | 🟠 **Architectural defect** | `RationalTime` is `{value: f64, rate: f64}` — float. `cine-media` has the exact model; 221 references across 10 crates still use the float one |
+| Exact time in `ucg-core` | Yes | 🟡 PARTIAL — migration underway | The exact core (`ucg_core::exact_time`) is landed and proven by 25 adversarial tests across every rate. **It has no callers yet**: stages 0 and 1 of five are done. `RationalTime` is still `{f64, f64}` and still the type in use, so the defect is still live. See `EXACT-TIME-MIGRATION.md` |
 | Application shell | Yes | 🟡 PARTIAL | `cine-shell` opens a real window and presents real decoded frames with frame stepping. No docking UI, no transport, no playback clock |
+| One-command startup | Yes | 🟢 VERIFIED | `cine start` — see `APPLICATION-RUNTIME.md` |
+| One runtime, many clients | Yes | 🟢 VERIFIED | Two clients over real sockets, neither diverging |
+| Script → shot → take → media chain | Yes | 🟢 VERIFIED | `film_fixture`: real media, propagation, captured-data preservation, save and reopen |
 | Collaboration | Yes | 🔵 PLANNED | |
 
 ---
@@ -207,7 +210,7 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 
 | Defect | Impact | Evidence |
 |---|---|---|
-| `ucg-core::RationalTime` is float-based | Wrong frames and failed equality at NTSC rates; two time models in one project | 221 references across 10 crates; `cine-media` has the exact model |
+| `ucg-core::RationalTime` is float-based | Wrong frames and failed equality at NTSC rates. **It is a live engine bug, not only editorial**: `Tx::set` decides reactor idempotence with `f64` equality, so a recomputed time that is arithmetically identical can compare unequal, emit an operation for a value that did not change, dirty everything downstream, and append to the op log forever | Measured: 12.1% wrong frames and 24.2% equality failures over 200,000 frames at 23.976↔25, first wrong frame at 27. The exact replacement exists and passes 25 adversarial tests; the migration is at stage 1 of 5 |
 | ~~`true_peak_dbtp()` reads 0.3–0.5 dB high~~ | **Withdrawn — the attribution was wrong** | An exact Whittaker–Shannon reconstruction (zero-padded DFT, verified exact to 1e-6 dB on single-bin sinusoids) settles which meter is right. cine-audio was already within 0.05 dB of truth; **`ebur128` was the one under-reading**, by up to 0.238 dB. Two real defects were found in the same function and fixed instead: a 4× grid too coarse to resolve inter-sample peaks (−0.301 dB worst case on a phase sweep, outside the EBU budget before filter error is even counted) and a resampler recomputing sinc weights per frame at 578× the cost of an arithmetic pass. Now −0.094 dB worst case at 104×. |
 | `cine-audio::render` at 114.6% of budget | Cannot meet a real-time deadline | 12.228 ms vs 10.667 ms, 48 stereo tracks |
 | Full-band true peak under-reads | A reading on deliberately full-band material is not a delivery pass | Inherent to any oversampling meter (BS.1770 Annex 2, Attachment 1). Measured: cine-audio 1.0–1.5 dB low, `ebur128` 1.4–1.9 dB low. Documented on the function |
@@ -246,6 +249,11 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 ## 8. What may and may not be claimed today
 
 **May be claimed**, with evidence:
+* One command (`cine start`) brings up the application, and a second terminal
+  attaches to it rather than corrupting the project
+* One runtime serving many clients with no divergence
+* A screenplay edit propagating to derived work while captured takes survive,
+  across a save and reopen, with real media
 * A real window presenting real decoded H.264 frames through a GPU colour
   conversion, on real hardware, with the colour interpretation labelled as
   assumed rather than stated
