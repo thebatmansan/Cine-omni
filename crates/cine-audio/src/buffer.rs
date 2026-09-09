@@ -482,14 +482,148 @@ impl AudioBuffer {
         block_loudness(&mean_z(&rel_gated), &weights)
     }
 
-    /// True-peak level in dBTP using 4× oversampling (BS.1770-4 Annex 2).
+    /// True-peak level in dBTP per ITU-R BS.1770 Annex 2 — oversample,
+    /// rectify, take the maximum. (Annex 2 is unchanged by the -5 revision of
+    /// November 2023, which only added Annex 4, for object-based audio; the
+    /// true-peak algorithm has not moved since -4.)
+    ///
+    /// The signal is oversampled to at least 384 kHz: 8× at 44.1 and 48 kHz,
+    /// 4× at 96 kHz. Annex 2 puts the floor at 192 kHz, but 192 kHz is not
+    /// enough on its own — a peak can land half a grid step away from every
+    /// grid point, which on a 20 kHz tone costs
+    /// `20·log10(cos(π·20000/192000))` = 0.47 dB of under-read from grid
+    /// coarseness alone, past the −0.4 dBTP EBU Tech 3341 allows for the whole
+    /// meter. Doubling the grid takes the measured worst case to 0.09 dB.
+    /// Attachment 1 to Annex 2 says the same thing: higher ratios are
+    /// preferred.
+    ///
+    /// The interpolator is a 16-tap Hann-windowed sinc. Annex 2's tabulated
+    /// order-48 filter is *one* set of coefficients that "would satisfy the
+    /// requirements", and the Recommendation admits any method giving similar
+    /// or superior results — so the claim is only worth what it is measured
+    /// against. `tests/true_peak_oracle.rs` measures it against the exact
+    /// Whittaker–Shannon reconstruction of the samples, which is what true
+    /// peak *is*, rather than against another meter.
+    ///
+    /// **Measured error** against that reconstruction: within **0.05 dB** on
+    /// programme material band-limited to 20 kHz, and within **0.10 dB** on a
+    /// worst-case-phase tone at any frequency up to 20 kHz. On material
+    /// carrying energy right up to Nyquist it **under-reads by up to 1.5 dB**,
+    /// as every oversampling meter does — the shortfall Attachment 1
+    /// describes. A reading on deliberately full-band material is not a
+    /// delivery pass.
     pub fn true_peak_dbtp(&self) -> f32 {
-        if self.data.is_empty() {
+        let frames = self.frames();
+        if frames == 0 || self.sample_rate == 0 {
             return f32::NEG_INFINITY;
         }
-        let up = self.resample(self.sample_rate.saturating_mul(4).max(1));
-        lin_to_db(up.peak().max(self.peak()))
+        // Phase 0 of the interpolator is a unit impulse, so the sample peak is
+        // already that phase's answer: seed the search with it and skip it.
+        let mut best = self.peak();
+        let factor = true_peak_oversampling(self.sample_rate);
+        if factor < 2 {
+            return lin_to_db(best);
+        }
+        let phases = true_peak_phases(factor);
+        // Kernel L1 norm: |y| can never exceed it times the largest sample the
+        // kernel can reach, which is what lets whole blocks be skipped.
+        let l1 = phases
+            .iter()
+            .map(|w| w.iter().map(|v| v.abs()).sum::<f32>())
+            .fold(0.0f32, f32::max);
+        const BLOCK: usize = 64;
+        for c in 0..self.channels {
+            let plane = self.channel(c);
+            let mut start = 0;
+            while start < frames {
+                let end = (start + BLOCK).min(frames);
+                let lo = start.saturating_sub(TP_HALF);
+                let hi = (end + TP_HALF).min(frames);
+                let local = plane[lo..hi].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+                if local * l1 > best {
+                    for n in start..end {
+                        if n + 1 >= TP_HALF && n + TP_HALF < frames {
+                            let win = &plane[n + 1 - TP_HALF..n + 1 + TP_HALF];
+                            for w in &phases[1..] {
+                                let mut acc = 0.0f32;
+                                for (wv, x) in w.iter().zip(win) {
+                                    acc += wv * x;
+                                }
+                                best = best.max(acc.abs());
+                            }
+                        } else {
+                            for w in &phases[1..] {
+                                let mut acc = 0.0f32;
+                                for (wi, wv) in w.iter().enumerate() {
+                                    let idx = n as i64 + wi as i64 - TP_HALF as i64 + 1;
+                                    if idx >= 0 && (idx as usize) < frames {
+                                        acc += wv * plane[idx as usize];
+                                    }
+                                }
+                                best = best.max(acc.abs());
+                            }
+                        }
+                    }
+                }
+                start = end;
+            }
+        }
+        lin_to_db(best)
     }
+}
+
+/// Taps in the true-peak interpolation kernel, and half that.
+const TP_TAPS: usize = 16;
+const TP_HALF: usize = TP_TAPS / 2;
+
+/// Oversampling factor for a true-peak meter at `rate`: the smallest power of
+/// two reaching 384 kHz, twice the floor BS.1770 Annex 2 sets, for the reason
+/// given on `true_peak_dbtp`. The work is self-limiting — `rate * factor`
+/// always lands in [384 kHz, 768 kHz) — so a low-rate buffer needs no cap to
+/// stay cheap.
+fn true_peak_oversampling(rate: u32) -> usize {
+    let mut factor = 1usize;
+    while (rate as u64) * (factor as u64) < 384_000 {
+        factor *= 2;
+    }
+    factor
+}
+
+/// The `factor` polyphase branches of a Hann-windowed sinc interpolator.
+/// Branch `p` reconstructs the signal `p / factor` of a sample after each
+/// sample instant; branch 0 is a unit impulse.
+fn true_peak_phases(factor: usize) -> Vec<[f32; TP_TAPS]> {
+    (0..factor)
+        .map(|p| {
+            let frac = p as f64 / factor as f64;
+            let mut w = [0.0f32; TP_TAPS];
+            let mut sum = 0.0f64;
+            let mut raw = [0.0f64; TP_TAPS];
+            for (wi, r) in raw.iter_mut().enumerate() {
+                let x = (wi as i64 - TP_HALF as i64 + 1) as f64 - frac;
+                let sinc = if x.abs() < 1e-9 {
+                    1.0
+                } else {
+                    (PI * x).sin() / (PI * x)
+                };
+                let win = if x.abs() >= TP_HALF as f64 {
+                    0.0
+                } else {
+                    0.5 * (1.0 + (PI * x / TP_HALF as f64).cos())
+                };
+                *r = sinc * win;
+                sum += *r;
+            }
+            // Normalise to unit DC gain so the branches agree with each other
+            // on a steady signal; the window's truncation otherwise leaves each
+            // branch a slightly different fraction short.
+            let norm = if sum.abs() > 1e-12 { 1.0 / sum } else { 1.0 };
+            for (dst, r) in w.iter_mut().zip(raw) {
+                *dst = (r * norm) as f32;
+            }
+            w
+        })
+        .collect()
 }
 
 fn mean_square(x: &[f32]) -> f64 {

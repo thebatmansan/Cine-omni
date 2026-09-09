@@ -3,6 +3,17 @@
 Rust workspace (`crates/*`) + TypeScript UI (`ui/`). Read `docs/ARCHITECTURE.md`
 and `docs/MODULE-CONVENTIONS.md` before changing module code.
 
+## Run the application
+```
+cine start                 # from a project directory — this is the ONE command
+cine start /path/to/proj   # a project elsewhere
+```
+`cine start` opens the project, serves the UI and the WebSocket API from one
+process, and owns the project lock. A second `cine start` in the same directory
+attaches to the running one rather than starting a rival — two runtimes would
+interleave two op logs and corrupt the history. See
+`docs/blueprint/APPLICATION-RUNTIME.md`.
+
 ## Build & test
 ```
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"   # this machine: rustup + zig linker
@@ -31,3 +42,9 @@ cd ui && npm test && npm run build
   `docs/blueprint/PHASE-2-MEDIA-ENGINE.md` before touching it.
 * Media tests use real files and `need!` to skip loudly when absent. A media
   test that quietly passes with no media is worse than no test.
+* JSON-RPC lives in `cine-runtime::rpc` and nowhere else. Both transports
+  (`cine start` over WebSocket, `cine serve` over stdio) dispatch through it;
+  adding a method to one transport only recreates the two-truths defect.
+* A cross-check is not an oracle. When two implementations disagree, adjudicate
+  against something exact before deciding which is wrong — the true-peak
+  "defect" was real divergence with the blame reversed.

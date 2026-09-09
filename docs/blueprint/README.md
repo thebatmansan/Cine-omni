@@ -97,6 +97,12 @@ every cascade. The fix is small and the baseline to verify it is committed.
 
 ## Phase 3
 
+- [`APPLICATION-RUNTIME.md`](APPLICATION-RUNTIME.md) — `cine start`: the one
+  command, the shared-runtime architecture, what a second terminal does, and
+  the lifecycle guarantees.
+- [`EXACT-TIME-MIGRATION.md`](EXACT-TIME-MIGRATION.md) — the float-time defect
+  measured, the canonical exact type, and the staged migration.
+
 - [`PHASE-3-STATUS.md`](PHASE-3-STATUS.md) — **start here.** Status vocabulary,
   the capability / research / licence / decision matrices, the defects fixed and
   the defects still open, and what may and may not be claimed today.

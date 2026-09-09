@@ -13,6 +13,7 @@ members = [
     "crates/cine-audio",
     "crates/cine-gpu",
     "crates/cine-pipeline",
+    "crates/cine-runtime",
     "crates/cine-shell",
     "crates/cine-cli",
 ]
@@ -61,6 +62,7 @@ cine-color = { path = "crates/cine-color" }
 cine-audio = { path = "crates/cine-audio" }
 cine-gpu = { path = "crates/cine-gpu" }
 cine-pipeline = { path = "crates/cine-pipeline" }
+cine-runtime = { path = "crates/cine-runtime" }
 
 [profile.release]
 opt-level = 3

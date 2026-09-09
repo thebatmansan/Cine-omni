@@ -1,4 +1,14 @@
-// WebSocket ⇄ stdio bridge: each browser client gets one `cine serve` daemon.
+// SUPERSEDED — kept only for `vite dev` against a stdio daemon.
+//
+// The application runtime is now `cine start`, which serves this UI and its
+// WebSocket API itself from one process. Use that:
+//
+//     cine start /path/to/project
+//
+// This bridge spawns ONE `cine serve` PER BROWSER CLIENT, so two windows get
+// two engines and two op logs and silently diverge. That is the defect
+// `cine start` exists to fix. Do not use it for real work.
+//
 // Usage: node server/bridge.mjs <project-dir> [--port 7331] [--bin path/to/cine]
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";

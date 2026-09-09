@@ -5,7 +5,24 @@ import { Viewport } from "./panels/Viewport";
 import { CascadePanel } from "./panels/CascadePanel";
 import { InspectorPanel } from "./panels/InspectorPanel";
 
-const BRIDGE_URL = (import.meta as any).env?.VITE_CINE_BRIDGE ?? "ws://localhost:7331";
+// The runtime serves this page and its API from the same origin, so the socket
+// address is derived rather than configured — the runtime may have moved to
+// another port if 7331 was busy, and a hard-coded default would then connect to
+// nothing (or, worse, to a different project's runtime).
+//
+// VITE_CINE_BRIDGE overrides it for `vite dev`, where the page is served by
+// vite on 5173 and the runtime is elsewhere.
+function runtimeUrl(): string {
+  const override = (import.meta as any).env?.VITE_CINE_BRIDGE;
+  if (override) return override;
+  if (typeof window !== "undefined" && window.location?.host) {
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${scheme}://${window.location.host}/ws`;
+  }
+  return "ws://127.0.0.1:7331/ws";
+}
+
+const BRIDGE_URL = runtimeUrl();
 
 export function App() {
   const client = useMemo(() => new RpcClient(BRIDGE_URL), []);

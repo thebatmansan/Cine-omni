@@ -14,6 +14,7 @@ path = "src/main.rs"
 ucg-core.workspace = true
 ucg-schema.workspace = true
 cine-pipeline.workspace = true
+cine-runtime.workspace = true
 cine-script.workspace = true
 cine-previs.workspace = true
 cine-logistics.workspace = true
@@ -24,6 +25,8 @@ cine-audio.workspace = true
 cine-gpu.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Orderly shutdown: the project lock must run its destructor on Ctrl-C.
+ctrlc = "3"
 
 [features]
 default = []

@@ -1,0 +1,28 @@
+[package]
+name = "cine-runtime"
+description = "The CINE-OMNI application runtime: one project, one engine, many clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ucg-core.workspace = true
+ucg-schema.workspace = true
+cine-pipeline.workspace = true
+cine-script.workspace = true
+cine-previs.workspace = true
+cine-logistics.workspace = true
+cine-timeline.workspace = true
+cine-media.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+
+# The WebSocket handshake is specified in terms of SHA-1 and base64. These are
+# the whole of the protocol's cryptographic surface; a full async stack would be
+# a large dependency for a job the standard library and two small crates do.
+sha1 = "0.11"
+base64 = "0.23"

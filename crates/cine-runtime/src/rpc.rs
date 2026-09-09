@@ -1,0 +1,354 @@
+//! JSON-RPC 2.0 dispatch — the single implementation both transports share.
+//!
+//! `cine serve` speaks this over stdio and the runtime speaks it over
+//! WebSocket. Keeping one dispatch means a method cannot exist on one transport
+//! and not the other, and cannot behave differently between them.
+
+use cine_pipeline::OmniProject;
+use serde_json::{json, Value as J};
+use ucg_core::prelude::*;
+use ucg_schema::{attrs, kinds};
+
+pub type RpcResult = std::result::Result<J, String>;
+
+/// A parsed request. `id` absent means a notification, which takes no reply.
+pub struct Request {
+    pub id: Option<J>,
+    pub method: String,
+    pub params: J,
+}
+
+impl Request {
+    pub fn parse(line: &str) -> std::result::Result<Request, String> {
+        let v: J = serde_json::from_str(line).map_err(|e| e.to_string())?;
+        let method = v
+            .get("method")
+            .and_then(J::as_str)
+            .ok_or_else(|| "missing `method`".to_string())?
+            .to_string();
+        Ok(Request {
+            id: v.get("id").cloned(),
+            method,
+            params: v.get("params").cloned().unwrap_or(J::Null),
+        })
+    }
+}
+
+pub fn ok_response(id: &J, result: J) -> String {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
+}
+
+pub fn error_response(id: &J, code: i64, message: &str) -> String {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
+}
+
+/// A change notification, as pushed to every connected client.
+pub fn change_notification(cs: &ucg_core::ChangeSet) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "changed",
+        "params": {
+            "revision": cs.revision(),
+            "label": cs.delta.label,
+            "depth": cs.depth(),
+            "touched": cs.touched,
+            "dirty": cs.dirty.len(),
+        }
+    })
+    .to_string()
+}
+
+fn entity(params: &J, key: &str) -> std::result::Result<EntityId, String> {
+    params
+        .get(key)
+        .and_then(J::as_str)
+        .and_then(EntityId::parse)
+        .ok_or_else(|| format!("missing entity param `{key}`"))
+}
+
+fn str_param<'a>(params: &'a J, key: &str) -> std::result::Result<&'a str, String> {
+    params
+        .get(key)
+        .and_then(J::as_str)
+        .ok_or_else(|| format!("missing param `{key}`"))
+}
+
+pub fn first_document(p: &OmniProject) -> Option<EntityId> {
+    p.engine
+        .read()
+        .of_kind(kinds::SCRIPT_DOCUMENT)
+        .first()
+        .map(|n| n.id)
+}
+
+/// The whole project as text: statistics, every scene's derived artefacts, and
+/// the schedule. Used by the CLI and by the `report` method.
+pub fn full_report(p: &OmniProject) -> String {
+    let mut out = String::new();
+    let stats = p.engine.stats();
+    out.push_str(&format!(
+        "revision {} — {} nodes, {} edges, {} reactors\n",
+        stats.revision,
+        stats.nodes,
+        stats.edges,
+        p.engine.reactor_names().len()
+    ));
+    let mut kinds: Vec<_> = stats.by_kind.iter().collect();
+    kinds.sort();
+    for (k, n) in kinds {
+        out.push_str(&format!("  {k:<28}{n:>6}\n"));
+    }
+    if let Some(doc) = first_document(p) {
+        for scene in p.scenes(doc) {
+            out.push_str(&p.scene_report(scene));
+        }
+        let g = p.engine.read();
+        if let Some(schedule) = cine_logistics::graph::read_schedule(&g, doc) {
+            out.push_str("\nSCHEDULE\n");
+            out.push_str(&schedule.to_markdown());
+        }
+    }
+    out
+}
+
+/// Render one of the project's export formats.
+pub fn export(
+    p: &OmniProject,
+    what: &str,
+    scene: Option<usize>,
+) -> std::result::Result<String, String> {
+    let doc = first_document(p).ok_or_else(|| "no screenplay imported".to_string())?;
+    Ok(match what {
+        "fountain" => p.export_fountain(doc).map_err(|x| x.to_string())?,
+        "fdx" => p.export_fdx(doc).map_err(|x| x.to_string())?,
+        "usda" => {
+            let s = *p
+                .scenes(doc)
+                .get(scene.unwrap_or(0))
+                .ok_or_else(|| "scene index out of range".to_string())?;
+            p.export_usda(s).map_err(|x| x.to_string())?
+        }
+        "otio" => {
+            let t = p
+                .engine
+                .read()
+                .of_kind(kinds::NLE_TIMELINE)
+                .first()
+                .map(|n| n.id)
+                .ok_or_else(|| "no timeline imported".to_string())?;
+            p.export_otio(t).map_err(|x| x.to_string())?
+        }
+        "breakdown" => {
+            let g = p.engine.read();
+            cine_logistics::breakdown::to_markdown(&cine_logistics::breakdown::breakdown_document(
+                &g, doc,
+            ))
+        }
+        "schedule" => {
+            let g = p.engine.read();
+            cine_logistics::graph::read_schedule(&g, doc)
+                .map(|s| s.to_markdown())
+                .unwrap_or_else(|| "no schedule".into())
+        }
+        "callsheets" => {
+            let g = p.engine.read();
+            let schedule = EntityId::derived(doc, kinds::LOGISTICS_SCHEDULE);
+            let mut out = String::new();
+            for day in g.children(schedule) {
+                if let Some(sheet) = cine_logistics::graph::read_call_sheet(&g, day) {
+                    out.push_str(&sheet.to_markdown());
+                    out.push('\n');
+                }
+            }
+            out
+        }
+        other => return Err(format!("unknown export `{other}`")),
+    })
+}
+
+pub fn cascade_json(group: &UndoGroup) -> J {
+    json!({
+        "label": group.label,
+        "deltas": group.deltas.iter().map(|d| json!({
+            "revision": d.revision, "label": d.label, "depth": d.depth, "ops": d.ops.len()
+        })).collect::<Vec<_>>()
+    })
+}
+
+/// Dispatch one call against the shared project.
+///
+/// Read guards are scoped inside each arm: the engine's lock is not reentrant,
+/// and holding one across a `transact` deadlocks.
+pub fn dispatch(p: &OmniProject, method: &str, params: &J) -> RpcResult {
+    Ok(match method {
+        "stats" => serde_json::to_value(p.engine.stats()).map_err(|x| x.to_string())?,
+        "node" => {
+            let id = entity(params, "id")?;
+            let g = p.engine.read();
+            let n = g.require(id).map_err(|x| x.to_string())?;
+            json!({
+                "id": n.id,
+                "kind": n.kind,
+                "attrs": n.attrs.iter().map(|(k, v)| (k.clone(), v.to_json()))
+                    .collect::<serde_json::Map<_, _>>(),
+                "children": g.children(id),
+                "edges_out": g.out_edges(id),
+                "edges_in": g.in_edges(id),
+            })
+        }
+        "kind" => {
+            let kind = str_param(params, "kind")?;
+            let g = p.engine.read();
+            serde_json::to_value(
+                g.of_kind(kind)
+                    .iter()
+                    .map(|n| json!({ "id": n.id, "name": n.name() }))
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|x| x.to_string())?
+        }
+        "scenes" => {
+            let doc = first_document(p).ok_or("no screenplay imported")?;
+            let g = p.engine.read();
+            serde_json::to_value(
+                p.scenes(doc)
+                    .into_iter()
+                    .filter_map(|s| {
+                        let n = g.node(s)?;
+                        Some(json!({
+                            "id": s,
+                            "heading": n.get_str(attrs::HEADING),
+                            "number": n.get_str(attrs::SCENE_NUMBER),
+                            "words": n.get_int(attrs::WORDS),
+                            "eighths": n.get_int(attrs::PAGE_EIGHTHS),
+                            "est_duration_s": n.get_float(attrs::EST_DURATION_S),
+                            "lines": p.dialogue_lines(s),
+                        }))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|x| x.to_string())?
+        }
+        "report" => J::String(full_report(p)),
+        "scene_report" => J::String(p.scene_report(entity(params, "scene")?)),
+        "export" => {
+            let what = str_param(params, "what")?;
+            let scene = params.get("scene").and_then(J::as_u64).map(|v| v as usize);
+            J::String(export(p, what, scene)?)
+        }
+        "set" => {
+            let id = entity(params, "id")?;
+            let key = str_param(params, "key")?.to_string();
+            let value = Value::from_json(params.get("value").cloned().unwrap_or(J::Null));
+            let group = p
+                .engine
+                .transact(&format!("set {key}"), |tx| tx.set(id, &key, value))
+                .map_err(|x| x.to_string())?;
+            cascade_json(&group)
+        }
+        "edit_dialogue" => {
+            let line = entity(params, "line")?;
+            let text = str_param(params, "text")?;
+            cascade_json(&p.edit_dialogue(line, text).map_err(|x| x.to_string())?)
+        }
+        "import_fountain" => {
+            let text = str_param(params, "text")?;
+            let key = params
+                .get("key")
+                .and_then(J::as_str)
+                .unwrap_or("script.fountain");
+            serde_json::to_value(p.import_fountain(text, key).map_err(|x| x.to_string())?)
+                .map_err(|x| x.to_string())?
+        }
+        "undo" => cascade_json(&p.engine.undo().map_err(|x| x.to_string())?),
+        "redo" => cascade_json(&p.engine.redo().map_err(|x| x.to_string())?),
+        "save" => {
+            p.save().map_err(|x| x.to_string())?;
+            J::Bool(true)
+        }
+        "validate" => {
+            serde_json::to_value(p.engine.read().validate()).map_err(|x| x.to_string())?
+        }
+        "shutdown" => J::Bool(true),
+        other => return Err(format!("unknown method `{other}`")),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cine_pipeline::ProjectSetup;
+
+    fn project() -> OmniProject {
+        OmniProject::new(ProjectSetup::default()).expect("project")
+    }
+
+    #[test]
+    fn a_request_without_an_id_is_a_notification() {
+        let n = Request::parse(r#"{"jsonrpc":"2.0","method":"ping"}"#).unwrap();
+        assert!(n.id.is_none(), "a notification takes no reply");
+        let c = Request::parse(r#"{"jsonrpc":"2.0","id":4,"method":"stats"}"#).unwrap();
+        assert_eq!(c.id, Some(json!(4)));
+    }
+
+    #[test]
+    fn malformed_input_is_reported_rather_than_ignored() {
+        assert!(Request::parse("not json").is_err());
+        assert!(
+            Request::parse(r#"{"jsonrpc":"2.0","id":1}"#).is_err(),
+            "no method"
+        );
+    }
+
+    #[test]
+    fn an_unknown_method_names_itself_in_the_error() {
+        let p = project();
+        let err = dispatch(&p, "teleport", &J::Null).unwrap_err();
+        assert!(
+            err.contains("teleport"),
+            "the error must name the method: {err}"
+        );
+    }
+
+    #[test]
+    fn a_missing_entity_parameter_names_the_parameter() {
+        let p = project();
+        let err = dispatch(&p, "node", &json!({})).unwrap_err();
+        assert!(err.contains("id"), "{err}");
+    }
+
+    #[test]
+    fn stats_reports_the_engine_revision() {
+        let p = project();
+        let before = dispatch(&p, "stats", &J::Null).unwrap();
+        p.engine
+            .transact("touch", |tx| tx.set(p.root, "notes", "x"))
+            .unwrap();
+        let after = dispatch(&p, "stats", &J::Null).unwrap();
+        assert!(
+            after["revision"].as_u64() > before["revision"].as_u64(),
+            "a commit must move the revision the clients track"
+        );
+    }
+
+    /// The dispatch must not hold a read guard across a transaction; if it did,
+    /// this would deadlock rather than fail.
+    #[test]
+    fn a_write_method_completes_without_deadlocking() {
+        let p = project();
+        let result = dispatch(
+            &p,
+            "set",
+            &json!({ "id": p.root.to_string(), "key": "notes", "value": "hello" }),
+        )
+        .unwrap();
+        assert!(result["deltas"].as_array().is_some_and(|d| !d.is_empty()));
+    }
+
+    #[test]
+    fn responses_carry_the_request_id_back() {
+        assert!(ok_response(&json!(9), json!(true)).contains("\"id\":9"));
+        let err = error_response(&json!("abc"), -32000, "boom");
+        assert!(err.contains("\"id\":\"abc\"") && err.contains("boom"));
+    }
+}

@@ -114,7 +114,18 @@ impl fmt::Debug for TimeBase {
 /// Comparison and arithmetic between timestamps in different bases is done by
 /// cross-multiplying in `i128`, so it is exact and cannot overflow for any
 /// realistic media duration.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Equality, ordering and hashing are all by **value**, never by
+/// representation. One second is one second whether it is stored as 48000
+/// ticks of 1/48000 or 90000 ticks of 1/90000.
+///
+/// This cannot be derived. A derived `PartialEq` compares `(ticks, base)`
+/// structurally, which would disagree with the exact `Ord` below: the same
+/// instant in two bases would be `Ordering::Equal` and yet `!=`, and would hash
+/// differently. That breaks the contract the standard library relies on, so a
+/// `BTreeMap` and a `HashMap` keyed on the same instants would disagree about
+/// whether they contain it, and `sort_unstable` followed by `dedup` would leave
+/// duplicates behind.
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Timestamp {
     ticks: i64,
     base: TimeBase,
@@ -146,6 +157,26 @@ impl Timestamp {
             self.ticks as i128 * self.base.num as i128,
             self.base.den as i128,
         )
+    }
+
+    /// The instant as a fraction of a second in lowest terms, with the sign
+    /// carried on the numerator. This is the canonical form: two timestamps are
+    /// the same instant exactly when their reduced fractions are identical.
+    fn as_reduced_fraction(&self) -> (i128, i128) {
+        let (mut n, mut d) = self.as_fraction();
+        // A denominator is always positive here, but normalise anyway so the
+        // canonical form cannot depend on how the base was constructed.
+        if d < 0 {
+            n = -n;
+            d = -d;
+        }
+        if n == 0 {
+            // Every representation of zero must reduce to the same pair, or
+            // zero at two bases would hash differently.
+            return (0, 1);
+        }
+        let g = gcd128(n.unsigned_abs(), d.unsigned_abs()) as i128;
+        (n / g, d / g)
     }
 
     /// Convert to another base, rounding to nearest and away from zero on ties.
@@ -215,6 +246,38 @@ impl Timestamp {
             ticks: t,
             base: self.base,
         })
+    }
+}
+
+/// Greatest common divisor in 128 bits, for reducing a fraction to lowest
+/// terms. Distinct from the `u64` `gcd` above because `ticks * base.num` can
+/// reach 2^95 and would overflow the narrower one.
+fn gcd128(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a.max(1)
+}
+
+impl PartialEq for Timestamp {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Timestamp {}
+
+impl std::hash::Hash for Timestamp {
+    /// Hash the value in lowest terms, so that two representations of the same
+    /// instant land in the same bucket. Hashing `(ticks, base)` would put
+    /// 1 s @ 48 kHz and 1 s @ 90 kHz in different buckets while `==` said they
+    /// were the same key.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let (n, d) = self.as_reduced_fraction();
+        n.hash(state);
+        d.hash(state);
     }
 }
 
@@ -538,5 +601,114 @@ mod tests {
         let one_sample = Timestamp::new(1, TimeBase::AUDIO_48K);
         assert!(!one_sample.is_exact_in(TimeBase::MILLIS));
         assert_eq!(one_sample.rescale(TimeBase::MILLIS).ticks(), 0);
+    }
+}
+
+#[cfg(test)]
+mod value_identity_tests {
+    use super::*;
+    use std::collections::{BTreeSet, HashSet};
+
+    /// The same instant expressed in two bases must be equal, order equal, and
+    /// hash equal. Deriving any one of the three breaks the other two.
+    #[test]
+    fn one_second_is_one_second_in_any_base() {
+        let a = Timestamp::new(48_000, TimeBase::from_rate(48_000).unwrap());
+        let b = Timestamp::new(90_000, TimeBase::from_rate(90_000).unwrap());
+        let c = Timestamp::new(24, TimeBase::from_rate(24).unwrap());
+
+        assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
+        assert_eq!(a, b, "equality must agree with ordering");
+        assert_eq!(a, c);
+
+        let hash = |t: &Timestamp| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            t.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash(&a), hash(&b), "equal values must hash equally");
+        assert_eq!(hash(&a), hash(&c));
+    }
+
+    /// The defect in practice: a set keyed on instants must not hold the same
+    /// instant twice merely because it arrived in a different base.
+    #[test]
+    fn a_hash_set_and_a_btree_set_agree_about_membership() {
+        let a = Timestamp::new(48_000, TimeBase::from_rate(48_000).unwrap());
+        let b = Timestamp::new(90_000, TimeBase::from_rate(90_000).unwrap());
+
+        let hash_set: HashSet<Timestamp> = [a, b].into_iter().collect();
+        let btree_set: BTreeSet<Timestamp> = [a, b].into_iter().collect();
+        assert_eq!(hash_set.len(), 1, "the same instant twice is one entry");
+        assert_eq!(
+            hash_set.len(),
+            btree_set.len(),
+            "a HashMap and a BTreeMap must not disagree about the same key"
+        );
+        assert!(hash_set.contains(&b) && btree_set.contains(&b));
+    }
+
+    #[test]
+    fn zero_is_the_same_instant_at_every_base() {
+        let bases = [48_000u32, 90_000, 24, 12_288];
+        let zeros: HashSet<Timestamp> = bases
+            .iter()
+            .map(|r| Timestamp::new(0, TimeBase::from_rate(*r).unwrap()))
+            .collect();
+        assert_eq!(zeros.len(), 1, "zero must not depend on its base");
+    }
+
+    #[test]
+    fn different_instants_remain_different() {
+        let a = Timestamp::new(48_000, TimeBase::from_rate(48_000).unwrap());
+        let b = Timestamp::new(48_001, TimeBase::from_rate(48_000).unwrap());
+        assert_ne!(a, b);
+        assert!(a < b);
+        let set: HashSet<Timestamp> = [a, b].into_iter().collect();
+        assert_eq!(
+            set.len(),
+            2,
+            "value equality must not collapse distinct instants"
+        );
+    }
+
+    /// Sorting then de-duplicating must actually de-duplicate.
+    #[test]
+    fn sort_and_dedup_removes_duplicate_instants_across_bases() {
+        let mut v = vec![
+            Timestamp::new(90_000, TimeBase::from_rate(90_000).unwrap()),
+            Timestamp::new(48_000, TimeBase::from_rate(48_000).unwrap()),
+            Timestamp::new(0, TimeBase::from_rate(24).unwrap()),
+        ];
+        v.sort_unstable();
+        v.dedup();
+        assert_eq!(v.len(), 2, "one second appeared twice and should collapse");
+    }
+
+    /// Negative time is legitimate (a handle before a clip's start), and must
+    /// obey the same rules.
+    #[test]
+    fn negative_instants_compare_and_hash_by_value() {
+        let a = Timestamp::new(-48_000, TimeBase::from_rate(48_000).unwrap());
+        let b = Timestamp::new(-90_000, TimeBase::from_rate(90_000).unwrap());
+        assert_eq!(a, b);
+        assert!(a < Timestamp::new(0, TimeBase::from_rate(24).unwrap()));
+        let set: HashSet<Timestamp> = [a, b].into_iter().collect();
+        assert_eq!(set.len(), 1);
+    }
+
+    /// NTSC bases are the ones that matter most and are the least forgiving.
+    #[test]
+    fn ntsc_frame_and_audio_bases_agree_on_a_shared_instant() {
+        // One second at 24000/1001 fps is 24000/1001 frames — not an integer,
+        // so use two seconds' worth of a common instant instead: 1001 frames
+        // at 24000/1001 is exactly 1001*1001/24000 s.
+        let frames = Timestamp::new(24_000, TimeBase::new(1001, 24_000).unwrap());
+        let seconds = Timestamp::new(1001, TimeBase::from_rate(1).unwrap());
+        assert_eq!(
+            frames, seconds,
+            "24000 frames at 24000/1001 fps is 1001 seconds"
+        );
     }
 }

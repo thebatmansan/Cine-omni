@@ -43,7 +43,15 @@ without it.
 | 7 | P3-limited HDR output silently answered with the Rec.2020-limited transform | Silent wrong colour | 🟢 Fixed |
 
 Defects 1, 2 and 3 share a shape worth naming: **each produced a confident,
-plausible, wrong answer rather than an error.** That is the failure mode this
+plausible, wrong answer rather than an error.**
+
+A later finding turned the same lesson on the project's own records. The
+true-peak defect logged in Phase 3 was itself a confident, plausible, wrong
+answer: it had been established by comparing against `ebur128` and assuming the
+reference was right. Adjudicating both against an exact reconstruction showed
+the divergence was real but the blame reversed. **A cross-check is not an
+oracle**, and a defect report deserves the same standard of evidence as a
+capability claim. That is the failure mode this
 project's rules exist to prevent, and finding three of them in one pass is the
 argument for the evidence discipline, not against it.
 
@@ -115,7 +123,7 @@ argument for the evidence discipline, not against it.
 | Shot → take → media traceability | Yes | 🟡 PARTIAL | Takes now survive shot-list regeneration; full production model designed, not built |
 | Offload verification state machine | Yes | 🔵 PLANNED | Designed: `discovered → copying → copied → verifying → verified`, `failed` absorbing |
 | Loudness (EBU R128 / BS.1770) | Yes | 🟢 VERIFIED | `lufs_integrated` agrees with `ebur128` to **0.000 LU** across five signals including 5.1 |
-| True-peak metering | Yes | 🟠 **Known wrong** | Reads **0.3–0.5 dB high** on programme material. Not yet fixed |
+| True-peak metering | Yes | 🟢 VERIFIED | Within **0.05 dB** of an exact Whittaker–Shannon reconstruction oracle on band-limited programme material, and inside EBU Tech 3341's +0.2/−0.4 dBTP window. The earlier "reads 0.3–0.5 dB high" finding was **misattributed** — see §6 |
 | Real-time audio | Yes | 🟠 **Known inadequate** | One 512-frame block of 48 stereo tracks takes **12.228 ms against a 10.667 ms budget (114.6%)** |
 | Plugin hosting | Yes | 🔵 PLANNED | CLAP and VST3 now both viable — see §5 |
 | Sample-accurate splices | Yes | 🟢 VERIFIED | Reproduced the defect at 29.97 and fixed it |
@@ -200,8 +208,9 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 | Defect | Impact | Evidence |
 |---|---|---|
 | `ucg-core::RationalTime` is float-based | Wrong frames and failed equality at NTSC rates; two time models in one project | 221 references across 10 crates; `cine-media` has the exact model |
-| `true_peak_dbtp()` reads 0.3–0.5 dB high | Delivery QC would pass material that fails | Cross-checked against `ebur128`; existing test passes only because a 1 kHz sine happens to agree |
+| ~~`true_peak_dbtp()` reads 0.3–0.5 dB high~~ | **Withdrawn — the attribution was wrong** | An exact Whittaker–Shannon reconstruction (zero-padded DFT, verified exact to 1e-6 dB on single-bin sinusoids) settles which meter is right. cine-audio was already within 0.05 dB of truth; **`ebur128` was the one under-reading**, by up to 0.238 dB. Two real defects were found in the same function and fixed instead: a 4× grid too coarse to resolve inter-sample peaks (−0.301 dB worst case on a phase sweep, outside the EBU budget before filter error is even counted) and a resampler recomputing sinc weights per frame at 578× the cost of an arithmetic pass. Now −0.094 dB worst case at 104×. |
 | `cine-audio::render` at 114.6% of budget | Cannot meet a real-time deadline | 12.228 ms vs 10.667 ms, 48 stereo tracks |
+| Full-band true peak under-reads | A reading on deliberately full-band material is not a delivery pass | Inherent to any oversampling meter (BS.1770 Annex 2, Attachment 1). Measured: cine-audio 1.0–1.5 dB low, `ebur128` 1.4–1.9 dB low. Documented on the function |
 | `cine-comp::hashes()` superlinear, on every evaluation | 53 ms at 2,001 nodes | Third occurrence of "derived value recomputed in a hot loop" |
 | `cine-comp::evaluate_roi` returns the full frame | ROI plumbing saves nothing and fragments the cache | 64×64 request returned 16.7M floats |
 | `cine-comp::resize` bilinear at all scales | 0.25 max abs error vs a box reference at 8× reduction | |

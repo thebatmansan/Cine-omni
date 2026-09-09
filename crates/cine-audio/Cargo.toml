@@ -18,3 +18,8 @@ uuid.workspace = true
 rustfft.workspace = true
 rayon.workspace = true
 glam.workspace = true
+
+[dev-dependencies]
+# Test-only oracle: the reference EBU R128 / ITU-R BS.1770 implementation.
+# Never a runtime dependency — cine-audio's meters must stand on their own.
+ebur128 = "0.1"
