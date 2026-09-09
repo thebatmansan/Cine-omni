@@ -372,10 +372,10 @@ impl RationalTime {
     /// only for NTSC rates whose nominal rate is a multiple of 30, and `None`
     /// elsewhere rather than a plausible wrong answer.
     pub fn to_drop_frame_timecode(&self) -> Option<String> {
-        let nominal = self.rate.timecode_rate();
-        if !self.rate.is_ntsc() || !nominal.is_multiple_of(30) {
+        if !self.rate.supports_drop_frame() {
             return None;
         }
+        let nominal = self.rate.timecode_rate();
         // Frames of the 29.97 signal, not of a nominal 30 fps clock.
         let frames = self.value;
         let neg = frames < 0;

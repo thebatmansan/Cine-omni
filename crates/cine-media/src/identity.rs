@@ -20,7 +20,7 @@
 //! UUID scheme the UCG already has.
 
 use crate::error::{Error, Result};
-use crate::time::{FrameRate, TimeBase, Timecode};
+use crate::time::{Rate, Timecode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -200,7 +200,7 @@ pub struct StreamInfo {
     /// Codec as a stable lowercase token, e.g. `h264`, `aac`, `pcm_s16le`.
     pub codec: String,
     /// The stream's own time base. Never normalised away on ingest.
-    pub time_base: TimeBase,
+    pub time_base: Rate,
     /// Duration in `time_base` ticks, when the container states it.
     pub duration_ticks: Option<i64>,
     pub video: Option<VideoStreamInfo>,
@@ -237,7 +237,7 @@ pub struct VideoStreamInfo {
     pub height: u32,
     /// Nominal rate. `None` when the container does not state one, or when the
     /// stream is genuinely variable-frame-rate.
-    pub frame_rate: Option<FrameRate>,
+    pub frame_rate: Option<Rate>,
     /// Number of coded frames, when the container's sample table gives it.
     pub frame_count: Option<u64>,
     /// True when frame durations are not constant. Editorial must conform this.

@@ -46,7 +46,10 @@ cd ui && npm test && npm run build
   (`cine start` over WebSocket, `cine serve` over stdio) dispatch through it;
   adding a method to one transport only recreates the two-truths defect.
 * Time is `ucg_core::RationalTime`: integer ticks at an exact rational `Rate`.
-  There is exactly one time model. Never construct a rate from a decimal
+  There is exactly one time model — `cine-media` re-exports it rather than
+  defining a second. Note the historical trap: the old media `TimeBase` was a
+  *period*, so `TimeBase::new(1, 48000)` meant 48 kHz; `Rate` is a *rate*, so
+  the equivalent is `Rate::whole(48000)`. Never construct a rate from a decimal
   (`29.97` is not `30000/1001`), never derive a scale factor by dividing two
   rates, and never reach for `f64` seconds except to display. `rescale_checked`
   reports whether a conversion was exact — ignoring that flag is a choice to

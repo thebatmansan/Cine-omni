@@ -193,11 +193,11 @@ impl FrameCache {
 mod tests {
     use super::*;
     use crate::frame::AudioFrame;
-    use crate::time::TimeBase;
+    use crate::time::Rate;
 
     fn frame(samples: usize, pts_ticks: i64) -> Arc<Frame> {
         Arc::new(Frame::Audio(AudioFrame {
-            pts: Timestamp::new(pts_ticks, TimeBase::AUDIO_48K),
+            pts: Timestamp::exact(pts_ticks, Rate::AUDIO_48K),
             sample_rate: 48_000,
             channels: vec![Arc::new(vec![0.5; samples]), Arc::new(vec![0.5; samples])],
         }))

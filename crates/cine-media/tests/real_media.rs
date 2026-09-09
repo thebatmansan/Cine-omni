@@ -10,7 +10,7 @@
 //! * a real RIFF/WAVE file from the system
 
 use cine_media::identity::{ContentHash, StreamKind};
-use cine_media::time::{FrameRate, TimeBase, Timestamp};
+use cine_media::time::{Rate, Rounding, Timestamp};
 use cine_media::{probe, Error, MediaReader};
 use std::path::{Path, PathBuf};
 
@@ -66,9 +66,9 @@ fn probes_a_real_mp4_and_reports_streams_truthfully() {
     let v = video.video.expect("video stream info");
     assert_eq!((v.width, v.height), (720, 1280));
     assert_eq!(v.frame_count, Some(240), "10s at 24fps");
-    assert_eq!(v.frame_rate, Some(FrameRate::F24));
+    assert_eq!(v.frame_rate, Some(Rate::F24));
     // The stream keeps its own time base; it is not normalised on ingest.
-    assert_eq!(video.time_base, TimeBase::from_rate(12_288).unwrap());
+    assert_eq!(video.time_base, Rate::whole(12_288).unwrap());
 
     let audio = info.first_audio().expect("mp4 has an audio track");
     assert_eq!(audio.codec, "aac");
@@ -322,12 +322,12 @@ fn video_seek_is_frame_accurate_and_deterministic() {
     assert!(back.pts < sought.pts);
 
     // A seek past the end is not a crash and not a fabricated frame.
-    let past_end = Timestamp::new(i64::from(u32::MAX), reader.time_base());
+    let past_end = Timestamp::exact(i64::from(u32::MAX), reader.time_base());
     assert!(
         reader.frame_at(past_end).unwrap().is_some(),
         "clamps to the last frame"
     );
-    let before_start = Timestamp::new(-1, reader.time_base());
+    let before_start = Timestamp::exact(-1, reader.time_base());
     assert!(
         reader.frame_at(before_start).unwrap().is_none(),
         "nothing exists before zero"
@@ -414,16 +414,16 @@ fn seeks_frame_accurately_in_real_media() {
     let base = reader.audio_time_base();
 
     // Five seconds in, expressed exactly in the audio stream's own base.
-    let target = Timestamp::new(5 * 48_000, base);
+    let target = Timestamp::exact(5 * 48_000, base);
     let frame = reader
         .decode_audio_at(target)
         .expect("seek and decode")
         .expect("media is 10s long, so 5s exists");
 
     // The returned frame must *contain* the target instant.
-    let start = frame.pts.rescale(base).ticks();
+    let start = frame.pts.rescale_checked(base, Rounding::Nearest).0.ticks();
     let end = start + frame.frame_count() as i64;
-    let want = target.rescale(base).ticks();
+    let want = target.rescale_checked(base, Rounding::Nearest).0.ticks();
     assert!(
         start <= want && want < end,
         "frame [{start}, {end}) must contain the requested sample {want}"
@@ -434,7 +434,7 @@ fn seeks_frame_accurately_in_real_media() {
     assert_eq!(again.pts, frame.pts, "seek must be deterministic");
 
     // Seeking backwards works too.
-    let earlier = Timestamp::new(48_000, base);
+    let earlier = Timestamp::exact(48_000, base);
     let f = reader.decode_audio_at(earlier).unwrap().unwrap();
     assert!(f.pts < frame.pts, "seeking backwards must actually go back");
 }

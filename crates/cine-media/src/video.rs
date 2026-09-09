@@ -27,7 +27,7 @@ use crate::error::{Error, Result};
 use crate::frame::{ColorMetadata, VideoFrame};
 use crate::identity::{MediaFile, StreamKind};
 use crate::probe::decodable_codecs;
-use crate::time::{TimeBase, Timestamp};
+use crate::time::{Rate, Rounding, Timestamp};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -51,7 +51,7 @@ pub struct VideoReader {
     info: MediaFile,
     mp4: mp4::Mp4Reader<BufReader<File>>,
     track_id: u32,
-    time_base: TimeBase,
+    time_base: Rate,
     nal_length_size: usize,
     /// Sample table in decode order.
     samples: Vec<SampleEntry>,
@@ -170,7 +170,7 @@ impl VideoReader {
     }
 
     /// The track's own time base. Nothing is normalised on ingest.
-    pub fn time_base(&self) -> TimeBase {
+    pub fn time_base(&self) -> Rate {
         self.time_base
     }
 
@@ -182,7 +182,7 @@ impl VideoReader {
     /// Presentation timestamp of the frame at `display_index`.
     pub fn pts_at(&self, display_index: usize) -> Option<Timestamp> {
         let i = *self.display_order.get(display_index)?;
-        Some(Timestamp::new(self.samples[i].pts, self.time_base))
+        Some(Timestamp::exact(self.samples[i].pts, self.time_base))
     }
 
     /// Read one sample's payload and wrap it as an Annex-B packet.
@@ -195,8 +195,8 @@ impl VideoReader {
             .ok_or(Error::FrameNotIndexed(i64::from(entry.id)))?;
         Ok(Packet {
             data: avcc_to_annex_b(&sample.bytes, self.nal_length_size)?,
-            pts: Timestamp::new(entry.pts, self.time_base),
-            dts: Timestamp::new(entry.dts, self.time_base),
+            pts: Timestamp::exact(entry.pts, self.time_base),
+            dts: Timestamp::exact(entry.dts, self.time_base),
             is_keyframe: entry.is_sync,
         })
     }
@@ -250,7 +250,10 @@ impl VideoReader {
 
     /// Index in decode order of the sample presenting at or before `target`.
     fn sample_for(&self, target: Timestamp) -> Option<usize> {
-        let ticks = target.rescale(self.time_base).ticks();
+        let ticks = target
+            .rescale_checked(self.time_base, Rounding::Nearest)
+            .0
+            .ticks();
         // Walk display order, which is sorted by pts, and take the last frame
         // whose presentation time has already begun.
         let mut best = None;

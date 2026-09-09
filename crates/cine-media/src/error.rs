@@ -5,7 +5,7 @@
 //! that moved. Nothing here silently degrades — a failure to decode is an error
 //! the caller must handle, never a black frame pretending to be picture.
 
-use crate::time::FrameRate;
+use crate::time::Rate;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -65,7 +65,7 @@ pub enum Error {
     #[error("invalid timecode `{0}`")]
     InvalidTimecode(String),
     #[error("drop-frame timecode is not defined for {0:?}")]
-    DropFrameUnsupported(FrameRate),
+    DropFrameUnsupported(Rate),
     #[error("seek to {target} is outside the media range {start}..{end}")]
     SeekOutOfRange {
         target: String,

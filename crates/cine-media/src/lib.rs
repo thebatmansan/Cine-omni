@@ -40,5 +40,5 @@ pub use identity::{
 };
 pub use probe::probe;
 pub use reader::MediaReader;
-pub use time::{FrameRate, TimeBase, Timecode, Timestamp};
+pub use time::{Rate, Rounding, Timecode, Timestamp};
 pub use video::VideoReader;

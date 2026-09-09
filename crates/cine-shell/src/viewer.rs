@@ -174,13 +174,13 @@ fn planes_as_f32(frame: &VideoFrame) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>)> {
 mod tests {
     use super::*;
     use cine_media::frame::{AlphaMode, ColorMetadata, PixelFormat};
-    use cine_media::time::{TimeBase, Timestamp};
+    use cine_media::time::{Rate, Timestamp};
     use std::sync::Arc;
 
     fn frame(width: u32, height: u32, color: ColorMetadata) -> VideoFrame {
         let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
         VideoFrame {
-            pts: Timestamp::new(0, TimeBase::new(1, 24).unwrap()),
+            pts: Timestamp::exact(0, Rate::F24),
             frame_index: None,
             timecode: None,
             width,

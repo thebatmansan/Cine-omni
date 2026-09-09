@@ -149,6 +149,15 @@ impl Rate {
         (self.num + self.den / 2) / self.den
     }
 
+    /// Whether SMPTE drop-frame labelling is defined for this rate.
+    ///
+    /// Drop-frame exists to stop an NTSC label drifting against the wall clock,
+    /// by skipping two frame *numbers* a minute (four at 59.94). It has no
+    /// meaning at an exact rate — there is nothing to drift — and none at 25.
+    pub fn supports_drop_frame(&self) -> bool {
+        self.is_ntsc() && self.timecode_rate().is_multiple_of(30)
+    }
+
     /// Recover a rate from a float, if it is recognisably one of the standard
     /// ones. This is a *migration* aid for reading old float-based data, not a
     /// constructor for new values.

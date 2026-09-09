@@ -18,7 +18,7 @@ use crate::error::{Error, Result};
 use crate::frame::AudioFrame;
 use crate::identity::{MediaFile, StreamKind};
 use crate::probe::{decodable_codecs, is_decodable};
-use crate::time::{TimeBase, Timestamp};
+use crate::time::{Rate, Rounding, Timestamp};
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ pub struct MediaReader {
     /// Lazily constructed decoder for the selected audio stream.
     audio_decoder: Option<Box<dyn Decoder>>,
     audio_track_id: Option<u32>,
-    audio_time_base: TimeBase,
+    audio_time_base: Rate,
 }
 
 impl MediaReader {
@@ -67,11 +67,11 @@ impl MediaReader {
                 let tb = t
                     .codec_params
                     .time_base
-                    .and_then(|tb| TimeBase::new(tb.numer, tb.denom).ok())
-                    .unwrap_or(TimeBase::AUDIO_48K);
+                    .and_then(|tb| Rate::new(tb.denom, tb.numer))
+                    .unwrap_or(Rate::AUDIO_48K);
                 (Some(t.id), tb)
             })
-            .unwrap_or((None, TimeBase::AUDIO_48K));
+            .unwrap_or((None, Rate::AUDIO_48K));
 
         Ok(MediaReader {
             info,
@@ -92,7 +92,7 @@ impl MediaReader {
     }
 
     /// The time base of the decodable audio stream.
-    pub fn audio_time_base(&self) -> TimeBase {
+    pub fn audio_time_base(&self) -> Rate {
         self.audio_time_base
     }
 
@@ -183,7 +183,7 @@ impl MediaReader {
             if packet.track_id() != track_id {
                 continue;
             }
-            let pts = Timestamp::new(packet.ts() as i64, base);
+            let pts = Timestamp::exact(packet.ts() as i64, base);
             let decoder = self.decoder()?;
             match decoder.decode(&packet) {
                 Ok(buf) => return Ok(Some(to_audio_frame(buf, pts))),
@@ -211,7 +211,11 @@ impl MediaReader {
     /// what [`MediaReader::decode_audio_at`] does.
     pub fn seek_audio(&mut self, target: Timestamp) -> Result<Timestamp> {
         let base = self.audio_time_base;
-        let ts = target.rescale(base).ticks().max(0) as u64;
+        let ts = target
+            .rescale_checked(base, Rounding::Nearest)
+            .0
+            .ticks()
+            .max(0) as u64;
         let seeked = self
             .format
             .seek(
@@ -230,7 +234,7 @@ impl MediaReader {
         if let Some(d) = self.audio_decoder.as_mut() {
             d.reset();
         }
-        Ok(Timestamp::new(seeked.actual_ts as i64, base))
+        Ok(Timestamp::exact(seeked.actual_ts as i64, base))
     }
 
     /// Seek then decode forward until the frame containing `target` is reached.
@@ -240,9 +244,9 @@ impl MediaReader {
     pub fn decode_audio_at(&mut self, target: Timestamp) -> Result<Option<AudioFrame>> {
         self.seek_audio(target)?;
         let base = self.audio_time_base;
-        let want = target.rescale(base).ticks();
+        let want = target.rescale_checked(base, Rounding::Nearest).0.ticks();
         while let Some(frame) = self.next_audio_frame()? {
-            let start = frame.pts.rescale(base).ticks();
+            let start = frame.pts.rescale_checked(base, Rounding::Nearest).0.ticks();
             let end = start + frame.frame_count() as i64;
             if end > want {
                 return Ok(Some(frame));
@@ -340,7 +344,7 @@ pub fn decode_image(path: &Path) -> Result<crate::frame::VideoFrame> {
     let (w, h) = rgba.dimensions();
     let stride = (w * 4) as usize;
     Ok(VideoFrame {
-        pts: Timestamp::new(0, TimeBase::new(1, 1)?),
+        pts: Timestamp::exact(0, Rate::whole(1).expect("1 Hz")),
         frame_index: Some(0),
         timecode: None,
         width: w,

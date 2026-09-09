@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::identity::{
     AudioStreamInfo, ContainerKind, ContentHash, MediaFile, StreamInfo, StreamKind, VideoStreamInfo,
 };
-use crate::time::{FrameRate, TimeBase};
+use crate::time::Rate;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -86,7 +86,10 @@ fn probe_isobmff(path: &Path, hash: ContentHash) -> Result<MediaFile> {
 
     let mut streams = Vec::new();
     for (id, track) in reader.tracks() {
-        let time_base = TimeBase::from_rate(track.timescale())?;
+        let time_base = Rate::whole(track.timescale()).ok_or(Error::InvalidTimeBase {
+            num: track.timescale(),
+            den: 1,
+        })?;
         let codec = match track.media_type() {
             Ok(mp4::MediaType::H264) => "h264",
             Ok(mp4::MediaType::H265) => "h265",
@@ -101,7 +104,7 @@ fn probe_isobmff(path: &Path, hash: ContentHash) -> Result<MediaFile> {
             Ok(mp4::TrackType::Video) => {
                 // The container states a nominal rate; a stream whose sample
                 // durations vary is VFR and must be conformed by editorial.
-                let rate = FrameRate::new(track.timescale(), sample_delta(track)).ok();
+                let rate = Rate::new(track.timescale(), sample_delta(track));
                 (
                     StreamKind::Video,
                     Some(VideoStreamInfo {
@@ -206,9 +209,8 @@ fn probe_with_symphonia(
             codec,
             time_base: p
                 .time_base
-                .map(|tb| TimeBase::new(tb.numer, tb.denom))
-                .transpose()?
-                .unwrap_or(TimeBase::from_rate(rate)?),
+                .and_then(|tb| Rate::new(tb.denom, tb.numer))
+                .unwrap_or(Rate::whole(rate).ok_or(Error::InvalidTimeBase { num: rate, den: 1 })?),
             duration_ticks: p.n_frames.map(|n| n as i64),
             video: None,
             audio: Some(AudioStreamInfo {
@@ -252,7 +254,7 @@ fn probe_image(path: &Path, hash: ContentHash) -> Result<MediaFile> {
             codec: format,
             // A still has no meaningful time base of its own; it takes the rate
             // of the sequence it belongs to. 1/1 is the honest placeholder.
-            time_base: TimeBase::new(1, 1)?,
+            time_base: Rate::whole(1).expect("1 Hz"),
             duration_ticks: Some(1),
             video: Some(VideoStreamInfo {
                 width: w,

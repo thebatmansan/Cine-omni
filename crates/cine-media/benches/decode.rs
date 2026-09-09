@@ -236,7 +236,7 @@ fn bench_seek(path: &Path) {
     let base = r.audio_time_base();
 
     // Sequential-ish: repeated seeks to the same point, the scrub-in-place case.
-    let target = Timestamp::new(5 * 48_000, base);
+    let target = Timestamp::exact(5 * 48_000, base);
     let (best, mean) = time_it(20, || {
         r.decode_audio_at(target).unwrap();
     });
@@ -248,7 +248,7 @@ fn bench_seek(path: &Path) {
 
     // Scattered: the worst case, jumping across the file each time.
     let points: Vec<Timestamp> = (0..8)
-        .map(|i| Timestamp::new(i64::from(i) * 48_000 + 12_000, base))
+        .map(|i| Timestamp::exact(i64::from(i) * 48_000 + 12_000, base))
         .collect();
     let mut i = 0usize;
     let (best, mean) = time_it(40, || {
