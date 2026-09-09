@@ -1032,8 +1032,8 @@ impl Config {
             cfg.roles.insert(k.into(), v.into());
         }
         let sdr_view = |dcs: &str| View {
-            name: "ACES 1.0 - SDR Video".into(),
-            view_transform: Some("ACES 1.0 - SDR Video".into()),
+            name: "ACES 2.0 - SDR Video".into(),
+            view_transform: Some("ACES 2.0 - SDR Video".into()),
             display_colorspace: Some(dcs.into()),
             ..Default::default()
         };
@@ -1064,16 +1064,16 @@ impl Config {
         }
         cfg.active_displays = cfg.displays.keys().cloned().collect();
         cfg.active_views = vec![
-            "ACES 1.0 - SDR Video".into(),
+            "ACES 2.0 - SDR Video".into(),
             "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)".into(),
             "Un-tone-mapped".into(),
             "Raw".into(),
         ];
         cfg.view_transforms = vec![
             ViewTransformDef {
-                name: "ACES 1.0 - SDR Video".into(),
+                name: "ACES 2.0 - SDR Video".into(),
                 description: "ACES-style SDR output (parametric tonescale, 100 nits)".into(),
-                from_scene_reference: Some(TransformDef::Builtin { style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0".into(), direction: Direction::Forward }),
+                from_scene_reference: Some(TransformDef::Builtin { style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0".into(), direction: Direction::Forward }),
                 to_scene_reference: None,
             },
             ViewTransformDef {
@@ -1817,8 +1817,25 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
                 ),
             ]
         }
+        // ACES 1.0's SDR output transform is the RRT + ODT pair, which this
+        // build does not implement — its output transform is ACES 2.0's.
+        // Answering an ACES 1.0 request with ACES 2.0 was measured against
+        // OpenColorIO 2.5.2 at 0.18 wrong **on the neutral axis**: not a
+        // saturated-colour edge case but visibly wrong greys, with nothing to
+        // indicate a substitution had happened. Every other output path in this
+        // crate matches OCIO's neutrals to within 5e-6, which is what makes
+        // this one unmistakable.
         "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0"
         | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_1.1" => {
+            return Err(Error::Unsupported(format!(
+                "BuiltinTransform style `{st}`: the ACES 1.0 output transform (RRT + ODT) \
+                 is not implemented. This build implements ACES 2.0, whose tonescale differs \
+                 by roughly 0.18 on the neutral axis — it is not a substitute. Use the \
+                 `_2.0` style instead."
+            )))
+        }
+        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0"
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_2.0" => {
             let ot = OutputTransform::for_display(if st.contains("P3lim") {
                 Display::P3D65
             } else {
@@ -1947,7 +1964,7 @@ mod tests {
     fn display_views() {
         let c = Config::aces_default();
         let p = c
-            .display_processor("ACEScg", "sRGB", "ACES 1.0 - SDR Video")
+            .display_processor("ACEScg", "sRGB", "ACES 2.0 - SDR Video")
             .unwrap();
         let g = p.apply_rgb(&[0.18; 3]);
         assert!(g[0] > 0.3 && g[0] < 0.5, "{g:?}");
@@ -2057,8 +2074,8 @@ mod tests {
             "DISPLAY - CIE-XYZ-D65_to_G2.6-P3-D65",
             "DISPLAY - CIE-XYZ-D65_to_REC.2100-PQ",
             "DISPLAY - CIE-XYZ-D65_to_REC.2100-HLG-1000nit",
-            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0",
-            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_1.1",
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0",
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_2.0",
             "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1",
         ];
         for style in styles {
@@ -2133,5 +2150,58 @@ colorspaces:
         assert!((p.apply_rgb(&[code; 3])[0] - 0.18).abs() < 1e-4);
         let p = c.processor("scene_linear", "log2").unwrap();
         assert!((p.apply_rgb(&[8.0; 3])[0] - 3.0).abs() < 1e-5);
+    }
+}
+
+#[cfg(test)]
+mod aces_version_tests {
+    use super::*;
+
+    /// ACES 1.0 and ACES 2.0 are different output transforms. Answering a
+    /// request for one with the other was measured at 0.18 wrong on the
+    /// **neutral axis** against OpenColorIO 2.5.2 — visibly wrong greys, not a
+    /// saturated-colour edge case, and with nothing to indicate a substitution.
+    #[test]
+    fn an_aces_1_0_request_is_refused_rather_than_answered_with_aces_2_0() {
+        let one = "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0";
+        match builtin_ops(one, Direction::Forward) {
+            Err(Error::Unsupported(msg)) => {
+                assert!(
+                    msg.contains("ACES 1.0"),
+                    "the error must name what is missing: {msg}"
+                );
+                assert!(
+                    msg.contains("not a substitute"),
+                    "the error must say why the near-neighbour was not used: {msg}"
+                );
+            }
+            Err(e) => panic!("expected Unsupported, got {e}"),
+            Ok(_) => panic!("ACES 1.0 is not implemented; answering it with ACES 2.0 is wrong"),
+        }
+    }
+
+    /// What this build does implement must still work, under its real name.
+    #[test]
+    fn the_aces_2_0_output_transform_is_available_and_named_honestly() {
+        assert!(builtin_ops(
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0",
+            Direction::Forward
+        )
+        .is_ok());
+        let c = Config::aces_default();
+        assert!(
+            c.views("sRGB")
+                .unwrap()
+                .iter()
+                .any(|v| v.name.contains("ACES 2.0")),
+            "the shipped config must offer the transform it actually implements"
+        );
+        assert!(
+            !c.views("sRGB")
+                .unwrap()
+                .iter()
+                .any(|v| v.name.contains("ACES 1.0")),
+            "the config must not advertise an ACES version this build does not implement"
+        );
     }
 }

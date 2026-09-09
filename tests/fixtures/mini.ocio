@@ -40,7 +40,7 @@ looks:
 view_transforms:
   - !<ViewTransform>
     name: ACES SDR
-    from_scene_reference: !<BuiltinTransform> {style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0"}
+    from_scene_reference: !<BuiltinTransform> {style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0"}
   - !<ViewTransform>
     name: Un-tone-mapped
     from_scene_reference: !<BuiltinTransform> {style: "UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD"}

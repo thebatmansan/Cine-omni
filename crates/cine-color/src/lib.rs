@@ -38,7 +38,7 @@
 //! let gray = to_working.apply_rgb(&[Transfer::LogC4.encode(0.18) as f32; 3]);
 //! assert!((gray[0] - 0.18).abs() < 1e-3);
 //!
-//! let view = config.display_processor("ACEScg", "sRGB", "ACES 1.0 - SDR Video").unwrap();
+//! let view = config.display_processor("ACEScg", "sRGB", "ACES 2.0 - SDR Video").unwrap();
 //! let code = view.apply_rgb(&gray);
 //! assert!(code[0] > 0.3 && code[0] < 0.5);
 //!
