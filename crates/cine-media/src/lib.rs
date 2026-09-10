@@ -24,6 +24,7 @@ pub mod frame;
 pub mod identity;
 pub mod probe;
 pub mod reader;
+pub mod schedule;
 pub mod time;
 pub mod ucg;
 pub mod video;
@@ -40,5 +41,6 @@ pub use identity::{
 };
 pub use probe::probe;
 pub use reader::MediaReader;
+pub use schedule::{FrameSource, Presentation, Presented, ScheduleStats, Scheduler};
 pub use time::{Rate, Rounding, Timecode, Timestamp};
 pub use video::VideoReader;

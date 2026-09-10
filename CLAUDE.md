@@ -54,6 +54,13 @@ cd ui && npm test && npm run build
   rates, and never reach for `f64` seconds except to display. `rescale_checked`
   reports whether a conversion was exact — ignoring that flag is a choice to
   lose information.
+* Playback is `cine_media::Scheduler`: the clock decides which picture is due,
+  the scheduler decides whether to present, hold, drop or refuse, and the event
+  loop sleeps on `next_deadline()` rather than on a frame interval. Never
+  advance a playhead by counting frames, and never report a transport as
+  `Playing` while frames are being dropped — `Degraded` exists for that. Read
+  `docs/blueprint/PLAYBACK.md`; it records what is measured and what is not
+  claimed.
 * A cross-check is not an oracle. When two implementations disagree, adjudicate
   against something exact before deciding which is wrong — the true-peak
   "defect" was real divergence with the blame reversed.

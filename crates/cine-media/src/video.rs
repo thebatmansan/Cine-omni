@@ -27,7 +27,7 @@ use crate::error::{Error, Result};
 use crate::frame::{ColorMetadata, VideoFrame};
 use crate::identity::{MediaFile, StreamKind};
 use crate::probe::decodable_codecs;
-use crate::time::{Rate, Rounding, Timestamp};
+use crate::time::{Rate, Timestamp};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -42,6 +42,10 @@ struct SampleEntry {
     dts: i64,
     /// Presentation timestamp: `dts + ctts` offset, in the same ticks.
     pts: i64,
+    /// How long this sample is shown, in the same ticks. The container states
+    /// it; deriving it by differencing timestamps would be wrong for the last
+    /// sample, which is exactly the one the presentation extent needs.
+    duration: u32,
     /// Whether the stream can be entered here.
     is_sync: bool,
 }
@@ -127,6 +131,7 @@ impl VideoReader {
                 id,
                 dts,
                 pts: dts + i64::from(s.rendering_offset),
+                duration: s.duration,
                 is_sync: s.is_sync,
             });
         }
@@ -248,23 +253,59 @@ impl VideoReader {
         }
     }
 
-    /// Index in decode order of the sample presenting at or before `target`.
-    fn sample_for(&self, target: Timestamp) -> Option<usize> {
-        let ticks = target
-            .rescale_checked(self.time_base, Rounding::Nearest)
-            .0
-            .ticks();
-        // Walk display order, which is sorted by pts, and take the last frame
-        // whose presentation time has already begun.
-        let mut best = None;
-        for &i in &self.display_order {
-            if self.samples[i].pts <= ticks {
-                best = Some(i);
+    /// Position in **display order** of the picture presenting at or before
+    /// `target`, or `None` if `target` precedes the first picture.
+    ///
+    /// `display_order` is sorted by pts, so this is a binary search rather than
+    /// a walk. The walk it replaced cost time proportional to the playhead
+    /// position — invisible when stepping one frame at a time, and a growing
+    /// per-frame tax during playback.
+    ///
+    /// The comparison is against the target directly rather than against a
+    /// rescaled copy of it: `RationalTime`'s ordering cross-multiplies in
+    /// `i128`, so it is exact for any pair of rates, whereas rescaling a
+    /// nanosecond-domain playhead onto a 12288-tick media timescale rounds.
+    fn display_position_for(&self, target: Timestamp) -> Option<usize> {
+        let pts_at = |pos: usize| -> Timestamp {
+            Timestamp::exact(self.samples[self.display_order[pos]].pts, self.time_base)
+        };
+        if self.display_order.is_empty() || pts_at(0) > target {
+            return None;
+        }
+        // Invariant: pts_at(lo) <= target < pts_at(hi), with hi one past the end.
+        let (mut lo, mut hi) = (0usize, self.display_order.len());
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if pts_at(mid) <= target {
+                lo = mid;
             } else {
-                break;
+                hi = mid;
             }
         }
-        best
+        Some(lo)
+    }
+
+    /// Index in decode order of the sample presenting at or before `target`.
+    fn sample_for(&self, target: Timestamp) -> Option<usize> {
+        self.display_position_for(target)
+            .map(|pos| self.display_order[pos])
+    }
+
+    /// The presentation extent: first pts, and where the last picture stops
+    /// being shown.
+    pub fn extent(&self) -> Option<(Timestamp, Timestamp)> {
+        let first = *self.display_order.first()?;
+        let last = *self.display_order.last()?;
+        let end = self.samples[last].pts + i64::from(self.samples[last].duration);
+        Some((
+            Timestamp::exact(self.samples[first].pts, self.time_base),
+            Timestamp::exact(end, self.time_base),
+        ))
+    }
+
+    /// Display index of the picture presenting at or before `target`.
+    pub fn index_at(&self, target: Timestamp) -> Option<usize> {
+        self.display_position_for(target)
     }
 
     /// Nearest sync sample at or before `index` in decode order.
@@ -390,6 +431,41 @@ fn nal_length_size(track: &mp4::Mp4Track) -> usize {
     }
 }
 
+/// Scheduling a `VideoReader` is what turns the clock into playback.
+///
+/// Everything here is already exact: the sample table gives presentation times
+/// as integers, so selecting a picture for a playhead position is a search, not
+/// an estimate.
+impl crate::schedule::FrameSource for VideoReader {
+    fn frame_count(&self) -> usize {
+        VideoReader::frame_count(self)
+    }
+
+    fn pts_of(&self, index: usize) -> Option<Timestamp> {
+        self.pts_at(index)
+    }
+
+    fn index_at(&self, t: Timestamp) -> Option<usize> {
+        VideoReader::index_at(self, t)
+    }
+
+    fn extent(&self) -> Option<(Timestamp, Timestamp)> {
+        VideoReader::extent(self)
+    }
+
+    fn decode_index(&mut self, index: usize) -> Result<Option<VideoFrame>> {
+        self.frame_at_index(index)
+    }
+
+    /// A long-GOP H.264 stream *can* be played backwards, but every picture
+    /// costs a decode from the preceding keyframe, so it will be slow and the
+    /// scheduler will report drops. Reporting it as unsupported would be a
+    /// different lie from pretending it is fast.
+    fn supports_reverse(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,6 +477,7 @@ mod tests {
                 id: n as u32 + 1,
                 dts,
                 pts,
+                duration: 1,
                 is_sync,
             })
             .collect()

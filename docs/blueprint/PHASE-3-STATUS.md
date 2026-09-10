@@ -95,7 +95,12 @@ argument for the evidence discipline, not against it.
 | Full-hash verification | Yes | 🟢 VERIFIED | Detects a single flipped bit; fast hash now **refuses** to verify |
 | Capability registry | Yes | 🟢 VERIFIED | Single source of truth; tests enforce evidence and forbid unverified hardware claims |
 | Hardware decode | Yes | 🔴 NOT IMPLEMENTED | **Not claimed.** Registry test fails if any hardware entry is added |
-| Playback / A/V sync | Yes | 🔴 NOT IMPLEMENTED | And not simulated |
+| Playback scheduler | Yes | 🟢 VERIFIED | `clock → scheduler → decode → selection → presentation`, 39 tests; exact frame selection at every one of 240 boundaries of the real asset |
+| Real-time playback | Yes | 🟡 PARTIAL | **Real but below real time.** 21.9 fps sequential decode against 24 fps needed; 1 s of playback presented 8 and dropped 14, transport reported `Degraded`. See `PLAYBACK.md` |
+| Reverse playback | Yes | 🟡 PARTIAL | Correct and unusably slow on long-GOP media: 2 sync samples in 240 pictures, mean 8.47 s per picture. Reported through the drop counters, not refused |
+| A/V sync | Yes | 🔴 NOT IMPLEMENTED | No audio consumer of the clock exists. Not simulated |
+| Decode-ahead / buffering | Yes | 🔴 NOT IMPLEMENTED | Decode is synchronous; a slow decode appears as lateness and drops, never as an underrun |
+| Edit list (`elst`) handling | Yes | 🔴 NOT IMPLEMENTED | The reference asset presents from 1024/12288, not 0, and nothing compensates |
 | Proxies, thumbnails, waveforms | Yes | 🔵 PLANNED | |
 
 ### GPU and colour
@@ -268,6 +273,9 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * Content-addressed media identity, relink, and offline as a state
 * Full-hash verification that detects a single flipped bit
 * GPU/CPU parity for compute kernels and YUV→RGB on real hardware
+* A playback scheduler driven by the exact clock, with observed rather than
+  estimated drop, late and underrun counts, and honest refusal on unsupported
+  media and decoder failure
 * Loudness measurement agreeing with `ebur128` to 0.000 LU
 * OTIO output that parses in real OpenTimelineIO
 
@@ -279,6 +287,12 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * "Real-time" for audio in general — 48 stereo tracks hold a 512-frame
   deadline with 3x margin and may be claimed; 128 x 7.1.4 does not and 128
   stereo is marginal, so neither may be
-* "Production playback" — no presentation clock exists
+* "Real-time playback" — measured 21.9 fps against the 24 fps the asset asks
+  for, and 92% drops through the real window. Playback **exists** and is
+  scheduled from the exact clock; it is `Degraded`, and the shell says so
+* "A/V sync" — no audio consumer of the playback clock exists
+* "Smooth" or "production" playback of long-GOP media — catching up by
+  skipping does not converge on a 120-picture GOP; measured collapse from 8
+  pictures per second headless to 8 in five seconds on screen
 * "Hardware accelerated" — no hardware path exists
 * "Production-ready" for any subsystem

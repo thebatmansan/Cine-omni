@@ -1,36 +1,56 @@
 //! The CINE-OMNI reference viewer.
 //!
 //! ```text
-//! cargo run -p cine-shell -- <media file>          # open a window
-//! cargo run -p cine-shell -- <media file> --smoke  # present N frames, then exit
+//! cargo run -p cine-shell -- <media file>            # open a window
+//! cargo run -p cine-shell -- <media file> --smoke 30 # present N frames, exit
+//! cargo run -p cine-shell -- <media file> --play 5   # play N seconds, report
 //! ```
 //!
-//! `--smoke` exists so the presentation path can be *verified* rather than
-//! eyeballed: it drives the real window, the real surface and the real
-//! swapchain for a fixed number of frames and exits non-zero if anything
-//! failed. That is what lets CI assert the shell works on a machine nobody is
-//! looking at.
+//! ## What drives the picture
 //!
-//! Frame stepping is by arrow key. There is no playback, because there is no
-//! presentation clock — see `ShellCapabilities`.
+//! `cine_media::Scheduler`. The event loop does not tick at a frame rate; it
+//! sleeps until the scheduler says the picture on screen has expired, decodes
+//! whatever the clock says is due *then*, and puts that on the surface. A frame
+//! the playhead has already passed is never decoded, which is the difference
+//! between falling behind and drifting.
+//!
+//! `--smoke` verifies the presentation path without anyone watching: it drives
+//! the real window, surface and swapchain for a fixed number of frames and
+//! exits non-zero if anything failed.
+//!
+//! `--play` is the evidence mode: it plays for a wall-clock duration and prints
+//! the scheduler's counters — presented, dropped, late, and the measured decode
+//! cost. Those numbers, not an adjective, are what this build claims.
+//!
+//! ## Transport
+//!
+//! `space` play/pause · `J`/`K`/`L` reverse/pause/forward · `←`/`→` step one
+//! frame · `home` stop · `esc` quit.
 
 use cine_gpu::device::GpuContext;
-use cine_media::VideoReader;
+use cine_media::clock::{PlaybackClock, PlaybackRate, SystemTime, TransportState};
+use cine_media::schedule::{Presentation, Scheduler};
+use cine_media::{VideoFrame, VideoReader};
 use cine_shell::gpu::SurfaceContext;
 use cine_shell::present::Presenter;
 use cine_shell::viewer::FrameUploader;
-use cine_shell::{Availability, ShellCapabilities};
-use std::path::PathBuf;
+use cine_shell::ShellCapabilities;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
+type Playback = Scheduler<SystemTime, VideoReader>;
+
 struct Args {
     media: Option<PathBuf>,
     smoke_frames: Option<u32>,
+    /// Play for this many seconds, then report and exit.
+    play_secs: Option<f64>,
     /// Write the exact image the viewer presented, for inspection.
     dump: Option<PathBuf>,
 }
@@ -38,11 +58,13 @@ struct Args {
 fn parse_args() -> Args {
     let mut media = None;
     let mut smoke_frames = None;
+    let mut play_secs = None;
     let mut dump = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--smoke" => smoke_frames = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(30)),
+            "--play" => play_secs = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(5.0)),
             "--dump" => dump = it.next().map(PathBuf::from),
             other if !other.starts_with("--") => media = Some(PathBuf::from(other)),
             other => eprintln!("ignoring unknown flag {other}"),
@@ -51,6 +73,7 @@ fn parse_args() -> Args {
     Args {
         media,
         smoke_frames,
+        play_secs,
         dump,
     }
 }
@@ -86,12 +109,16 @@ struct App {
     surface: Option<SurfaceContext>,
     presenter: Option<Presenter>,
     compute: Option<GpuContext>,
-    reader: Option<VideoReader>,
+    playback: Option<Playback>,
     uploader: FrameUploader,
-    frame_index: usize,
+    /// Surface presentations, which is not the same as pictures presented: the
+    /// window may redraw the same picture several times.
     presented: u32,
     skipped: u32,
+    play_until: Option<Instant>,
     failure: Option<String>,
+    /// The last thing the transport did, printed rather than guessed at.
+    last_report: Option<String>,
 }
 
 impl App {
@@ -102,35 +129,27 @@ impl App {
             surface: None,
             presenter: None,
             compute: None,
-            reader: None,
+            playback: None,
             uploader: FrameUploader::new(),
-            frame_index: 0,
             presented: 0,
             skipped: 0,
+            play_until: None,
             failure: None,
+            last_report: None,
         }
     }
 
-    /// Decode, convert and upload the frame at `self.frame_index`.
-    fn show_frame(&mut self) {
-        let (Some(reader), Some(compute), Some(surface), Some(presenter)) = (
-            self.reader.as_mut(),
+    /// Convert one decoded picture and hand it to the presenter.
+    fn upload(&mut self, frame: &VideoFrame) {
+        let (Some(compute), Some(surface), Some(presenter)) = (
             self.compute.as_mut(),
             self.surface.as_ref(),
             self.presenter.as_mut(),
         ) else {
             return;
         };
-        let frame = match reader.frame_at_index(self.frame_index) {
-            Ok(Some(f)) => f,
-            Ok(None) => return,
-            Err(e) => {
-                self.failure = Some(format!("decode failed: {e}"));
-                return;
-            }
-        };
         let (w, h) = (frame.width, frame.height);
-        match self.uploader.upload(compute, &frame) {
+        match self.uploader.upload(compute, frame) {
             Ok(rgba) => {
                 if let Some(path) = self.args.dump.clone() {
                     if let Err(e) = write_png(&path, rgba, w, h) {
@@ -145,6 +164,126 @@ impl App {
             }
             Err(e) => self.failure = Some(format!("colour conversion failed: {e}")),
         }
+    }
+
+    /// One turn of the scheduler. Returns whether the window needs redrawing.
+    ///
+    /// The scheduler borrow is closed before anything else on `self` is
+    /// touched, so a decoded picture is owned by the time it is uploaded.
+    fn pump(&mut self) -> bool {
+        let Some(outcome) = self.playback.as_mut().map(|p| p.poll()) else {
+            return false;
+        };
+        match outcome {
+            Presentation::Present(p) => {
+                if p.dropped > 0 || p.late_by.is_some() {
+                    self.last_report = Some(format!(
+                        "frame {} — {} dropped, {}decode {:?}",
+                        p.index,
+                        p.dropped,
+                        match p.late_by {
+                            Some(l) => format!("late by {l:?}, "),
+                            None => String::new(),
+                        },
+                        p.decode_took
+                    ));
+                }
+                self.upload(&p.frame);
+                true
+            }
+            Presentation::Hold => false,
+            Presentation::EndOfMedia => {
+                println!("end of media");
+                self.report();
+                false
+            }
+            Presentation::BeforeStart => false,
+            Presentation::Underrun => {
+                println!("underrun: the source had no picture for this position");
+                false
+            }
+            Presentation::Failed(why) => {
+                // A decode failure is shown, not substituted with a blank frame.
+                eprintln!("playback stopped: {why}");
+                self.failure = Some(why);
+                false
+            }
+            Presentation::Unsupported => {
+                eprintln!("this build cannot play this media");
+                false
+            }
+        }
+    }
+
+    /// Print exactly what the scheduler counted. No adjectives.
+    fn report(&self) {
+        let Some(p) = self.playback.as_ref() else {
+            return;
+        };
+        let s = p.stats();
+        println!(
+            "transport {:?} — presented {}, dropped {}, late {}, held {} over {} polls",
+            p.state(),
+            s.presented,
+            s.dropped,
+            s.late,
+            s.held,
+            s.polls
+        );
+        if s.presented > 0 {
+            println!(
+                "decode: mean {:?}, worst {:?}; drop rate {:.1}%",
+                s.mean_decode().unwrap_or_default(),
+                Duration::from_nanos(s.decode_worst_nanos.min(u128::from(u64::MAX)) as u64),
+                s.drop_rate() * 100.0
+            );
+        }
+        if let Some(note) = &self.last_report {
+            println!("last irregular frame: {note}");
+        }
+    }
+
+    fn transport(&mut self, key: &Key) -> bool {
+        let Some(p) = self.playback.as_mut() else {
+            return false;
+        };
+        let rate = p.source().time_base();
+        match key {
+            Key::Named(NamedKey::Space) => {
+                if p.state().is_advancing() {
+                    p.clock_mut().pause();
+                } else {
+                    let _ = p.clock_mut().play();
+                }
+            }
+            Key::Character(c) if c.eq_ignore_ascii_case("l") => {
+                let _ = p.clock_mut().set_rate(PlaybackRate::FORWARD);
+                let _ = p.clock_mut().play();
+            }
+            Key::Character(c) if c.eq_ignore_ascii_case("j") => {
+                if let Some(r) = PlaybackRate::new(-1, 1) {
+                    let _ = p.clock_mut().set_rate(r);
+                }
+                let _ = p.clock_mut().play();
+            }
+            Key::Character(c) if c.eq_ignore_ascii_case("k") => p.clock_mut().pause(),
+            Key::Named(NamedKey::Home) => p.clock_mut().stop(),
+            Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowLeft) => {
+                let step = if matches!(key, Key::Named(NamedKey::ArrowRight)) {
+                    1
+                } else {
+                    -1
+                };
+                // Stepping a moving playhead is ambiguous, so the clock refuses
+                // it. Pausing first is what the user meant.
+                if p.state().is_advancing() {
+                    p.clock_mut().pause();
+                }
+                let _ = p.clock_mut().step(step, rate);
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
@@ -201,6 +340,57 @@ impl App {
             }
         }
     }
+
+    /// Open the media and build the transport over it.
+    fn open(&mut self, path: &Path) {
+        match VideoReader::open_path(path) {
+            Ok(reader) => {
+                println!(
+                    "media: {} ({} pictures, {} sync samples, time base {:?})",
+                    path.display(),
+                    reader.frame_count(),
+                    reader.keyframe_count(),
+                    reader.time_base()
+                );
+                let Some((start, end)) = reader.extent() else {
+                    eprintln!("{}: the track has no samples", path.display());
+                    return;
+                };
+                println!("extent: {start:?} .. {end:?}");
+                let clock = PlaybackClock::new(SystemTime::default(), start, end);
+                let mut playback = Scheduler::new(clock, reader);
+                // Show the first picture immediately: an empty window with a
+                // transport on it says nothing about whether decode works.
+                if let Presentation::Present(p) = playback.poll() {
+                    let frame = p.frame;
+                    self.playback = Some(playback);
+                    self.upload(&frame);
+                } else {
+                    self.playback = Some(playback);
+                }
+                if let Some(note) = self.uploader.colour_note() {
+                    println!("colour: {note}");
+                    if self.uploader.colour_is_assumed() {
+                        println!("        ^ assumed, not declared by the file");
+                    }
+                }
+            }
+            Err(e) => {
+                // A file we cannot decode is reported, not faked. The window
+                // still opens so the failure is visible in context, and no
+                // transport is built — so every transport key is inert rather
+                // than appearing to work.
+                //
+                // `PlaybackClock::unsupported` exists for exactly this case and
+                // is not used here, because `Scheduler` is generic over a
+                // `FrameSource` and there is no reader to be generic over when
+                // the open failed. Giving the shell a source-less refusing
+                // transport needs a boxed `FrameSource`, which is a change to
+                // make when the viewer has a transport bar to grey out.
+                eprintln!("cannot open {}: {e}", path.display());
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -251,34 +441,72 @@ impl ApplicationHandler for App {
         }
 
         if let Some(path) = self.args.media.clone() {
-            match VideoReader::open_path(&path) {
-                Ok(r) => {
-                    println!("media: {} ({} frames)", path.display(), r.frame_count());
-                    self.reader = Some(r);
-                    self.show_frame();
-                    if let Some(note) = self.uploader.colour_note() {
-                        println!("colour: {note}");
-                        if self.uploader.colour_is_assumed() {
-                            println!("        ^ assumed, not declared by the file");
-                        }
-                    }
-                }
-                Err(e) => {
-                    // A file we cannot decode is reported, not faked. The window
-                    // still opens so the failure is visible in context.
-                    eprintln!("cannot open {}: {e}", path.display());
+            self.open(&path);
+        }
+
+        for (name, availability) in ShellCapabilities::all() {
+            match availability {
+                cine_shell::Availability::Working => {}
+                cine_shell::Availability::Degraded(why) => println!("degraded — {name}: {why}"),
+                cine_shell::Availability::Unavailable(why) => {
+                    println!("unavailable — {name}: {why}")
                 }
             }
         }
 
-        for (name, availability) in ShellCapabilities::all() {
-            if let Availability::Unavailable(why) = availability {
-                println!("unavailable — {name}: {why}");
+        // Evidence mode: start playing straight away and stop on the clock.
+        if let Some(secs) = self.args.play_secs {
+            if let Some(p) = self.playback.as_mut() {
+                match p.clock_mut().play() {
+                    Ok(()) => {
+                        println!("playing for {secs} s");
+                        self.play_until = Some(Instant::now() + Duration::from_secs_f64(secs));
+                    }
+                    Err(state) => eprintln!("cannot play: transport is {}", state.label()),
+                }
             }
         }
 
         window.request_redraw();
         self.window = Some(window);
+    }
+
+    /// Where playback actually happens: the loop is woken by the scheduler's
+    /// deadline, not by a timer.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(until) = self.play_until {
+            if Instant::now() >= until {
+                self.report();
+                event_loop.exit();
+                return;
+            }
+        }
+        if self.args.smoke_frames.is_some() {
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
+
+        let advancing = self
+            .playback
+            .as_ref()
+            .is_some_and(|p| p.state().is_advancing());
+        if !advancing {
+            // Nothing is moving, so there is nothing to wake up for. A viewer
+            // that polls while paused burns a core to show a still frame.
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        if self.pump() {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+        let next = self.playback.as_ref().and_then(|p| p.next_deadline());
+        event_loop.set_control_flow(match next {
+            Some(d) => ControlFlow::WaitUntil(Instant::now() + d),
+            None => ControlFlow::Wait,
+        });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -302,26 +530,27 @@ impl ApplicationHandler for App {
                     },
                 ..
             } => {
-                let step: i64 = match logical_key {
-                    Key::Named(NamedKey::ArrowRight) => 1,
-                    Key::Named(NamedKey::ArrowLeft) => -1,
-                    Key::Named(NamedKey::Escape) => {
-                        event_loop.exit();
-                        return;
-                    }
-                    _ => return,
-                };
-                let count = self.reader.as_ref().map(|r| r.frame_count()).unwrap_or(0);
-                if count == 0 {
+                if matches!(logical_key, Key::Named(NamedKey::Escape)) {
+                    self.report();
+                    event_loop.exit();
                     return;
                 }
-                let next = (self.frame_index as i64 + step).clamp(0, count as i64 - 1);
-                if next as usize != self.frame_index {
-                    self.frame_index = next as usize;
-                    self.show_frame();
+                if !self.transport(&logical_key) {
+                    return;
+                }
+                let state = self.playback.as_ref().map(|p| p.state());
+                if let Some(s) = state {
+                    println!("transport: {}", s.label());
+                }
+                // A paused transport still has to redraw after a step or a
+                // seek: nothing else is going to wake the loop.
+                if self.pump() {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
+                }
+                if state.is_some_and(|s| s != TransportState::Unsupported) {
+                    event_loop.set_control_flow(ControlFlow::Wait);
                 }
             }
             _ => {}
@@ -340,8 +569,8 @@ fn main() {
             std::process::exit(2);
         }
     };
-    // Smoke mode drives frames as fast as it can; interactive mode waits for
-    // input, because a viewer with no playback has nothing to redraw for.
+    // Smoke mode drives surface frames as fast as it can. Everything else is
+    // driven by the scheduler through `about_to_wait`.
     event_loop.set_control_flow(if smoke {
         ControlFlow::Poll
     } else {

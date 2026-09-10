@@ -102,8 +102,19 @@ pub enum TransportState {
 
 impl TransportState {
     /// Whether the playhead advances with the wall clock in this state.
+    ///
+    /// `Buffering` counts. Starving the picture pipeline does not stop time:
+    /// audio does not stop, and a playhead that froze on an underrun would both
+    /// hide the stall and desynchronise from it. Excluding it here also made
+    /// `underrun()` jump the playhead **backwards** to the last anchor, because
+    /// a non-advancing clock reports `anchor_media` — three seconds of playback
+    /// became zero. That is the defect this comment exists to prevent
+    /// reintroducing; see `an_underrun_does_not_move_the_playhead`.
     pub fn is_advancing(&self) -> bool {
-        matches!(self, TransportState::Playing | TransportState::Degraded)
+        matches!(
+            self,
+            TransportState::Playing | TransportState::Degraded | TransportState::Buffering
+        )
     }
     pub fn label(&self) -> &'static str {
         match self {
@@ -136,6 +147,10 @@ impl PlaybackRate {
     }
     pub fn is_reverse(&self) -> bool {
         self.num < 0
+    }
+    /// The exact ratio, for schedulers that must not go through `f64`.
+    pub fn num_den(&self) -> (i32, u32) {
+        (self.num, self.den)
     }
     pub fn as_f64(&self) -> f64 {
         f64::from(self.num) / f64::from(self.den)
@@ -488,6 +503,33 @@ mod tests {
         c.underrun();
         assert_eq!(c.state(), TransportState::Buffering);
         assert_eq!(c.telemetry().underruns, 1);
+    }
+
+    /// Reporting an underrun must not move the playhead. It once did: because
+    /// `Buffering` was not an advancing state, `position()` fell back to the
+    /// anchor and three seconds of playback became zero — a stall that rewound
+    /// the picture instead of reporting itself.
+    #[test]
+    fn an_underrun_does_not_move_the_playhead() {
+        let (mut c, t) = clock(60);
+        c.play().unwrap();
+        t.advance_secs(3.0);
+        let before = c.position();
+        c.underrun();
+        assert_eq!(c.position(), before, "an underrun must not rewind");
+
+        // And time keeps passing while starved, because audio would not stop.
+        t.advance_secs(1.0);
+        assert!(
+            c.position() > before,
+            "a frozen playhead would hide the stall it is reporting"
+        );
+
+        // Recovering from the stall must not jump either.
+        let stalled = c.position();
+        c.presented(RationalTime::exact(4 * 24, Rate::F24));
+        assert_eq!(c.state(), TransportState::Playing);
+        assert_eq!(c.position(), stalled);
     }
 
     #[test]

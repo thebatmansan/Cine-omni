@@ -15,8 +15,16 @@
 //! RGB texture using the colour path that `cine-gpu` verifies against a CPU
 //! reference on real hardware.
 //!
-//! There is **no playback clock, no transport and no docking UI yet**, and none
-//! is simulated. A control that has no backend does not appear; see
+//! Since the playback scheduler landed, the window is also driven by
+//! `cine_media::Scheduler`: the event loop sleeps on the scheduler's deadline
+//! rather than on a frame interval, and what reaches the screen is whatever the
+//! clock says is due. Playback is therefore real — and, on this build, slower
+//! than real time. That is reported as [`Availability::Degraded`] rather than
+//! hidden, because the honest failure of a viewer is a visible drop counter and
+//! the dishonest one is a smooth picture that is not the right frame.
+//!
+//! There is still **no docking UI, no audio and no A/V sync**, and none is
+//! simulated. A control that has no backend does not appear; see
 //! [`Availability`].
 //!
 //! ## The rule this crate exists to keep
@@ -56,22 +64,35 @@ pub type Result<T> = std::result::Result<T, ShellError>;
 /// makes the distinction explicit so a panel cannot accidentally pretend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
-    /// Backed end to end.
+    /// Backed end to end, and meeting what its name implies.
     Working,
+    /// Backed end to end, but not at the quality the name implies, with the
+    /// measured shortfall shown to the user.
+    ///
+    /// This exists because the two-state version forced a lie either way once
+    /// playback became real but slow: `Working` would have claimed real time,
+    /// and `Unavailable` would have denied a feature that demonstrably runs.
+    Degraded(&'static str),
     /// Deliberately absent, with the reason shown to the user.
     Unavailable(&'static str),
 }
 
 impl Availability {
+    /// Whether the feature runs at all. A degraded feature does.
+    pub fn is_backed(&self) -> bool {
+        !matches!(self, Availability::Unavailable(_))
+    }
+
+    /// Whether the feature meets what its name implies, without qualification.
     pub fn is_working(&self) -> bool {
         matches!(self, Availability::Working)
     }
 
-    /// What to show the user in place of a control that does not work.
+    /// What to show the user alongside, or in place of, the control.
     pub fn reason(&self) -> Option<&'static str> {
         match self {
             Availability::Working => None,
-            Availability::Unavailable(why) => Some(why),
+            Availability::Degraded(why) | Availability::Unavailable(why) => Some(why),
         }
     }
 }
@@ -85,8 +106,15 @@ pub struct ShellCapabilities;
 impl ShellCapabilities {
     pub const VIDEO_DISPLAY: Availability = Availability::Working;
     pub const FRAME_STEP: Availability = Availability::Working;
-    pub const PLAYBACK: Availability =
-        Availability::Unavailable("no presentation clock yet; frame stepping only");
+    /// Real: the clock drives a scheduler that drives the decoder, and the
+    /// event loop sleeps on the scheduler's deadline. Not real-time: measured
+    /// at 21.9 fps sequential decode on this machine's 720x1280 H.264 asset in
+    /// a release build, against the 24 fps the media asks for. See
+    /// `cine-media/tests/playback_real_media.rs`.
+    pub const PLAYBACK: Availability = Availability::Degraded(
+        "playback is scheduled from the clock, but this build's decoder runs \
+         below real time and drops frames; the drop counter is live",
+    );
     pub const AUDIO_MONITORING: Availability =
         Availability::Unavailable("no audio device backend on this platform build");
     pub const SCOPES: Availability = Availability::Unavailable(
@@ -116,31 +144,48 @@ impl ShellCapabilities {
 mod tests {
     use super::*;
 
-    /// Every capability the shell advertises must be either genuinely working
-    /// or accompanied by a reason. A silent `Unavailable` is how a fake control
-    /// gets shipped.
+    /// Every capability the shell does not simply deliver must say why. A
+    /// silent `Unavailable`, or a `Degraded` with no measured shortfall, is how
+    /// a fake control gets shipped.
     #[test]
-    fn every_unavailable_capability_explains_itself() {
+    fn every_qualified_capability_explains_itself() {
         for (name, availability) in ShellCapabilities::all() {
-            if let Availability::Unavailable(reason) = availability {
+            if let Some(reason) = availability.reason() {
                 assert!(
                     reason.len() > 15,
-                    "{name} is unavailable without a usable explanation: {reason:?}"
+                    "{name} is qualified without a usable explanation: {reason:?}"
                 );
             }
         }
     }
 
-    /// The things claimed to work must be the things that actually have a
-    /// backend. Playback in particular must not creep into `Working` without a
-    /// presentation clock existing.
+    /// Playback runs, and must not claim to run in real time. The measurement
+    /// behind this is in `cine-media/tests/playback_real_media.rs`; if a faster
+    /// decoder ever makes the claim true, that test is what promotes this.
     #[test]
-    fn playback_is_not_claimed_without_a_clock() {
+    fn playback_is_backed_but_does_not_claim_real_time() {
+        assert!(
+            ShellCapabilities::PLAYBACK.is_backed(),
+            "the scheduler drives the viewer; denying playback would be false too"
+        );
         assert!(
             !ShellCapabilities::PLAYBACK.is_working(),
-            "no presentation clock exists; claiming playback would be simulating real-time state"
+            "no measurement supports a real-time claim on this build"
         );
-        assert!(!ShellCapabilities::HDR_OUTPUT.is_working());
+        let why = ShellCapabilities::PLAYBACK
+            .reason()
+            .expect("a degraded capability must state the shortfall");
+        assert!(
+            why.contains("below real time"),
+            "the shortfall must name what is short: {why:?}"
+        );
+        assert!(!ShellCapabilities::HDR_OUTPUT.is_backed());
         assert!(ShellCapabilities::VIDEO_DISPLAY.is_working());
+    }
+
+    /// Audio is still absent, so nothing may imply A/V sync exists.
+    #[test]
+    fn nothing_claims_audio_or_sync() {
+        assert!(!ShellCapabilities::AUDIO_MONITORING.is_backed());
     }
 }
