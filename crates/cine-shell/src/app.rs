@@ -922,7 +922,8 @@ impl App {
                 );
                 self.keyframes = reader.keyframe_indices().to_vec();
                 let clock = PlaybackClock::new(SystemTime::default(), start, end);
-                let ahead = DecodeAhead::new(AnySource::File(Box::new(reader)), AheadConfig::default());
+                let ahead =
+                    DecodeAhead::new(AnySource::File(Box::new(reader)), AheadConfig::default());
                 // The worker wakes the event loop when a picture lands. A proxy
                 // is `Send` but not `Sync`, hence the mutex.
                 let proxy = Mutex::new(self.proxy.clone());

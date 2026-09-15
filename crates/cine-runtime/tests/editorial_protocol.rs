@@ -430,3 +430,44 @@ fn a_real_cut_is_built_from_ingested_media_and_its_record_picture_decodes() {
     );
     assert_eq!(after["black"], true);
 }
+
+/// Opening a sequence in one surface opens it in every surface: the session is
+/// shared, announced, validated, and not project state.
+#[test]
+fn the_open_sequence_is_shared_across_clients() {
+    let h = Harness::start();
+    let mut a = h.client();
+    let mut b = h.client();
+    assert_eq!(a.call("focus", json!({}))["timeline"], Value::Null);
+    let made = a.call("new_timeline", json!({ "name": "Second cut" }));
+    let id = made["id"].as_str().unwrap().to_string();
+    let revision = a.call("project", json!({}))["revision"].clone();
+
+    a.call("focus", json!({ "timeline": id }));
+    assert_eq!(b.call("focus", json!({}))["timeline"], id);
+    assert_eq!(
+        a.call("project", json!({}))["revision"],
+        revision,
+        "opening a sequence is not a commit"
+    );
+
+    let mut raw = h.client();
+    raw.send_masked(
+        &json!({ "jsonrpc": "2.0", "id": 5, "method": "focus",
+                 "params": { "timeline": h.runtime.project.root.to_string() } })
+        .to_string(),
+    );
+    let reply = raw.read_reply(5);
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not a sequence"),
+        "{reply}"
+    );
+    assert_eq!(
+        b.call("focus", json!({}))["timeline"],
+        id,
+        "a refused focus changes nothing"
+    );
+}

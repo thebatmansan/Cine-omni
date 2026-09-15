@@ -77,6 +77,15 @@ impl Server {
     pub fn spawn_change_broadcaster(&self) -> std::thread::JoinHandle<()> {
         let runtime = self.runtime.clone();
         let shutdown = self.shutdown.clone();
+        // Session changes (which sequence is open) go out as they happen. The
+        // listener holds the runtime weakly: the runtime owns the session that
+        // owns the listener.
+        let weak = Arc::downgrade(&runtime);
+        runtime.project.session.subscribe(move |event| {
+            if let Some(rt) = weak.upgrade() {
+                rt.broadcast(&rpc::session_notification(event));
+            }
+        });
         let rx = runtime.project.engine.subscribe_channel();
         std::thread::Builder::new()
             .name("cine-changes".into())

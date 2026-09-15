@@ -310,6 +310,7 @@ export class RpcClient {
   private pending = new Map<number, Pending>();
   private listeners = new Set<(n: ChangeNotification) => void>();
   private stateListeners = new Set<(open: boolean) => void>();
+  private focusListeners = new Set<(timeline: string | null) => void>();
 
   constructor(private url: string) {}
 
@@ -344,6 +345,10 @@ export class RpcClient {
       this.listeners.forEach((l) => l(msg.params as ChangeNotification));
       return;
     }
+    if (msg.method === "focus") {
+      this.focusListeners.forEach((l) => l((msg.params?.timeline as string | null) ?? null));
+      return;
+    }
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
@@ -354,6 +359,12 @@ export class RpcClient {
   onChange(l: (n: ChangeNotification) => void): () => void {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
+  }
+
+  /** Another surface opened a sequence. */
+  onFocus(l: (timeline: string | null) => void): () => void {
+    this.focusListeners.add(l);
+    return () => this.focusListeners.delete(l);
   }
 
   onState(l: (open: boolean) => void): () => void {
@@ -416,5 +427,8 @@ export class RpcClient {
   impact(revision?: number) { return this.call<ImpactView | null>("impact", revision == null ? {} : { revision }); }
   history(limit = 100) { return this.call<HistoryView>("history", { limit }); }
   pictureAt(timeline: string, time: ExactTime) { return this.call<PictureAt>("picture_at", { timeline, time }); }
+  focus(timeline?: string | null) {
+    return this.call<{ timeline: string | null }>("focus", timeline === undefined ? {} : { timeline });
+  }
   importFountain(text: string, key?: string) { return this.call<unknown>("import_fountain", { text, key }); }
 }

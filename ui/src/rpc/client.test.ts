@@ -21,4 +21,15 @@ describe("RpcClient", () => {
     c.onMessage(JSON.stringify({ jsonrpc: "2.0", id: 999, result: 1 }));
     expect(seen).toEqual([7]);
   });
+
+  it("passes focus announcements to focus listeners, not change listeners", () => {
+    const c = new RpcClient("ws://localhost:0");
+    const focus: (string | null)[] = [];
+    const changes: number[] = [];
+    c.onFocus((t) => focus.push(t));
+    c.onChange((n) => changes.push(n.revision));
+    c.onMessage(JSON.stringify({ jsonrpc: "2.0", method: "focus", params: { timeline: "abc" } }));
+    expect(focus).toEqual(["abc"]);
+    expect(changes).toEqual([]);
+  });
 });

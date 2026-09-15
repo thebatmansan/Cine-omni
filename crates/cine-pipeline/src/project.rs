@@ -31,6 +31,8 @@ pub struct OmniProject {
     pub engine: Arc<Engine>,
     pub root: EntityId,
     pub disk: Option<Project>,
+    /// What every surface of the open application is looking at. Not saved.
+    pub session: crate::session::ProjectSession,
 }
 
 impl OmniProject {
@@ -43,6 +45,7 @@ impl OmniProject {
             engine,
             root,
             disk: None,
+            session: Default::default(),
         })
     }
 
@@ -57,6 +60,7 @@ impl OmniProject {
             engine,
             root,
             disk: Some(disk),
+            session: Default::default(),
         })
     }
 
@@ -77,6 +81,7 @@ impl OmniProject {
             engine,
             root,
             disk: Some(disk),
+            session: Default::default(),
         })
     }
 

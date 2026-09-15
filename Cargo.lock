@@ -429,6 +429,7 @@ dependencies = [
  "cine-previs",
  "cine-script",
  "cine-timeline",
+ "parking_lot",
  "serde",
  "serde_json",
  "tempfile",

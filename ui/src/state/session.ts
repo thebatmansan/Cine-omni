@@ -139,11 +139,18 @@ export function useSession(url: string = runtimeUrl()): Session {
           .catch(() => {});
       }, SETTLE_MS);
     });
+    client.onFocus((timeline) => {
+      if (!live || !timeline || timeline === selected.current) return;
+      selected.current = timeline;
+      void client.timeline(timeline).then((t) => live && setTimeline(t));
+    });
     client
       .connect()
       .then(async () => {
         if (!live) return;
         setCapabilities(await client.capabilities());
+        const focus = await client.focus();
+        if (focus.timeline) selected.current = focus.timeline;
         await refresh();
         const last = await client.impact();
         if (live && last) setImpact(last);
@@ -157,10 +164,13 @@ export function useSession(url: string = runtimeUrl()): Session {
     };
   }, [client, refresh]);
 
+  // Opening a sequence opens it in every surface of the application, the
+  // native window included; the announcement is what moves this one too.
   const selectTimeline = useCallback(
     (id: string) => {
       selected.current = id;
       void client.timeline(id).then(setTimeline);
+      void client.focus(id).catch(() => {});
     },
     [client],
   );

@@ -60,17 +60,22 @@ impl RuntimeLink {
     }
 }
 
-/// The sequence the window plays: the most recently created one.
-///
-/// Which sequence each surface has open is editor state, not project state,
-/// and is not yet shared between surfaces; the newest is the one most likely
-/// being cut.
-fn current_timeline(graph: &Graph) -> Option<EntityId> {
-    graph
-        .of_kind(kinds::NLE_TIMELINE)
-        .iter()
-        .max_by_key(|n| (n.created_rev, n.id))
-        .map(|n| n.id)
+/// The sequence the window plays: the one open in the application, or — before
+/// any surface has opened one — the most recently created.
+fn current_timeline(graph: &Graph, focus: Option<EntityId>) -> Option<EntityId> {
+    focus
+        .filter(|f| {
+            graph
+                .node(*f)
+                .is_some_and(|n| n.kind.as_str() == kinds::NLE_TIMELINE)
+        })
+        .or_else(|| {
+            graph
+                .of_kind(kinds::NLE_TIMELINE)
+                .iter()
+                .max_by_key(|n| (n.created_rev, n.id))
+                .map(|n| n.id)
+        })
 }
 
 fn track_ids(graph: &Graph, timeline: EntityId) -> Vec<EntityId> {
@@ -107,7 +112,7 @@ impl ProjectLink for RuntimeLink {
 
     fn sequence(&self) -> Option<SequencePlan> {
         let graph = self.runtime.project.engine.read();
-        let id = current_timeline(&graph)?;
+        let id = current_timeline(&graph, self.runtime.project.session.focus())?;
         let list = cine_runtime::playlist::edit_list(&graph, id).ok()?;
         let timeline = cine_timeline::graph::export_timeline(&graph, id).ok()?;
         let entries = list
@@ -136,6 +141,11 @@ impl ProjectLink for RuntimeLink {
     fn subscribe(&self, wake: Box<dyn Fn() + Send + Sync>) {
         let wake: Waker = Arc::from(wake);
         self.wakers.lock().push(wake.clone());
+        let on_session = wake.clone();
+        self.runtime
+            .project
+            .session
+            .subscribe(move |_| on_session());
         self.runtime.project.engine.subscribe(move |_| wake());
     }
 

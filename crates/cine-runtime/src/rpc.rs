@@ -42,6 +42,18 @@ pub fn error_response(id: &J, code: i64, message: &str) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
 }
 
+/// A shared-session notification, as pushed to every connected client.
+pub fn session_notification(event: &cine_pipeline::session::SessionEvent) -> String {
+    match event {
+        cine_pipeline::session::SessionEvent::Focus(t) => json!({
+            "jsonrpc": "2.0",
+            "method": "focus",
+            "params": { "timeline": t },
+        })
+        .to_string(),
+    }
+}
+
 /// A change notification, as pushed to every connected client.
 pub fn change_notification(cs: &ucg_core::ChangeSet) -> String {
     json!({
@@ -521,6 +533,31 @@ pub fn dispatch_with(
             let mut out = with_impact(p, &group);
             out["clips"] = json!(placed);
             out
+        }
+        "focus" => {
+            // With `timeline`, open that sequence in every surface; `null`
+            // closes it. Without, report what is open.
+            if let Some(v) = params.get("timeline") {
+                let want = match v {
+                    J::Null => None,
+                    other => {
+                        let id = other
+                            .as_str()
+                            .and_then(EntityId::parse)
+                            .ok_or("`timeline` must be an entity id or null")?;
+                        let g = p.engine.read();
+                        if !g
+                            .node(id)
+                            .is_some_and(|n| n.kind.as_str() == kinds::NLE_TIMELINE)
+                        {
+                            return Err(format!("{id} is not a sequence in this project"));
+                        }
+                        Some(id)
+                    }
+                };
+                p.session.set_focus(want);
+            }
+            json!({ "timeline": p.session.focus() })
         }
         "edit_list" => {
             let timeline = entity(params, "timeline")?;
