@@ -429,3 +429,56 @@ fn project_persists_and_reopens_with_reactors() {
     assert!(g.validate().is_empty());
     assert_eq!(reopened.engine.reactor_names().len(), 7);
 }
+
+/// Rewording a line without changing its length changes no scene statistic, so
+/// nothing touches the scene node. The actor's words still changed, and the
+/// bound clip must still be flagged — this was missed until the protocol test
+/// for the editor exercised it.
+#[test]
+fn a_same_length_rewording_still_flags_the_bound_clip() {
+    let (project, _doc, scenes) = setup();
+    let s1 = scenes[0];
+    let lines = project.dialogue_lines(s1);
+    project.import_otio(OTIO, "cut_v1.otio").unwrap();
+    let bound = project.engine.read().of_kind(kinds::NLE_CLIP)[0].id;
+    project
+        .engine
+        .transact("bind clip", |tx| {
+            cine_timeline::graph::bind_clip_to_scene(tx, bound, s1)
+                .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .unwrap();
+    let words = project
+        .engine
+        .read()
+        .node(s1)
+        .unwrap()
+        .get_int(attrs::WORDS);
+
+    let original = project
+        .engine
+        .read()
+        .node(lines[0])
+        .unwrap()
+        .get_str(attrs::TEXT)
+        .unwrap()
+        .to_string();
+    let reworded: String = original
+        .split_whitespace()
+        .map(|w| w.chars().rev().collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_ne!(reworded, original);
+    project.edit_dialogue(lines[0], &reworded).unwrap();
+
+    let g = project.engine.read();
+    assert_eq!(
+        g.node(s1).unwrap().get_int(attrs::WORDS),
+        words,
+        "same length"
+    );
+    assert_eq!(
+        g.node(bound).unwrap().get_bool(attrs::NEEDS_CONFORM),
+        Some(true)
+    );
+}

@@ -393,11 +393,21 @@ impl Reactor for TimelineReactor {
         cs.touches_kind(kinds::SCRIPT_SCENE)
             || cs.touches_kind(kinds::LOGISTICS_SHOT)
             || cs.touches_kind(kinds::PREVIS_SHOT)
+            // A line reworded without changing its length changes no scene
+            // statistic, so the scene itself is never touched. The words an
+            // actor says are still different, and the cut must hear about it.
+            || cs.touches_module("script.")
     }
     fn react(&self, cs: &ChangeSet, g: &Graph) -> Result<Vec<Plan>> {
         let mut plans = Vec::new();
         let mut targets: Vec<(EntityId, String)> = Vec::new();
-        for scene in cs.dirty_of_kind(g, kinds::SCRIPT_SCENE) {
+        let mut scenes: BTreeSet<EntityId> = cs.dirty_of_kind(g, kinds::SCRIPT_SCENE).collect();
+        let via_elements: BTreeSet<EntityId> = affected_script_scenes(cs, g).into_iter().collect();
+        scenes.extend(via_elements.iter().copied());
+        let element_deleted = cs.delta.ops.iter().any(|op| {
+            matches!(op, Op::DeleteNode { node, .. } if kinds::is_script_element(node.kind.as_str()))
+        });
+        for scene in scenes {
             let content = [
                 attrs::HEADING,
                 attrs::WORDS,
@@ -406,9 +416,12 @@ impl Reactor for TimelineReactor {
             ]
             .iter()
             .any(|a| cs.attr_changed(scene, a))
-                || g.descendants(scene)
-                    .iter()
-                    .any(|d| cs.attr_changed(*d, attrs::TEXT) || cs.was_created(*d));
+                || g.descendants(scene).iter().any(|d| {
+                    cs.attr_changed(*d, attrs::TEXT)
+                        || cs.attr_changed(*d, attrs::CHARACTER)
+                        || cs.was_created(*d)
+                })
+                || (element_deleted && via_elements.contains(&scene));
             if content {
                 let heading = g
                     .node(scene)
