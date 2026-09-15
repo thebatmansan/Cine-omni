@@ -498,9 +498,10 @@ demonstrably runs. `ShellCapabilities::PLAYBACK` is now `Degraded`, naming the
 * **The margin is thin and the machine decides.** Mean decode measured between
   39.8 ms and 96.6 ms across runs on one machine against a 41.7 ms budget. Three
   consecutive quiet runs held 24 fps exactly; a hot one dropped 62%.
-* **The image is stretched to the window.** The blit fills the viewport without
-  preserving aspect ratio, and scaling is nearest-neighbour. Unchanged by this
-  work, and wrong for a reference viewer.
+* **Scaling is nearest-neighbour.** The picture is now letterboxed into the
+  program pane rather than stretched to the window (see `WORKSPACE.md`), but at
+  anything other than 1:1 it is still point-sampled, and the correct answer is a
+  real resampling filter.
 * **`--smoke` exited non-zero twice during one session** and then passed eight
   consecutive runs under the same load. Cause unidentified. It should not be
   treated as a reliable gate until it is.

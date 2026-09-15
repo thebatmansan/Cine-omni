@@ -9,7 +9,14 @@ publish.workspace = true
 [dependencies]
 cine-gpu = { workspace = true, features = ["wgpu"] }
 cine-media.workspace = true
+cine-timeline.workspace = true
+ucg-core.workspace = true
 thiserror.workspace = true
+
+egui.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true
+egui_tiles.workspace = true
 
 wgpu = "30"
 winit = "0.30"

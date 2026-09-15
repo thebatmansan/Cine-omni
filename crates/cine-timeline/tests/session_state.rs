@@ -495,5 +495,9 @@ fn session_state_survives_the_project_graph() {
     assert!(vs.muted && vs.targeted && !vs.solo);
     assert!(TrackState::of(audio).solo);
 
-    assert_eq!(linked_positions(&back, "take-42").len(), 2, "the take is still paired");
+    assert_eq!(
+        linked_positions(&back, "take-42").len(),
+        2,
+        "the take is still paired"
+    );
 }

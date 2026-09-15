@@ -138,7 +138,9 @@ argument for the evidence discipline, not against it.
 | Replace edit | Yes | 🟢 VERIFIED | Keeps the hole's duration, refuses a replacement with too little media |
 | Snapping | Yes | 🟢 VERIFIED | Cuts, track ends and markers; exact across rates; ties resolve to the earlier target. Tolerance is a duration, never pixels |
 | Media handles | Yes | 🟢 VERIFIED | `(head, tail)`; unknown when the clip declares no available range, which is not the same as zero |
-| Multi-selection, track targeting UI | Yes | 🔴 NOT IMPLEMENTED | Targeting is stored and queryable; nothing consumes it yet |
+| Multi-selection, track targeting UI | Yes | 🔴 NOT IMPLEMENTED | Targeting is stored and queryable; the workspace draws the toggles but does not yet apply them |
+| Native editorial workspace | Yes | 🟡 FOUNDATION | Docked panels (egui + egui_tiles) over the real picture: **144/144 pictures at 24 fps, 0 dropped, with the interface drawn** — it costs ~2 ms a frame. `--ui-smoke` checks it renders on real hardware. No timeline wired, no editing from the interface. See `WORKSPACE.md` |
+| Aspect-correct display | Yes | 🟢 VERIFIED | Letterboxed into the program pane. The blit previously stretched to the window, which would have made an anamorphic frame look correct and be wrong |
 | Shot → take → media traceability | Yes | 🟡 PARTIAL | Takes now survive shot-list regeneration; full production model designed, not built |
 | Offload verification state machine | Yes | 🔵 PLANNED | Designed: `discovered → copying → copied → verifying → verified`, `failed` absorbing |
 | Loudness (EBU R128 / BS.1770) | Yes | 🟢 VERIFIED | `lufs_integrated` agrees with `ebur128` to **0.000 LU** across five signals including 5.1 |
@@ -293,6 +295,8 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * OTIO output that parses in real OpenTimelineIO
 
 **May not be claimed**:
+* "Editorial workspace" as a working editor — the panels and transport are real
+  and measured, but no timeline is loaded into it and nothing can be cut from it
 * "ACES-compatible" — measured 30% off on saturated colour
 * "OpenColorIO-compatible" — cannot load any released ACES config
 * "OpenUSD" — `cine-previs` emits a USDA-shaped subset

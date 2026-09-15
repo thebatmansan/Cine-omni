@@ -308,6 +308,22 @@ impl Presenter {
 
     /// Draw the current image, or clear to the surround colour if there is none.
     pub fn draw(&self, device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
+        self.draw_into(device, queue, view, None);
+    }
+
+    /// Draw into a rectangle of the target, in physical pixels, letterboxed by
+    /// the caller.
+    ///
+    /// The whole target is still cleared to the surround colour first, so the
+    /// area outside the picture is the neutral grey a viewer should have rather
+    /// than whatever was there before.
+    pub fn draw_into(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        viewport: Option<[f32; 4]>,
+    ) {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("present"),
         });
@@ -334,6 +350,12 @@ impl Presenter {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some([x, y, w, h]) = viewport {
+                if w < 1.0 || h < 1.0 {
+                    return;
+                }
+                pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            }
             if let Some(p) = &self.planes {
                 let view = |t: &wgpu::Texture| t.create_view(&Default::default());
                 let (yv, uv, vv) = (view(&p.y), view(&p.u), view(&p.v));

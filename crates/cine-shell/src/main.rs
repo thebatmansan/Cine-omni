@@ -39,9 +39,11 @@ use cine_media::clock::{PlaybackClock, PlaybackRate, SystemTime, TransportState}
 use cine_media::decode_ahead::{AheadConfig, DecodeAhead};
 use cine_media::schedule::{FrameSource, Presentation, Scheduler};
 use cine_media::{VideoFrame, VideoReader};
+use cine_shell::egui_layer::EguiLayer;
 use cine_shell::gpu::SurfaceContext;
 use cine_shell::present::Presenter;
 use cine_shell::viewer::FrameUploader;
+use cine_shell::workspace::{Command, ViewerStatus, Workspace};
 use cine_shell::ShellCapabilities;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -92,6 +94,16 @@ struct Args {
     smoke_frames: Option<u32>,
     /// Play for this many seconds, then report and exit.
     play_secs: Option<f64>,
+    /// Draw the workspace for this many frames, then report and exit.
+    ///
+    /// The equivalent of `--smoke` for the interface: it drives the real
+    /// window, the real surface and the real egui pass, so "the workspace
+    /// renders" is something a machine can check rather than something someone
+    /// remembers seeing.
+    ui_frames: Option<u32>,
+    /// Keep the workspace up during `--play`, so the cost of drawing the
+    /// interface is part of the measurement rather than excluded from it.
+    with_ui: bool,
     /// Write the exact image the viewer presented, for inspection.
     dump: Option<PathBuf>,
 }
@@ -100,12 +112,16 @@ fn parse_args() -> Args {
     let mut media = None;
     let mut smoke_frames = None;
     let mut play_secs = None;
+    let mut ui_frames = None;
+    let mut with_ui = false;
     let mut dump = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--smoke" => smoke_frames = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(30)),
             "--play" => play_secs = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(5.0)),
+            "--ui-smoke" => ui_frames = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(30)),
+            "--with-ui" => with_ui = true,
             "--dump" => dump = it.next().map(PathBuf::from),
             other if !other.starts_with("--") => media = Some(PathBuf::from(other)),
             other => eprintln!("ignoring unknown flag {other}"),
@@ -115,6 +131,8 @@ fn parse_args() -> Args {
         media,
         smoke_frames,
         play_secs,
+        ui_frames,
+        with_ui,
         dump,
     }
 }
@@ -144,6 +162,31 @@ fn write_png(path: &PathBuf, rgba: &[f32], width: u32, height: u32) -> std::io::
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
+/// Fit a picture inside a pane without distorting it.
+///
+/// The blit used to stretch the image to the window, which is wrong for a
+/// reference viewer: an anamorphic frame would have looked correct and been a
+/// lie. Returns a viewport in physical pixels.
+fn letterbox(pane: egui::Rect, pixels_per_point: f32, picture: Option<(u32, u32)>) -> [f32; 4] {
+    let x = pane.min.x * pixels_per_point;
+    let y = pane.min.y * pixels_per_point;
+    let w = pane.width() * pixels_per_point;
+    let h = pane.height() * pixels_per_point;
+    let Some((pw, ph)) = picture else {
+        return [x, y, w, h];
+    };
+    if pw == 0 || ph == 0 || w <= 0.0 || h <= 0.0 {
+        return [x, y, w, h];
+    }
+    let aspect = pw as f32 / ph as f32;
+    let (fit_w, fit_h) = if w / h > aspect {
+        (h * aspect, h)
+    } else {
+        (w, w / aspect)
+    };
+    [x + (w - fit_w) * 0.5, y + (h - fit_h) * 0.5, fit_w, fit_h]
+}
+
 struct App {
     args: Args,
     window: Option<Arc<Window>>,
@@ -154,6 +197,7 @@ struct App {
     uploader: FrameUploader,
     /// How the picture is being interpreted, and whether that was assumed.
     colour: Option<(String, bool)>,
+    keyframes: Vec<usize>,
     /// Surface presentations, which is not the same as pictures presented: the
     /// window may redraw the same picture several times.
     presented: u32,
@@ -163,6 +207,21 @@ struct App {
     /// The last thing the transport did, printed rather than guessed at.
     last_report: Option<String>,
     proxy: EventLoopProxy<Wake>,
+    /// The editorial workspace. Absent in the evidence modes, which measure the
+    /// presentation path and must not end up measuring the interface too.
+    egui: Option<EguiLayer>,
+    workspace: Workspace,
+    /// Where the picture goes within the surface, in physical pixels.
+    picture_rect: Option<[f32; 4]>,
+    /// Dimensions of the decoded picture, for letterboxing.
+    picture_size: Option<(u32, u32)>,
+    /// What the interface asked for during the last draw, acted on afterwards:
+    /// the interface is drawn while several of `App`'s fields are borrowed.
+    pending_commands: Vec<Command>,
+    /// Workspace frames drawn, for `--ui-smoke`.
+    ui_drawn: u32,
+    /// When egui next needs painting. `MAX` means "not until something happens".
+    egui_repaint_in: Duration,
     stages: Stages,
     preroll: Option<Preroll>,
     preroll_took: Option<(usize, Duration)>,
@@ -181,12 +240,20 @@ impl App {
             playback: None,
             uploader: FrameUploader::new(),
             colour: None,
+            keyframes: Vec::new(),
             presented: 0,
             skipped: 0,
             play_until: None,
             failure: None,
             last_report: None,
             proxy,
+            egui: None,
+            workspace: Workspace::new(),
+            picture_rect: None,
+            picture_size: None,
+            pending_commands: Vec::new(),
+            ui_drawn: 0,
+            egui_repaint_in: Duration::MAX,
             stages: Stages::default(),
             preroll: None,
             preroll_took: None,
@@ -225,6 +292,7 @@ impl App {
                 conversion.choice.is_assumed(),
             ));
         }
+        self.picture_size = Some((conversion.width, conversion.height));
         let (Some(y), Some(u), Some(v)) = (frame.plane(0), frame.plane(1), frame.plane(2)) else {
             self.failure = Some("decoded picture is missing a plane".into());
             return;
@@ -314,6 +382,98 @@ impl App {
                 eprintln!("this build cannot play this media");
                 false
             }
+        }
+    }
+
+    /// Everything the interface shows, assembled in one place from the
+    /// scheduler and the decoder, so no number on screen has a second source.
+    fn status(&self) -> ViewerStatus {
+        let Some(p) = self.playback.as_ref() else {
+            return ViewerStatus::default();
+        };
+        let s = p.stats();
+        let a = p.source().stats();
+        ViewerStatus {
+            media: self.args.media.as_ref().map(|m| m.display().to_string()),
+            state: Some(p.state()),
+            position: Some(p.position()),
+            picture: p.on_screen(),
+            pictures: p.source().frame_count(),
+            presented: s.presented,
+            dropped: s.dropped,
+            late: s.late,
+            underrun_episodes: s.underrun_episodes,
+            decode_mean: a.mean_decode(),
+            buffered: p.source().buffered().len(),
+            buffer_bytes: a.bytes,
+            colour: self.colour.clone(),
+            keyframes: self.keyframes.clone(),
+        }
+    }
+
+    /// Act on what the editor asked for.
+    fn apply(&mut self, command: Command) {
+        if self.playback.is_none() {
+            return;
+        }
+        match command {
+            Command::TogglePlay => {
+                let advancing = self
+                    .playback
+                    .as_ref()
+                    .is_some_and(|p| p.state().is_advancing());
+                if advancing || self.preroll.is_some() {
+                    if let Some(p) = self.playback.as_mut() {
+                        p.clock_mut().pause();
+                    }
+                    self.preroll = None;
+                } else {
+                    let reverse = self
+                        .playback
+                        .as_ref()
+                        .is_some_and(|p| p.clock().rate().is_reverse());
+                    self.start_play(reverse);
+                }
+            }
+            Command::Play => self.start_play(false),
+            Command::PlayReverse => self.start_play(true),
+            Command::Pause => {
+                if let Some(p) = self.playback.as_mut() {
+                    p.clock_mut().pause();
+                }
+                self.preroll = None;
+            }
+            Command::Stop => {
+                if let Some(p) = self.playback.as_mut() {
+                    p.clock_mut().stop();
+                }
+                self.preroll = None;
+            }
+            Command::Step(by) => {
+                self.preroll = None;
+                if let Some(p) = self.playback.as_mut() {
+                    let _ = p.step(by);
+                }
+            }
+            Command::SeekNear(at) => {
+                // The click was approximate; only the source knows where the
+                // pictures actually are.
+                self.preroll = None;
+                if let Some(p) = self.playback.as_mut() {
+                    let exact = p
+                        .source()
+                        .index_at(at)
+                        .and_then(|index| p.source().pts_of(index));
+                    if let Some(pts) = exact {
+                        p.seek(pts);
+                    }
+                }
+            }
+            // Track state belongs to a timeline, and none is loaded yet.
+            Command::ToggleLock(_)
+            | Command::ToggleMute(_)
+            | Command::ToggleSolo(_)
+            | Command::ToggleTarget(_) => {}
         }
     }
 
@@ -489,6 +649,10 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // Gathered before anything is borrowed mutably: `status` reads the
+        // whole of `self`, and the drawing below borrows four of its fields.
+        let status = self.status();
+        let picture_size = self.picture_size;
         let (Some(surface), Some(presenter)) = (self.surface.as_mut(), self.presenter.as_ref())
         else {
             return;
@@ -509,7 +673,7 @@ impl App {
             Acquired::Timeout | Acquired::Occluded => {
                 // Skip this frame. In smoke mode an occluded window would
                 // otherwise spin forever without ever presenting.
-                if self.args.smoke_frames.is_some() {
+                if self.args.smoke_frames.is_some() || self.args.ui_frames.is_some() {
                     self.skipped += 1;
                     if self.skipped > 600 {
                         self.failure =
@@ -529,7 +693,38 @@ impl App {
         };
         let drawing = Instant::now();
         let view = frame.texture.create_view(&Default::default());
-        presenter.draw(&surface.device, &surface.queue, &view);
+        presenter.draw_into(&surface.device, &surface.queue, &view, self.picture_rect);
+
+        if let (Some(egui), Some(window)) = (self.egui.as_mut(), self.window.as_ref()) {
+            let size = [surface.config.width, surface.config.height];
+            let workspace = &mut self.workspace;
+            let mut asked = Vec::new();
+            let mut encoder =
+                surface
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("workspace"),
+                    });
+            let repaint_in = egui.draw(
+                window,
+                &surface.device,
+                &surface.queue,
+                &mut encoder,
+                &view,
+                size,
+                |ui| asked.extend(workspace.ui(ui, &status, None)),
+            );
+            self.egui_repaint_in = repaint_in;
+            surface.queue.submit(Some(encoder.finish()));
+            self.pending_commands = asked;
+            self.ui_drawn += 1;
+            // Where the picture goes next frame, letterboxed into the pane.
+            let ppp = egui.context().pixels_per_point();
+            self.picture_rect = workspace
+                .program_rect()
+                .map(|r| letterbox(r, ppp, picture_size));
+        }
+
         // Presentation moved to the queue in wgpu 30.
         surface.queue.present(frame);
         self.stages.draw += drawing.elapsed();
@@ -566,6 +761,7 @@ impl App {
                     "keyframes at display indices {:?}",
                     reader.keyframe_indices()
                 );
+                self.keyframes = reader.keyframe_indices().to_vec();
                 let clock = PlaybackClock::new(SystemTime::default(), start, end);
                 let ahead = DecodeAhead::new(reader, AheadConfig::default());
                 // The worker wakes the event loop when a picture lands. A proxy
@@ -637,6 +833,17 @@ impl ApplicationHandler<Wake> for App {
         );
 
         self.presenter = Some(Presenter::new(&surface.device, surface.config.format));
+        // Evidence modes deliberately run without the interface: `--play`
+        // measures the presentation path, and an interface drawn over it would
+        // become part of the number.
+        if self.args.with_ui || (self.args.smoke_frames.is_none() && self.args.play_secs.is_none())
+        {
+            self.egui = Some(EguiLayer::new(
+                &window,
+                &surface.device,
+                surface.config.format,
+            ));
+        }
         self.surface = Some(surface);
 
         // The compute context is separate today: `GpuContext` owns its own
@@ -687,41 +894,99 @@ impl ApplicationHandler<Wake> for App {
             event_loop.exit();
             return;
         }
-        if self.advance_preroll() {
-            // Still pre-rolling: the worker's notification wakes us.
-            event_loop.set_control_flow(ControlFlow::Wait);
+        if self
+            .args
+            .ui_frames
+            .is_some_and(|limit| self.ui_drawn >= limit)
+        {
+            println!("UI SMOKE OK: drew {} workspace frames", self.ui_drawn);
+            self.report();
+            event_loop.exit();
             return;
         }
 
-        // Pump even when paused: after a step, a seek or opening the file the
-        // due picture may have just arrived from the worker. When nothing has
-        // changed this is a `Hold` and costs nothing.
-        if self.pump() {
+        for command in std::mem::take(&mut self.pending_commands) {
+            self.apply(command);
+        }
+
+        let prerolling = self.advance_preroll();
+
+        // Pump in *every* mode, before deciding how to wait. After a step, a
+        // seek or opening the file, the due picture may have just arrived from
+        // the worker; when nothing has changed this is a `Hold` and costs
+        // nothing. An earlier version returned before this in the interface
+        // modes, which drew the panels perfectly around a black rectangle.
+        if !prerolling && self.pump() {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
         }
 
-        // Smoke mode drives surface frames as fast as it can, but only after
-        // pumping: with decode-ahead the first picture arrives from the worker,
-        // and returning early here meant `--dump` silently wrote nothing.
-        if self.args.smoke_frames.is_some() {
+        // Anything that drives frames as fast as it can. `--play --with-ui` is
+        // deliberately *not* one of them: it must keep waking on the
+        // scheduler's deadline, or it would measure a spin rather than playback.
+        let driving = self.args.smoke_frames.is_some() || self.args.ui_frames.is_some();
+        if driving {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
             event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
-        let Some(p) = self.playback.as_ref() else {
+
+        if prerolling {
+            // The worker's notification wakes us.
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
+        }
+
+        // Wake for whichever comes first: the next picture, or the next thing
+        // the interface needs to animate. Waking for "the interface wants *a*
+        // repaint" instead of "the interface wants one *then*" turned this into
+        // a spin that redrew 74 times a second and cost playback 38% of its
+        // pictures.
+        let next = self.playback.as_ref().and_then(|p| p.next_deadline());
+        let wake = match (next, self.egui_repaint_in) {
+            (Some(d), r) => Some(d.min(r)),
+            (None, r) if r < Duration::MAX => Some(r),
+            // Paused with a still interface: nothing to wake for. Starved: the
+            // worker wakes us. A viewer that polls in either case burns a core
+            // to show a still frame.
+            (None, _) => None,
         };
-        event_loop.set_control_flow(match p.next_deadline() {
+        if wake.is_some_and(|w| w.is_zero()) {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(match wake {
             Some(d) => ControlFlow::WaitUntil(Instant::now() + d),
-            // Paused: nothing to wake for. Starved: the worker wakes us. A viewer
-            // that polls in either case burns a core to show a still frame.
             None => ControlFlow::Wait,
         });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // The interface gets first refusal on every event, so a keystroke meant
+        // for a text field does not also drive the transport.
+        //
+        // The redraw request deliberately excludes `RedrawRequested`, which is
+        // itself a window event: asking for a redraw while handling one is an
+        // unconditional spin. It drew 76 times a second, competed with the
+        // decode worker for two cores, and cost playback 38% of its pictures —
+        // all of it invisible except in the counters.
+        let consumed = match (self.egui.as_mut(), self.window.as_ref()) {
+            (Some(egui), Some(window)) => {
+                let consumed = egui.on_window_event(window, &event);
+                if !matches!(event, WindowEvent::RedrawRequested) {
+                    window.request_redraw();
+                }
+                consumed
+            }
+            _ => false,
+        };
+        if consumed && !matches!(event, WindowEvent::CloseRequested | WindowEvent::Resized(_)) {
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -802,5 +1067,14 @@ fn main() {
     if smoke && app.presented == 0 {
         eprintln!("FAILED: no frames were presented");
         std::process::exit(1);
+    }
+    if let Some(limit) = app.args.ui_frames {
+        if app.ui_drawn < limit {
+            eprintln!(
+                "FAILED: the workspace drew {} of {limit} frames",
+                app.ui_drawn
+            );
+            std::process::exit(1);
+        }
     }
 }
