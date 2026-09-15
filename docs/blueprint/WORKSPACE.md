@@ -153,21 +153,20 @@ post-caching one does not — is a difference in the code.
 
 ## What is not implemented, and is not claimed
 
-* **The timeline comes from a file, not the project.** `--timeline <file.otio>`
-  reads a cut from disk. Reading it from the project graph through the runtime,
-  so the workspace and `cine start` show the same edit, is not done.
-* **Nothing can be cut from the interface.** Track state can be changed; no
-  ripple, roll, slip, slide, trim, insert or overwrite is reachable from a
-  click, though all of them exist and are tested in `cine-timeline`.
-* **The timeline's time is not the media's time.** The pane draws the cut on its
-  own timebase and the playhead from the media clock. For a cut that references
-  the open media they coincide; in general they do not, and conforming them is
-  real work that has not been done.
+* **Inside `cine start` the window plays the project's cut**, not a file: the
+  sequence is the runtime's flattened edit list (see *One application* below),
+  the playhead is sequence time, and every commit by any client reloads it
+  without moving the playhead. The standalone `cine-shell <file>` remains the
+  reference viewer.
+* **Editing happens in the browser surface.** The window changes track state
+  through the project; trims, splits and inserts are made in the browser's
+  timeline and appear in the window when committed.
+* **Dissolves play as cuts.** The edit list counts them and the log says so;
+  rendering a mix needs two decodes and a GPU blend, which is not built.
 * **No source viewer, bins, search, metadata or scopes.** The docking layout has
   room for them; nothing behind them exists yet.
 * **No audio.** No device, no meters, no waveforms. See `AV-SYNC.md`.
 * **One asset, one machine.** Everything above is the reference clip on a
   two-core laptop with an integrated GPU.
-* **`cine start` does not launch this.** The runtime serves the review UI; the
-  workspace is a separate binary opened on a media file. Bringing them under one
-  command is real work and has not been done.
+* **Which sequence the window plays is the most recently created one.** Which
+  sequence each surface has open is editor state that is not yet shared.

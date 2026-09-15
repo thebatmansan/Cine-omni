@@ -158,6 +158,47 @@ behave differently depending on how it was called.
 
 ---
 
+## 6a. One application: the native surface
+
+When there is a display, `cine start` opens the native window in the same
+process. It is a surface of the running project, not a second application:
+
+```
+cine start
+  ├─ runtime + protocol + browser surface      (server thread)
+  └─ native window                             (main thread; winit requires it)
+       ├─ reads      playlist::edit_list        the same flattened cut the
+       │                                        browser's record monitor reads
+       ├─ plays      EditListSource → DecodeAhead → Scheduler → planar GPU path
+       ├─ follows    engine commits             reloads the cut, keeps the
+       │                                        playhead, resumes if playing;
+       │                                        commits that do not change the
+       │                                        cut do not interrupt playback
+       └─ sends      track state                through the graph, as the
+                                                protocol does
+```
+
+Closing the window closes the application; Ctrl-C closes the window. Both end in
+the same orderly shutdown: stop accepting, save, release the lock. With no
+display, or `--no-window`, the application is the runtime and the browser
+surface, and the start banner says which.
+
+Measured on the reference laptop (release, integrated GPU), playing a
+two-clip sequence built from real media through the protocol, with the
+workspace drawn (`cine start --window-play 4`):
+
+```
+transport Playing — presented 96, dropped 0, late 0
+preroll: 25 pictures in 2.32 s
+decode-ahead: 96 decoded (mean 62.6 ms, worst 978 ms), peak 39.6 MiB
+stages: planes to GPU 0.76 ms per picture; draw incl. conversion 6.4 ms
+underruns: 1 episode
+```
+
+The worst decode is the cold entry into the second file (a keyframe walk);
+decode-ahead absorbed it. A 4-second sequence of two 2-second clips is a short
+test, and the number claims only that.
+
 ## 7. Status
 
 | Capability | State |
@@ -170,6 +211,8 @@ behave differently depending on how it was called.
 | Port fallback | 🟢 VERIFIED |
 | Path-traversal refusal on static files | 🟢 VERIFIED — including symlink escape |
 | Crash recovery | 🟢 VERIFIED — see §8 |
+| Native surface in the same process | 🟢 VERIFIED — plays the project's sequence, reloads on commit, closes cleanly on Ctrl-C |
+| Which sequence each surface has open, shared | 🔴 NOT IMPLEMENTED — the window plays the most recently created sequence |
 | Authentication / authorisation | 🔴 NOT IMPLEMENTED — loopback only is the whole of the security model |
 | Reconnect with state resync | 🔴 NOT IMPLEMENTED — a client that drops must reload |
 | Per-client permissions or roles | 🔴 NOT IMPLEMENTED |
