@@ -1,0 +1,44 @@
+# OpenColorIO 2.5.2
+config	path	colorspace	rule
+file-rules/rules.ocio	/job/plates/a001.dpx	ACEScct	Plates
+file-rules/rules.ocio	/job/plates/a001.DPX	ACEScct	Plates
+file-rules/rules.ocio	/job/Plates/a001.dpx	raw	Default
+file-rules/rules.ocio	/plates/a001.dpx	ACEScct	Plates
+file-rules/rules.ocio	/job/SHOT_010/comp.exr	ACEScg	Shots
+file-rules/rules.ocio	/job/shot_010/comp.exr	raw	Default
+file-rules/rules.ocio	/job/SHOT_010/comp.EYR	raw	Default
+file-rules/rules.ocio	/job/SHOT_010/comp.EXR	raw	Default
+file-rules/rules.ocio	shot_12.png	ACEScc	Numbered
+file-rules/rules.ocio	/x/shot_12.png	raw	Default
+file-rules/rules.ocio	shot_a.png	raw	Default
+file-rules/rules.ocio	/work/lin_ap1/beauty.exr	ACEScg	ColorSpaceNamePathSearch
+file-rules/rules.ocio	/work/ACEScct_x/ACEScg.tif	ACEScg	ColorSpaceNamePathSearch
+file-rules/rules.ocio	/work/ACEScc_cg.tif	cg	ColorSpaceNamePathSearch
+file-rules/rules.ocio	/work/cg_ACEScc.tif	ACEScc	ColorSpaceNamePathSearch
+file-rules/rules.ocio	/media/clip.mp4	Rec709	Movies
+file-rules/rules.ocio	/media/clip.MOV	Rec709	Movies
+file-rules/rules.ocio	/media/clip.mp4.txt	raw	Default
+file-rules/rules.ocio	/media/clip.mxf	raw	Default
+file-rules/rules.ocio	noext	raw	Default
+file-rules/rules.ocio	/a/b.dpx/c	raw	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/job/plates/a001.dpx	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/job/plates/a001.DPX	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/job/Plates/a001.dpx	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/plates/a001.dpx	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/job/SHOT_010/comp.exr	ACES2065-1	EXR
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/job/shot_010/comp.exr	ACES2065-1	EXR
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/job/SHOT_010/comp.EYR	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/job/SHOT_010/comp.EXR	ACES2065-1	EXR
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	shot_12.png	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/x/shot_12.png	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	shot_a.png	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/work/lin_ap1/beauty.exr	ACES2065-1	EXR
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/work/ACEScct_x/ACEScg.tif	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/work/ACEScc_cg.tif	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/work/cg_ACEScc.tif	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/media/clip.mp4	Rec.1886 Rec.709 - Display	Movies
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/media/clip.MOV	Rec.1886 Rec.709 - Display	Movies
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/media/clip.mp4.txt	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/media/clip.mxf	Rec.1886 Rec.709 - Display	Movies
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	noext	sRGB - Display	Default
+configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio	/a/b.dpx/c	sRGB - Display	Default

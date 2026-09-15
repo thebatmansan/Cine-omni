@@ -1,0 +1,25 @@
+ocio_profile_version: 2.1
+
+roles:
+  default: raw
+  scene_linear: ACEScg
+
+file_rules:
+  - !<Rule> {name: Plates, colorspace: ACEScct, pattern: "*/plates/*", extension: "dpx"}
+  - !<Rule> {name: Shots, colorspace: ACEScg, pattern: "*SHOT*", extension: "e[xy]r"}
+  - !<Rule> {name: Numbered, colorspace: ACEScc, regex: "shot_[0-9]+\\.png"}
+  - !<Rule> {name: ColorSpaceNamePathSearch}
+  - !<Rule> {name: Movies, colorspace: Rec709, regex: ".*\\.([mM][pP]4|[mM][oO][vV])$"}
+  - !<Rule> {name: Default, colorspace: raw}
+
+displays:
+  sRGB:
+    - !<View> {name: Raw, colorspace: raw}
+
+colorspaces:
+  - !<ColorSpace> {name: raw, isdata: true}
+  - !<ColorSpace> {name: ACEScg, aliases: [lin_ap1]}
+  - !<ColorSpace> {name: ACEScct}
+  - !<ColorSpace> {name: ACEScc}
+  - !<ColorSpace> {name: cg}
+  - !<ColorSpace> {name: Rec709}

@@ -71,6 +71,7 @@ used_by = [
   "crates/cine-color/tests/data/generate_aces2.py",
   "crates/cine-color/tests/data/generate_config_views.py",
   "crates/cine-color/tests/data/generate_config_colorspaces.py",
+  "crates/cine-color/tests/data/generate_file_rules.py",
 ]
 modifications = "none; not linked, not shipped. Its outputs are committed as reference values (*.tsv)."
 obligations = "none for the application: compatibility is established by comparing outputs, and nothing from it is compiled in."

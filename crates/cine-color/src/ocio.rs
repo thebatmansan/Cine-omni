@@ -8,6 +8,7 @@
 //! view transforms bridge the two.
 
 use crate::error::{Error, Result};
+use crate::file_rules::{match_path, FileRule, FileRuleKind, RuleMatch};
 use crate::lut::{parse_cube, Interpolation, Lut};
 use crate::processor::{Direction, LogParams, NegativeStyle, Op, Processor};
 use crate::space::{
@@ -181,6 +182,8 @@ pub struct Config {
     pub view_transforms: Vec<ViewTransformDef>,
     pub default_view_transform: Option<String>,
     pub colorspaces: Vec<ColorSpaceDef>,
+    /// Which colorspace a file is in, by its path ([`Config::colorspace_for_path`]).
+    pub file_rules: Vec<FileRule>,
     /// Directory the config was loaded from (for `FileTransform` resolution).
     pub base_dir: Option<PathBuf>,
     /// Top-level keys present in the loaded text that this parser does not
@@ -204,6 +207,7 @@ impl Default for Config {
             view_transforms: Vec::new(),
             default_view_transform: None,
             colorspaces: Vec::new(),
+            file_rules: Vec::new(),
             base_dir: None,
             unimplemented: Vec::new(),
         }
@@ -617,6 +621,9 @@ impl Config {
                 cfg.colorspaces.push(parse_colorspace(cs, is_display)?);
             }
         }
+        for rule in doc.get("file_rules").and_then(Yaml::as_seq).unwrap_or(&[]) {
+            cfg.file_rules.push(parse_file_rule(rule)?);
+        }
         const IMPLEMENTED: &[&str] = &[
             "ocio_profile_version",
             "name",
@@ -632,11 +639,11 @@ impl Config {
             "default_view_transform",
             "display_colorspaces",
             "colorspaces",
+            "file_rules",
             // Recognised, and without effect on anything this parser does:
             // `luma` is deprecated and unused by OCIO v2 processing;
-            // `strictparsing` governs looking up a colorspace from a file path,
-            // which is part of file rules, which are not implemented (and are
-            // reported as such when present).
+            // `strictparsing` governs OCIO v1's name-in-path lookup, which a v2
+            // config expresses as a file rule instead.
             "luma",
             "strictparsing",
         ];
@@ -681,6 +688,21 @@ impl Config {
     fn require(&self, name: &str) -> Result<&ColorSpaceDef> {
         self.colorspace(name)
             .ok_or_else(|| Error::UnknownColorSpace(name.to_string()))
+    }
+
+    /// The colorspace a file at `path` is in, by the config's file rules, and
+    /// which rule decided. `None` only for a config with no rules at all (a
+    /// v1 config); a v2 config always ends in `Default`.
+    pub fn colorspace_for_path(&self, path: &str) -> Result<Option<RuleMatch>> {
+        let names: Vec<(String, String)> = self
+            .colorspaces
+            .iter()
+            .flat_map(|c| {
+                std::iter::once((c.name.clone(), c.name.clone()))
+                    .chain(c.aliases.iter().map(|a| (a.clone(), c.name.clone())))
+            })
+            .collect();
+        match_path(&self.file_rules, path, &names)
     }
 
     /// Names of all colorspaces (display ones included).
@@ -1537,6 +1559,32 @@ impl Config {
         if let Some(d) = &self.default_view_transform {
             s.push_str(&format!("default_view_transform: {}\n", q(d)));
         }
+        if !self.file_rules.is_empty() {
+            s.push_str("\nfile_rules:\n");
+            for r in &self.file_rules {
+                let mut parts = vec![format!("name: {}", q(&r.name))];
+                match &r.kind {
+                    FileRuleKind::Pattern {
+                        colorspace,
+                        pattern,
+                        extension,
+                    } => {
+                        parts.push(format!("colorspace: {}", q(colorspace)));
+                        parts.push(format!("pattern: {}", q(pattern)));
+                        parts.push(format!("extension: {}", q(extension)));
+                    }
+                    FileRuleKind::Regex { colorspace, regex } => {
+                        parts.push(format!("colorspace: {}", q(colorspace)));
+                        parts.push(format!("regex: {}", q(regex)));
+                    }
+                    FileRuleKind::Default { colorspace } => {
+                        parts.push(format!("colorspace: {}", q(colorspace)));
+                    }
+                    FileRuleKind::ColorSpaceNamePathSearch => {}
+                }
+                s.push_str(&format!("  - !<Rule> {{{}}}\n", parts.join(", ")));
+            }
+        }
         if !self.looks.is_empty() {
             s.push_str("\nlooks:\n");
             for l in &self.looks {
@@ -2032,6 +2080,45 @@ fn hlg_1000nit_display() -> Op {
             t.map(|v| v * k / to_display)
         },
     )
+}
+
+/// One `file_rules` entry. Which keys are present decides the kind, as in
+/// OpenColorIO: the reserved names `Default` and `ColorSpaceNamePathSearch`,
+/// otherwise `regex`, otherwise `pattern` with `extension`.
+fn parse_file_rule(y: &Yaml) -> Result<FileRule> {
+    let g = |k: &str| y.get(k).and_then(Yaml::as_str).map(str::to_string);
+    let name = g("name").ok_or_else(|| Error::Parse {
+        line: 0,
+        message: "file rule without name".into(),
+    })?;
+    let colorspace = || {
+        g("colorspace").ok_or_else(|| Error::Parse {
+            line: 0,
+            message: format!("file rule `{name}` names no colorspace"),
+        })
+    };
+    let kind = if name.eq_ignore_ascii_case("ColorSpaceNamePathSearch") {
+        FileRuleKind::ColorSpaceNamePathSearch
+    } else if name.eq_ignore_ascii_case("Default") {
+        FileRuleKind::Default {
+            colorspace: colorspace()?,
+        }
+    } else if let Some(regex) = g("regex") {
+        FileRuleKind::Regex {
+            colorspace: colorspace()?,
+            regex,
+        }
+    } else {
+        FileRuleKind::Pattern {
+            colorspace: colorspace()?,
+            pattern: g("pattern").unwrap_or_else(|| "*".into()),
+            extension: g("extension").ok_or_else(|| Error::Parse {
+                line: 0,
+                message: format!("file rule `{name}` has neither regex nor extension"),
+            })?,
+        }
+    };
+    Ok(FileRule { name, kind })
 }
 
 /// A transfer encode applied to `scale · |v|` with the sign restored: what OCIO
