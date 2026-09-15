@@ -42,8 +42,8 @@ pub fn merge_pixel(op: MergeOp, a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 /// cropped/padded (with transparent black) to match when the sizes differ.
 /// `mask` (alpha promoted) and `mix` blend the result back towards `b`.
 pub fn merge(op: MergeOp, a: &Image, b: &Image, mask: Option<&Image>, mix: f32) -> Image {
-    let a = a.to_rgba().aligned_to(&b);
-    let mask = mask.map(|m| m.aligned_to(&b));
+    let a = a.to_rgba().aligned_to(b);
+    let mask = mask.map(|m| m.aligned_to(b));
     b.map_rgba_xy(|x, y, bp| {
         let ap = a.get_rgba(x, y);
         let r = merge_pixel(op, ap, bp);

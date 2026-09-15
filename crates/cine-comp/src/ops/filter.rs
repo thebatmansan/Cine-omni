@@ -108,7 +108,7 @@ pub fn blur_masked(src: &Image, size: f32, kind: BlurKind, mask: Option<&Image>)
     match mask {
         None => blurred,
         Some(m) => {
-            let m = m.aligned_to(&src);
+            let m = m.aligned_to(src);
             let b = blurred.to_rgba();
             src.map_rgba_xy(|x, y, p| {
                 let t = m.get_alpha(x, y);
