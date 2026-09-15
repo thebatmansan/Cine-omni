@@ -92,15 +92,26 @@ fn check_version(v: u32) -> Result<()> {
     Ok(())
 }
 
+/// One forward migration: upgrades a graph written at `index + 1` to `index + 2`.
+type Migration = fn(&mut Graph);
+
+/// The migrations, in order. There are none yet: version 1 is the only schema
+/// ever written. When version 2 exists, its step goes here, and
+/// `the_migration_table_covers_every_version` fails until it does.
+///
+/// Op-log records carry their own `schema_version`; a project with a pending log
+/// written at an older version must have its deltas migrated with the same
+/// steps before replay. That path is not needed until a second version exists,
+/// and until then an older record is exactly current.
+pub const MIGRATIONS: &[Migration] = &[];
+
 /// Forward migrations over raw attribute bags. Each step upgrades one version.
 fn migrate(graph: Graph, from: u32) -> Graph {
     let mut g = graph;
-    let mut v = from;
-    while v < SCHEMA_VERSION {
-        // Future: match v { 1 => migrate_1_to_2(&mut g), ... }
-        v += 1;
+    let start = from.max(1) as usize - 1;
+    for step in MIGRATIONS.iter().skip(start) {
+        step(&mut g);
     }
-    let _ = &mut g;
     g
 }
 
@@ -297,6 +308,9 @@ pub fn read_oplog_with_report(
             }
             match serde_json::from_str::<Delta>(line) {
                 Ok(d) => {
+                    // A record written by a newer build may use ops this build
+                    // would misread. Replaying it would be a silent wrong answer.
+                    check_version(d.schema_version)?;
                     if d.revision > after_revision {
                         out.push(d);
                     }

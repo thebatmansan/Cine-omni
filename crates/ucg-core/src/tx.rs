@@ -142,6 +142,14 @@ pub struct Delta {
     /// Whether this delta is a normal commit, an undo, or a redo.
     #[serde(default)]
     pub kind: DeltaKind,
+    /// The schema the ops were written against. Records from before this
+    /// field existed were written against version 1.
+    #[serde(default = "legacy_schema_version")]
+    pub schema_version: u32,
+}
+
+fn legacy_schema_version() -> u32 {
+    1
 }
 
 impl Delta {

@@ -994,3 +994,48 @@ fn a_failed_cascade_leaves_the_committed_change_undoable() {
     assert!(!engine.read().contains(scene));
     assert_eq!(engine.history().redo.len(), 1);
 }
+
+#[test]
+fn the_migration_table_covers_every_version() {
+    assert_eq!(
+        ucg_core::persist::MIGRATIONS.len() as u32,
+        ucg_core::persist::SCHEMA_VERSION - 1,
+        "every schema version above 1 needs a migration step"
+    );
+}
+
+#[test]
+fn an_op_log_record_from_a_newer_schema_is_refused_not_replayed() {
+    let dir = std::env::temp_dir().join(format!("cine-schema-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    {
+        let p = Project::create(&dir, "schema").unwrap();
+        p.enable_autosave();
+        p.engine
+            .transact("one", |tx| tx.create("script.scene").map(|_| ()))
+            .unwrap();
+    }
+    let log = dir.join("oplog/current.jsonl");
+    let text = fs::read_to_string(&log).unwrap();
+    let line = text.lines().last().expect("a committed record").to_string();
+    assert!(
+        line.contains("\"schema_version\":1"),
+        "records are stamped: {line}"
+    );
+
+    // A record without the field predates it and reads as version 1.
+    let legacy = line.replace(",\"schema_version\":1", "");
+    let d: ucg_core::Delta = serde_json::from_str(&legacy).unwrap();
+    assert_eq!(d.schema_version, 1);
+
+    // A record from a future schema stops the open with an error that says so.
+    let mut future: serde_json::Value = serde_json::from_str(&line).unwrap();
+    future["schema_version"] = serde_json::json!(99);
+    future["revision"] = serde_json::json!(future["revision"].as_u64().unwrap() + 1);
+    fs::write(&log, format!("{text}{}\n{line}\n", future)).unwrap();
+    let err = Project::open(&dir)
+        .err()
+        .expect("a newer record must not be replayed");
+    assert!(err.to_string().contains("schema version 99"), "{err}");
+    let _ = fs::remove_dir_all(&dir);
+}

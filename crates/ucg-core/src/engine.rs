@@ -483,6 +483,7 @@ impl Engine {
             cause,
             depth,
             kind,
+            schema_version: crate::persist::SCHEMA_VERSION,
         });
         let cs = ChangeSet::build(delta.clone(), &g, kinds);
         drop(g);
