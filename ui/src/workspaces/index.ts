@@ -27,7 +27,7 @@ export const WORKSPACES: WorkspaceDef[] = [
   { id: "vfx", name: "VFX / Compositing", pending: "A node graph exists in cine-comp; no interface is built." },
   { id: "colour", name: "Colour", gate: "colour.management" },
   { id: "audio", name: "Audio", gate: "audio.monitoring" },
-  { id: "production", name: "Production", pending: "Shot lists, schedules and call sheets exist in the graph; no interface is built." },
+  { id: "production", name: "Production", gate: "production.planning" },
   { id: "delivery", name: "Delivery", pending: "Not started. Export exists on the command line only." },
 ];
 

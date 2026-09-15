@@ -24,6 +24,7 @@ describe("workspace gating", () => {
 
   it("refuses to open a workspace with nothing behind it", () => {
     for (const id of ["animation", "delivery", "vfx", "storyboard", "previs", "production", "script"]) {
+      // Script and production are gated on capabilities this fixture does not report.
       const def = WORKSPACES.find((w) => w.id === id)!;
       expect(canOpen(def, caps)).toBe(false);
     }

@@ -3,6 +3,7 @@ import { Browser } from "./panels/Browser";
 import { Capabilities } from "./panels/Capabilities";
 import { History, Impact } from "./panels/Impact";
 import { Jobs } from "./panels/Jobs";
+import { Production } from "./panels/Production";
 import { Inspector } from "./panels/Inspector";
 import { Record } from "./panels/Record";
 import { Script } from "./panels/Script";
@@ -326,6 +327,16 @@ export function App() {
             onBind={(clip, scene) => void session.run("bind", () => client.bindClip(clip, scene))}
             onUnbind={(clip, scene) => void session.run("unbind", () => client.unbindClip(clip, scene))}
             onRevealClip={revealClip}
+          />
+          {impact}
+        </div>
+      )}
+
+      {workspace === "production" && (
+        <div className="work production">
+          <Production
+            production={session.production}
+            onConstraints={(doc, c) => void session.run("reschedule", () => client.scheduleConstraints(doc, c))}
           />
           {impact}
         </div>

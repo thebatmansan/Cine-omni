@@ -5,6 +5,7 @@ import {
   HistoryView,
   ImpactView,
   JobView,
+  ProductionView,
   MediaView,
   ProjectView,
   RpcClient,
@@ -42,6 +43,8 @@ export interface Session {
   impact: ImpactView | null;
   /** Most recent commits, newest first — the shared history, not a local log. */
   changes: ChangeNotification[];
+  /** The production office's derived state, when there is a screenplay. */
+  production: ProductionView | null;
   /** Background work, newest first, live. */
   jobs: JobView[];
   /** The last refused request, in the runtime's words. */
@@ -91,6 +94,7 @@ export function useSession(url: string = runtimeUrl()): Session {
   const [changes, setChanges] = useState<ChangeNotification[]>([]);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobView[]>([]);
+  const [production, setProduction] = useState<ProductionView | null>(null);
   const selected = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -109,6 +113,8 @@ export function useSession(url: string = runtimeUrl()): Session {
       setStructure(s);
       setScript(sc);
       setHistory(h);
+      // No screenplay is a normal state, not an error.
+      setProduction(sc.documents.length ? await client.production().catch(() => null) : null);
       const known = list.some((t) => t.id === selected.current);
       const want = known ? selected.current : (list[0]?.id ?? null);
       selected.current = want;
@@ -221,6 +227,7 @@ export function useSession(url: string = runtimeUrl()): Session {
     impact,
     changes,
     refusal,
+    production,
     jobs,
     client,
     selectTimeline,

@@ -138,6 +138,93 @@ export interface ScriptView {
   documents: { id: string; name: string; source_key: string | null; scenes: ScriptScene[] }[];
 }
 
+export interface LDate { year: number; month: number; day: number }
+export interface LTime { hour: number; minute: number }
+
+export interface Strip {
+  scene: string;
+  number: string;
+  pages_eighths: number;
+  int_ext: string;
+  location: string;
+  time_of_day: string;
+  cast: string[];
+  est_minutes: number;
+}
+
+export interface ShootDay {
+  index: number;
+  date: LDate;
+  strips: Strip[];
+  total_eighths: number;
+  cast_on_call: string[];
+  locations: string[];
+  is_night: boolean;
+}
+
+export interface SceneBreakdown {
+  scene: string;
+  number: string;
+  heading: string;
+  int_ext: string;
+  location: string;
+  time_of_day: string;
+  cast: string[];
+  props: string[];
+  extras_hint: string | null;
+  page_eighths: number;
+  est_minutes: number;
+  vehicles: boolean;
+  animals: boolean;
+  sfx: boolean;
+  vfx: boolean;
+}
+
+export interface CallSheetView {
+  day: number;
+  date: LDate;
+  general_call: LTime;
+  scenes: { scene: string; number: string; heading: string; pages: string; cast_numbers: number[]; location: string }[];
+  cast_calls: { name: string; number: number; pickup: LTime; makeup: LTime; on_set: LTime }[];
+  crew_calls: { department: string; call: LTime }[];
+  locations: string[];
+  weather_placeholder: string;
+  notes: string[];
+}
+
+export interface ScheduleConstraints {
+  max_pages_per_day: number;
+  max_hours_per_day: number;
+  shooting_days_per_week: number;
+  start_date: LDate;
+  cast_availability: Record<string, unknown>;
+  group_by_location: boolean;
+  night_shoots_together: boolean;
+}
+
+export interface ProductionView {
+  document: string;
+  breakdowns: SceneBreakdown[];
+  schedule: { days: ShootDay[]; warnings: string[]; company_moves: number } | null;
+  call_sheets: CallSheetView[];
+  constraints: ScheduleConstraints;
+  shots: {
+    scene: string;
+    shots: {
+      id: string;
+      number: string;
+      size: string;
+      movement: string;
+      lens_mm: number;
+      camera_body: string;
+      support: string;
+      description: string;
+      stale: boolean;
+      takes: { id: string; name: string }[];
+    }[];
+  }[];
+}
+
 export type JobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export interface JobView {
@@ -466,6 +553,12 @@ export class RpcClient {
   impact(revision?: number) { return this.call<ImpactView | null>("impact", revision == null ? {} : { revision }); }
   history(limit = 100) { return this.call<HistoryView>("history", { limit }); }
   pictureAt(timeline: string, time: ExactTime) { return this.call<PictureAt>("picture_at", { timeline, time }); }
+  production(document?: string) {
+    return this.call<ProductionView>("production", document ? { document } : {});
+  }
+  scheduleConstraints(document: string, constraints: ScheduleConstraints) {
+    return this.call<CascadeResult>("schedule_constraints", { document, constraints });
+  }
   jobs(limit = 100) { return this.call<JobView[]>("jobs", { limit }); }
   submitJob(kind: string, params: Record<string, unknown>) { return this.call<JobView>("job_submit", { kind, ...params }); }
   cancelJob(id: number) { return this.call<JobView>("job_cancel", { id }); }
