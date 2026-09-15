@@ -87,6 +87,25 @@ Applied in `Cargo.toml`. The cost is that a debugger cannot step into `wgpu` or
 `naga`; workspace crates keep full debug information, and the override to get it
 back for one run is in the comment there.
 
+### Memory, which turns out to be the binding constraint
+
+Measured on this machine, twice: `cargo test --workspace` was killed for running
+the system out of memory at default parallelism **and again at `-j 2`**. It is a
+two-core laptop with 15 GiB, 4 GiB of swap, and several gigabytes already held
+by other software; linking Rust test binaries that are hundreds of megabytes of
+debug information is what spikes it.
+
+That makes the debuginfo settings above a *memory* policy as much as a disk one:
+smaller objects link in less memory. Until that is measured, the working rule on
+this machine is
+
+```
+cargo test --workspace -j 1          # or test a few crates at a time
+```
+
+and the honest caveat that whole-workspace numbers in this session were gathered
+per-crate for that reason.
+
 ### Incremental compilation
 
 Unchanged by the above: 2.08 GB in both configurations on a *cold* build. The

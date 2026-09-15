@@ -17,7 +17,9 @@ interleave two op logs and corrupt the history. See
 ## Build & test
 ```
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"   # this machine: rustup + zig linker
-CARGO_INCREMENTAL=0 cargo test --workspace   # see the storage rule below
+CARGO_INCREMENTAL=0 cargo test --workspace -j 1   # -j 1: see the storage rule
+# This machine runs out of memory linking the workspace's test binaries at
+# default parallelism and at -j 2. Testing a few crates at a time also works.
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p cine-cli -- demo
 cd ui && npm test && npm run build
