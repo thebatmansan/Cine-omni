@@ -24,7 +24,7 @@
 
 use crate::decoder::{avcc_to_annex_b, H264Decoder, Packet, VideoDecoder};
 use crate::error::{Error, Result};
-use crate::frame::{ColorMetadata, VideoFrame};
+use crate::frame::VideoFrame;
 use crate::identity::{MediaFile, StreamKind};
 use crate::probe::decodable_codecs;
 use crate::time::{Rate, Timestamp};
