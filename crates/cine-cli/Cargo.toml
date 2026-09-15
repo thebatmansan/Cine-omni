@@ -23,6 +23,9 @@ cine-comp.workspace = true
 cine-color.workspace = true
 cine-audio.workspace = true
 cine-gpu.workspace = true
+cine-media.workspace = true
+cine-shell.workspace = true
+parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Orderly shutdown: the project lock must run its destructor on Ctrl-C.

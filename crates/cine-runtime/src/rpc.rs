@@ -150,7 +150,8 @@ fn capabilities() -> J {
             "group": "Media",
             "state": "unavailable",
             "detail": "The verified playback path decodes to GPU textures and never leaves the \
-                       GPU. A browser cannot receive those. Real-time playback runs in cine-shell",
+                       GPU. A browser cannot receive those. Real-time playback of the current \
+                       sequence runs in the native window cine start opens",
         }),
         json!({
             "id": "audio.monitoring",
@@ -520,6 +521,11 @@ pub fn dispatch_with(
             let mut out = with_impact(p, &group);
             out["clips"] = json!(placed);
             out
+        }
+        "edit_list" => {
+            let timeline = entity(params, "timeline")?;
+            let g = p.engine.read();
+            crate::projection::edit_list(&g, timeline)?
         }
         "picture_at" => {
             let timeline = entity(params, "timeline")?;

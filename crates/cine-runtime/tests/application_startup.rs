@@ -51,6 +51,7 @@ impl App {
         let child = Command::new(bin)
             .arg("start")
             .arg(project)
+            .arg("--no-window")
             .args(["--port", &port.to_string()])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -273,6 +274,7 @@ fn a_second_start_defers_to_the_runtime_that_owns_the_project() {
     let second = Command::new(&bin)
         .arg("start")
         .arg(&dir)
+        .arg("--no-window")
         .output()
         .expect("second cine start");
     let said = format!(

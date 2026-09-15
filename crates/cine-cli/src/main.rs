@@ -1,7 +1,7 @@
 //! `cine` — the CINE-OMNI command line.
 //!
 //! ```text
-//! cine start [dir] [--port N] [--no-ui] [--isolated]   run the application
+//! cine start [dir] [--port N] [--no-ui] [--no-window] [--isolated]   run the application
 //! cine new <dir> [--name NAME]                 create a project
 //! cine import <dir> <file.fountain|.fdx|.otio> import a document (re-import syncs)
 //! cine report <dir>                            print every derived artifact per scene
@@ -15,6 +15,7 @@
 //! ```
 
 mod start;
+mod window;
 
 use cine_pipeline::{OmniProject, ProjectSetup};
 use cine_runtime::rpc;
@@ -153,6 +154,13 @@ fn run(args: &[String]) -> CliResult {
                     .unwrap_or(7331),
                 serve_ui: !args.iter().any(|a| a == "--no-ui"),
                 isolated: args.iter().any(|a| a == "--isolated"),
+                // The native surface opens when there is a display to open it
+                // on, unless asked not to. Without one the application is the
+                // runtime and the browser surface, and it says so.
+                window_play: flag(args, "--window-play").and_then(|s| s.parse().ok()),
+                window: !args.iter().any(|a| a == "--no-window")
+                    && (std::env::var_os("DISPLAY").is_some()
+                        || std::env::var_os("WAYLAND_DISPLAY").is_some()),
             })?
         }
         "serve" => serve(args.get(1).ok_or("missing <dir>")?)?,

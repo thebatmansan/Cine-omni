@@ -61,6 +61,7 @@ impl Runtime {
         let child = Command::new(bin)
             .arg("start")
             .arg(project)
+            .arg("--no-window")
             .args(["--port", &port.to_string()])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

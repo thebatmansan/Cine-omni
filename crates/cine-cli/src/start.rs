@@ -29,6 +29,11 @@ pub struct StartOptions {
     pub serve_ui: bool,
     /// Start a second runtime alongside an existing one, at the caller's risk.
     pub isolated: bool,
+    /// Open the native surface: real-time playback of the project's cut.
+    pub window: bool,
+    /// Evidence mode: play the current sequence in the window for this many
+    /// seconds, print what the scheduler counted, and exit.
+    pub window_play: Option<f64>,
 }
 
 /// Locate the built UI relative to the project or the repository.
@@ -169,6 +174,10 @@ pub fn run(opts: StartOptions) -> Result<(), Box<dyn std::error::Error>> {
     // Ctrl-C and SIGTERM must bring the runtime down in an orderly way: the
     // lock guard has to run its destructor, or the next start would find a
     // stale lock and have to reclaim it.
+    let link = opts
+        .window
+        .then(|| crate::window::RuntimeLink::new(runtime.clone(), Some(format!("http://{addr}/"))));
+    let quit = link.as_ref().map(|l| l.quit_handle());
     let signal_shutdown = shutdown.clone();
     let signal_addr = addr;
     ctrlc::set_handler(move || {
@@ -176,6 +185,10 @@ pub fn run(opts: StartOptions) -> Result<(), Box<dyn std::error::Error>> {
         signal_shutdown.store(true, Ordering::Relaxed);
         // Unblock the accept loop by connecting to ourselves.
         let _ = std::net::TcpStream::connect(signal_addr);
+        // And close the window, which owns the main thread.
+        if let Some(q) = &quit {
+            q.request();
+        }
     })?;
 
     println!();
@@ -185,10 +198,55 @@ pub fn run(opts: StartOptions) -> Result<(), Box<dyn std::error::Error>> {
     println!("  api       ws://{addr}/ws");
     println!("  health    http://{addr}/health");
     println!("  project   {}", dir.display());
-    println!("  stop      Ctrl-C");
+    println!(
+        "  window    {}",
+        if opts.window {
+            "native surface — real-time playback of the current sequence"
+        } else {
+            "none (no display, or --no-window)"
+        }
+    );
+    println!(
+        "  stop      Ctrl-C{}",
+        if opts.window {
+            " or close the window"
+        } else {
+            ""
+        }
+    );
     println!();
 
-    server.run()?;
+    match link {
+        // The window needs the main thread; the server does not.
+        Some(link) => {
+            let server_thread = std::thread::Builder::new()
+                .name("cine-server".into())
+                .spawn(move || server.run())?;
+            let outcome = cine_shell::app::run(cine_shell::app::ShellOptions {
+                link: Some(Box::new(link)),
+                play_secs: opts.window_play,
+                with_ui: opts.window_play.is_some(),
+                ..Default::default()
+            });
+            match outcome {
+                Ok(report) => {
+                    if let Some(f) = report.failure {
+                        eprintln!("window: {f}");
+                    }
+                    // Closing the window closes the application.
+                    shutdown.store(true, Ordering::Relaxed);
+                    let _ = std::net::TcpStream::connect(addr);
+                }
+                // No usable display after all. The runtime keeps serving, as it
+                // would have with no window, until Ctrl-C stops it.
+                Err(e) => eprintln!("window: {e} — continuing without the native surface"),
+            }
+            server_thread
+                .join()
+                .map_err(|_| "the server thread panicked")??;
+        }
+        None => server.run()?,
+    }
 
     shutdown.store(true, Ordering::Relaxed);
     let _ = broadcaster.join();
