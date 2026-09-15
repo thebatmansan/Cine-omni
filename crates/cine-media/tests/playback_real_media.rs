@@ -75,7 +75,11 @@ fn rig() -> Option<Scheduler<SystemTime, VideoReader>> {
 fn the_presentation_extent_is_exact_and_covers_the_last_picture() {
     let r = need!(reader(), "real mp4");
     let (start, end) = r.extent().expect("a track with samples has an extent");
-    assert_eq!(start, r.pts_at(0).unwrap(), "the extent starts at the first pts");
+    assert_eq!(
+        start,
+        r.pts_at(0).unwrap(),
+        "the extent starts at the first pts"
+    );
     println!(
         "MEASURED extent: {start:?} .. {end:?} (timescale {:?})",
         r.time_base()
@@ -100,7 +104,11 @@ fn selection_is_exact_at_every_frame_boundary_of_a_real_file() {
     let base = r.time_base();
     for n in 0..FrameSource::frame_count(&r) {
         let at = r.pts_at(n).unwrap();
-        assert_eq!(FrameSource::index_at(&r, at), Some(n), "on the boundary of {n}");
+        assert_eq!(
+            FrameSource::index_at(&r, at),
+            Some(n),
+            "on the boundary of {n}"
+        );
         // One tick of the media's own timescale in is still the same picture.
         let inside = Timestamp::exact(at.ticks() + 1, base);
         assert_eq!(FrameSource::index_at(&r, inside), Some(n), "inside {n}");
@@ -163,7 +171,9 @@ fn measure_reverse_decode_cost() {
     let start = 120usize;
     let began = Instant::now();
     for i in 0..n {
-        r.frame_at_index(start - i).expect("decode").expect("picture");
+        r.frame_at_index(start - i)
+            .expect("decode")
+            .expect("picture");
     }
     let total = began.elapsed();
     println!(
@@ -261,8 +271,7 @@ fn half_speed_holds_each_picture_for_twice_as_long() {
     // equality is asserted in `playback_scheduler.rs`, on a clock a test drives.
     let full = s.next_deadline().expect("playing");
     assert!(
-        full <= Duration::from_nanos(41_666_667)
-            && full > Duration::from_nanos(41_000_000),
+        full <= Duration::from_nanos(41_666_667) && full > Duration::from_nanos(41_000_000),
         "one frame at 24 fps, got {full:?}"
     );
 
@@ -336,8 +345,7 @@ fn seeking_over_real_media_lands_on_the_exact_picture() {
             Presentation::Present(f) => {
                 assert_eq!(f.index, target);
                 assert_eq!(
-                    f.frame.pts,
-                    want,
+                    f.frame.pts, want,
                     "the decoded picture must be the one asked for, exactly"
                 );
                 assert_eq!(f.dropped, 0, "a seek is not a dropped frame");

@@ -48,7 +48,9 @@ impl TableSource {
     /// `count` pictures on the exact frame grid of `rate`.
     fn grid(count: usize, rate: Rate) -> TableSource {
         TableSource {
-            pts: (0..count).map(|i| Timestamp::exact(i as i64, rate)).collect(),
+            pts: (0..count)
+                .map(|i| Timestamp::exact(i as i64, rate))
+                .collect(),
             last_duration: Timestamp::exact(1, rate),
             decode_cost: None,
             fail_at: None,
@@ -104,7 +106,10 @@ impl FrameSource for TableSource {
         if self.empty_at == Some(index) {
             return Ok(None);
         }
-        let pts = *self.pts.get(index).ok_or(Error::FrameNotIndexed(index as i64))?;
+        let pts = *self
+            .pts
+            .get(index)
+            .ok_or(Error::FrameNotIndexed(index as i64))?;
         Ok(Some(picture(pts, index)))
     }
     fn supports_reverse(&self) -> bool {
@@ -173,7 +178,10 @@ fn the_requested_position_comes_from_the_clock_not_from_a_frame_count() {
     // frame 3; the clock says 26.
     t.advance(Duration::from_secs(1));
     let (index, _, _) = presented(s.poll());
-    assert_eq!(index, 26, "position must follow the clock, not the frame count");
+    assert_eq!(
+        index, 26,
+        "position must follow the clock, not the frame count"
+    );
     assert_eq!(
         s.source().decoded,
         vec![0, 1, 2, 26],
@@ -222,7 +230,11 @@ fn forward_playback_presents_every_frame_in_order() {
         match s.poll() {
             Presentation::Present(f) => {
                 assert_eq!(f.dropped, 0);
-                assert!(f.late_by.is_none(), "frame {} was late with no load", f.index);
+                assert!(
+                    f.late_by.is_none(),
+                    "frame {} was late with no load",
+                    f.index
+                );
                 shown.push(f.index);
             }
             Presentation::Hold => {}
@@ -329,7 +341,10 @@ fn a_decoder_that_cannot_keep_up_drops_frames_and_reports_degraded() {
     }
     assert_eq!(indices[0], (0, 0), "the first picture has nothing to skip");
     for (index, dropped) in &indices[1..] {
-        assert_eq!(*dropped, 3, "four intervals per decode skips three pictures");
+        assert_eq!(
+            *dropped, 3,
+            "four intervals per decode skips three pictures"
+        );
         assert!(*index > 0);
     }
     assert_eq!(s.stats().dropped, 12);
@@ -363,7 +378,9 @@ fn a_frame_that_misses_its_window_is_reported_late_with_the_real_overshoot() {
     let Presentation::Present(f) = s.poll() else {
         panic!("expected a frame")
     };
-    let late = f.late_by.expect("60 ms of decode cannot make a 41.67 ms window");
+    let late = f
+        .late_by
+        .expect("60 ms of decode cannot make a 41.67 ms window");
     assert!(
         late >= Duration::from_nanos(18_333_000) && late <= Duration::from_nanos(18_334_000),
         "overshoot must be measured, got {late:?}"
@@ -514,7 +531,10 @@ fn a_source_that_cannot_reverse_refuses_rather_than_pretending() {
         other => panic!("expected a refusal, got {other:?}"),
     }
     assert_eq!(s.state(), TransportState::Paused);
-    assert!(s.source().decoded.is_empty(), "nothing should have been decoded");
+    assert!(
+        s.source().decoded.is_empty(),
+        "nothing should have been decoded"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -573,7 +593,10 @@ fn a_seek_within_the_same_picture_does_not_re_decode() {
     s.seek(Timestamp::exact(10, Rate::F24));
     assert_eq!(presented(s.poll()).0, 10);
     // A position inside frame 10 but not on its boundary.
-    s.seek(Timestamp::exact(10 * 1000 + 500, Rate::whole(24_000).unwrap()));
+    s.seek(Timestamp::exact(
+        10 * 1000 + 500,
+        Rate::whole(24_000).unwrap(),
+    ));
     assert!(matches!(s.poll(), Presentation::Hold));
     assert_eq!(s.source().decoded, vec![10]);
 }
@@ -821,5 +844,8 @@ fn selection_at_29_97_is_exact_at_the_minute_boundary() {
         src.index_at(Timestamp::exact(1798 * 1000 - 1, fine)),
         Some(1797)
     );
-    assert_eq!(src.index_at(Timestamp::exact(1798 * 1000, fine)), Some(1798));
+    assert_eq!(
+        src.index_at(Timestamp::exact(1798 * 1000, fine)),
+        Some(1798)
+    );
 }
