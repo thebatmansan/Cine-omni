@@ -112,12 +112,12 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Timeline view | Resolve, Premiere, Avid | Tracks, clips, transitions, markers, ruler, playhead, zoom | **VERIFIED** | browser + native, from graph | — | nle.* | — | 60 fps redraw | — | P0 | projection tests + e2e |
 | Track state: lock/mute/solo/target | All NLEs | Exactly these, with solo ≠ mute | **VERIFIED** | commits through graph, live across clients | — | OTIO metadata | — | — | — | P0 | 19 tests + live-sync test |
-| Insert / overwrite | All NLEs | Source → record with targeting | **IMPLEMENTED** | pure op; **not in `EditOp`**, no protocol | BE EditOp · RPC · FE | nle.* | — | <50 ms commit | S | **P0** | op → graph → undo |
-| Three-point / four-point editing | Avid, Premiere | In/out on source and record, fit-to-fill | **MISSING** | — | FE source viewer · BE | marks on viewer/timeline | — | — | M | **P0** | Avid semantics table (R16) |
-| Ripple / roll / slip / slide / trim | All NLEs | Handle-bounded, reports applied delta, mixed rate | **IMPLEMENTED** | 11 ops, exact; 7 in `EditOp`; none in protocol | RPC · FE trim tools | nle.* | — | interactive drag | M | **P0** | semantics table; clamping |
-| Split / join / lift / extract / replace | All NLEs | — | **IMPLEMENTED** | same as above | RPC · FE | nle.* | — | — | S | **P0** | — |
-| Snapping | All NLEs | Cuts, markers, playhead; zoom-independent | **IMPLEMENTED** | duration tolerance, exact | FE drag | — | — | — | S | P0 | tie → earlier |
-| Linked A/V | All NLEs | Linked selection and edits, sync-break indicators | **PARTIAL** | link groups stored; edits don't follow | BE · FE | OTIO metadata | — | — | M | P0 | edit moves pair |
+| Insert / overwrite | All NLEs | Source → record with targeting | **VERIFIED** | `EditOp` + `place` (picture and sound placed linked, to targeted tracks); UI `,` / `.` from marked source; binds the project's asset, never a second identity | — | nle.* | — | commit 1.7 ms median (e2e) | S | **P0** | `editorial_protocol.rs`, `ui/e2e/editor.mjs` |
+| Three-point / four-point editing | Avid, Premiere | In/out on source and record, fit-to-fill | **PARTIAL** | source in/out + record playhead; no record in/out, no fit-to-fill, no backtiming | FE record marks · BE | marks are editor state | — | — | M | **P0** | Avid semantics table (R16) |
+| Ripple / roll / slip / slide / trim | All NLEs | Handle-bounded, reports applied delta, mixed rate | **VERIFIED** | drag tools with frame readout; runtime clamps and reports requested vs applied; one undo step | — | nle.* | — | edit → other client refetched 5.3 ms median | M | **P0** | protocol tests incl. clamping; UI gesture tests; e2e |
+| Split / join / lift / extract / replace | All NLEs | — | **VERIFIED** (split, lift, extract) / **IMPLEMENTED** (join, replace) | razor / ⌘K, ⌫, ⇧⌫ in UI; join and replace reachable by protocol only | FE join/replace gestures | nle.* | — | — | S | **P0** | `linked_edits.rs`, e2e |
+| Snapping | All NLEs | Cuts, markers, playhead; zoom-independent | **PARTIAL** | UI snaps drags to runtime-composed cut points and the playhead (8 px); markers not targets; engine `snap` unused | FE marker targets | — | — | — | S | P0 | `edit.test.ts` |
+| Linked A/V | All NLEs | Linked selection and edits, sync-break indicators | **PARTIAL** | edits follow link groups in one transaction; the group agrees on one clamped delta; locked linked track refuses; **no sync-break indicator**, no linked selection | FE indicator | OTIO metadata | — | — | M | P0 | `linked_edits.rs`, protocol |
 | Multi-selection & track targeting | All NLEs | Range and multi-clip selection | **MISSING** | — | FE · BE multi-op tx | selection (session, not project) | — | — | M | P0 | — |
 | Markers | All NLEs | Clip and timeline markers with colour/notes | **PARTIAL** | modelled + projected; not editable | RPC · FE | nle.marker | — | — | S | P1 | — |
 | Transitions | All NLEs | Dissolves, wipes, handle check | **PARTIAL** | modelled; **no handle check** | BE check · render | nle.transition | — | — | M | P1 | unrenderable dissolve refused |
@@ -250,8 +250,8 @@ separate process costs weeks and is legally clean.
 | Capability | Reference | What professionals need | Status | Now | Requires | Model | Deps / licensing | Perf | Cx | P | Validation |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Exact time model | OTIO, AAF | Rational time everywhere | **VERIFIED** | — | — | RationalTime | — | — | — | P0 | 25 adversarial tests |
-| Project graph with propagation | (CINE-OMNI's own) | Changes flow to dependents; derived goes stale, captured survives | **VERIFIED** (engine) / **PARTIAL** (visible) | 7 reactors; impact not shown | FE impact view | UCG | — | cascade <100 ms | M | **P0** | script edit → visible downstream impact |
-| Undo / redo / history | All | Grouped undo across departments | **VERIFIED** | — | FE history panel | op log | — | — | S | P0 | undo propagates (tested) |
+| Project graph with propagation | (CINE-OMNI's own) | Changes flow to dependents; derived goes stale, captured survives | **VERIFIED** | 7 reactors; impact panel built from committed deltas, grouped by department, in every client | — | UCG | — | cascade <100 ms | M | **P0** | script edit flags only the bound clip (protocol + e2e) |
+| Undo / redo / history | All | Grouped undo across departments | **VERIFIED** | shared history panel; a failed cascade stays undoable | — | op log | — | — | S | P0 | undo propagates (tested) |
 | Persistence & crash recovery | All | No committed work lost | **VERIFIED** | SIGKILL tests | fsync durability not claimed | — | — | — | S | P0 | power-loss test (not claimed) |
 | One runtime, many clients | Resolve collaboration | Shared live state | **VERIFIED** | loopback only | auth for remote | — | — | — | — | P0 | — |
 | `cine start` single entry point | — | One command, whole app | **PARTIAL** | serves browser app; not native workspace | BE supervise native shell | — | — | open <2 s | M | **P0** | e2e test (browser part verified) |
@@ -274,12 +274,12 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 
 | Status | Count |
 |---|---:|
-| VERIFIED | 11 |
-| IMPLEMENTED | 10 |
-| PARTIAL | 41 |
+| VERIFIED | 14 |
+| IMPLEMENTED | 6 |
+| PARTIAL | 43 |
 | PROTOTYPE | 3 |
 | PLANNED | 7 |
-| MISSING | 63 |
+| MISSING | 62 |
 | BLOCKED | 10 |
 | DEFERRED | 8 |
 

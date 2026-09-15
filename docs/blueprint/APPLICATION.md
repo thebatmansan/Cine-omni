@@ -4,8 +4,10 @@
 professional shell, and shows the project's own cut and its own media, with
 every change travelling through the graph and reaching every other client.
 
-What it is *not* yet: an editor. Nothing can be cut from the interface. That is
-stated here and in the interface itself rather than implied by a toolbar.
+Since the editor slice it is also an editor: a cut can be built from real media,
+trimmed, split, lifted and extracted from the interface, and every change shows
+what it affected across the production. What it still is not is listed at the
+end, in the same words the interface uses.
 
 ---
 
@@ -105,14 +107,70 @@ Where a capability is backend-only by necessity, the reason is written down. The
 one in this phase is real-time playback: it is native because a frame must not
 leave the GPU, and `capabilities` says so to anyone who asks.
 
+## The editor, and what an edit changes
+
+```
+gesture (drag an edge, razor, ⌫, ",")      browser: which frame, which operation
+  └─ edit / place                          one JSON-RPC call
+       └─ perform_edit                      exact arithmetic, clamped to media,
+                                            carried to linked material,
+                                            one transaction
+       └─ reactor cascade                   script, previs, logistics, timeline,
+                                            audio, comp, colour — as the change needs
+       └─ reply: outcome + impact           requested vs applied, what changed,
+                                            by department, read from the deltas
+  └─ `changed` broadcast                   every client refetches once per burst
+       └─ impact panel, timeline, record monitor, history — in every window
+```
+
+What a user can now do from `cine start`:
+
+| | |
+|---|---|
+| Build a cut | New sequence at an exact rate; import media by path; mark in/out on the source monitor; insert (`,`) or overwrite (`.`) at the playhead. Picture and sound are placed on the targeted tracks as one linked edit. |
+| Trim | Select / Ripple / Roll / Slip / Slide / Razor tools (A T R Y U B). Edge drags show a frame readout and a guide; snapping to runtime-composed cut points and the playhead (S). The status reads *“ripple trim · +12f of +40f (media limit) · +1 linked”* when the media clamped it. |
+| Remove | Lift (⌫), extract (⇧⌫), split at playhead (⌘K). |
+| See the picture | The record monitor asks the runtime (`picture_at`) which picture of which asset the cut shows, then decodes it. Black says black; media with no declared range says why. |
+| Connect to the script | Bind a clip to a scene (inspector or script workspace). Edit a line of dialogue in place. The impact panel names the bound clip and the reactor's reason; the clip is marked on the timeline in every window; *Mark conformed* clears it; undo brings it back. |
+| History | One shared undo history, readable in the History tab, undoable from any client. |
+
+### Measured (release binary, two WebSocket clients, `ui/e2e/editor.mjs`)
+
+```
+edit reply (client A)                    median 1.7 ms   p95 4.3 ms   max 4.5 ms   n=40
+edit → client B notified and refetched   median 5.3 ms   p95 9.7 ms   max 9.7 ms   n=40
+  (before TCP_NODELAY:                   median 46.3 ms  p95 55.8 ms  — Nagle + delayed ACK)
+single projections                       project 1.1 · timeline 2.7 · history 1.8 · script 1.0 ms
+record picture, cold                     2,101 ms  (1,943 ms decode: a walk from the keyframe)
+restart                                  sequence, conform flag, rewritten line, binding and
+                                         48-step history all recovered from the op log
+```
+
+### Defects this slice found and fixed
+
+* **A same-length rewording never reached the cut.** The timeline reactor only
+  woke when scene statistics changed. Found by the protocol test written for the
+  editor; fixed and regression-tested in `thesis.rs`.
+* **A failed reactor cascade left the committed change un-undoable.** The error
+  returned before the group reached the undo stack.
+* **A serialized time with a zero rate became 24 fps.** Now refused.
+* **Editing a clip made from ingested media would have minted a second media
+  identity** keyed by path and rewritten what ingest recorded. Material now binds
+  the asset it names.
+* **Every burst of replies stalled 40 ms** on Nagle's algorithm.
+
 ## What remains
 
-* **No editing from the interface.** The operations exist and are tested; no
-  protocol reaches them. This is the next piece.
-* **No selection model beyond one item**, no multi-select, no drag, no snapping
-  in the interface — snapping exists in `cine-timeline` and is not yet reachable.
-* **The timeline's timebase is not conformed to the media's.** They coincide for
-  a cut that references the open media and in general they do not.
+* **No multi-select, no linked selection, no sync-break indicator.** Edits follow
+  links; the interface does not yet draw a broken sync.
+* **Three-point editing is source in/out plus the playhead.** No record in/out,
+  fit-to-fill or backtiming.
+* **Join and replace are protocol-only**; no gesture reaches them.
+* **Placing material assumes the sequence can hold it**: a clip at 30 fps in a
+  24 fps sequence is placed with its exact duration, which is not a whole number
+  of sequence frames. Conform policy (retime vs. frame-snap) is not decided.
+* **No playback in the browser**, by design — see *Honesty in the interface*.
+  The record monitor steps; it does not play.
 * **Component rendering is untested.** There is no DOM test tooling installed
   and no network to add any; the decision logic is tested, the drawing is not.
 * **Script, storyboard, previs, 3D, VFX, colour, audio, production and delivery
