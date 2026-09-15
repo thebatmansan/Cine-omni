@@ -169,6 +169,10 @@ pub struct Config {
     pub colorspaces: Vec<ColorSpaceDef>,
     /// Directory the config was loaded from (for `FileTransform` resolution).
     pub base_dir: Option<PathBuf>,
+    /// Top-level keys present in the loaded text that this parser does not
+    /// implement. A config loads without them; what they would have changed is
+    /// not applied, and a caller showing the config must say so.
+    pub unimplemented: Vec<String>,
 }
 
 impl Default for Config {
@@ -187,6 +191,7 @@ impl Default for Config {
             default_view_transform: None,
             colorspaces: Vec::new(),
             base_dir: None,
+            unimplemented: Vec::new(),
         }
     }
 }
@@ -457,21 +462,56 @@ impl Config {
                 }
             }
         }
+        // OCIO v2 shared views: defined once, referenced from displays with
+        // `!<Views> [a, b]`, and `<USE_DISPLAY_NAME>` standing for the display
+        // that references them. Every released ACES config uses them.
+        let parse_view = |v: &Yaml, owner: &str| -> Result<View> {
+            let g = |k: &str| v.get(k).and_then(Yaml::as_str).map(str::to_string);
+            Ok(View {
+                name: g("name").ok_or_else(|| Error::Parse {
+                    line: 0,
+                    message: format!("view without name in `{owner}`"),
+                })?,
+                colorspace: g("colorspace"),
+                view_transform: g("view_transform"),
+                display_colorspace: g("display_colorspace"),
+                looks: g("looks"),
+            })
+        };
+        let mut shared: IndexMap<String, View> = IndexMap::new();
+        for v in doc
+            .get("shared_views")
+            .and_then(Yaml::as_seq)
+            .unwrap_or(&[])
+        {
+            let view = parse_view(v, "shared_views")?;
+            shared.insert(view.name.clone(), view);
+        }
         if let Some(displays) = doc.get("displays").and_then(Yaml::as_map) {
             for (name, views) in displays {
                 let mut list = Vec::new();
                 for v in views.as_seq().unwrap_or(&[]) {
-                    let g = |k: &str| v.get(k).and_then(Yaml::as_str).map(str::to_string);
-                    list.push(View {
-                        name: g("name").ok_or_else(|| Error::Parse {
-                            line: 0,
-                            message: format!("view without name in display `{name}`"),
-                        })?,
-                        colorspace: g("colorspace"),
-                        view_transform: g("view_transform"),
-                        display_colorspace: g("display_colorspace"),
-                        looks: g("looks"),
-                    });
+                    if v.tag() == Some("Views") {
+                        for referenced in v.strings() {
+                            let mut view =
+                                shared
+                                    .get(&referenced)
+                                    .cloned()
+                                    .ok_or_else(|| Error::Parse {
+                                        line: 0,
+                                        message: format!(
+                                        "display `{name}` references shared view `{referenced}`, \
+                                         which is not defined"
+                                    ),
+                                    })?;
+                            if view.display_colorspace.as_deref() == Some("<USE_DISPLAY_NAME>") {
+                                view.display_colorspace = Some(name.clone());
+                            }
+                            list.push(view);
+                        }
+                        continue;
+                    }
+                    list.push(parse_view(v, name)?);
                 }
                 cfg.displays.insert(name.clone(), list);
             }
@@ -543,6 +583,29 @@ impl Config {
                 cfg.colorspaces.push(parse_colorspace(cs, is_display)?);
             }
         }
+        const IMPLEMENTED: &[&str] = &[
+            "ocio_profile_version",
+            "name",
+            "description",
+            "search_path",
+            "roles",
+            "shared_views",
+            "displays",
+            "active_displays",
+            "active_views",
+            "looks",
+            "view_transforms",
+            "default_view_transform",
+            "display_colorspaces",
+            "colorspaces",
+        ];
+        cfg.unimplemented = doc
+            .as_map()
+            .unwrap_or(&[])
+            .iter()
+            .map(|(k, _)| k.clone())
+            .filter(|k| !IMPLEMENTED.contains(&k.as_str()))
+            .collect();
         Ok(cfg)
     }
 
@@ -1740,6 +1803,17 @@ fn write_colorspace(s: &mut String, c: &ColorSpaceDef, display: bool) {
 // Builtin transforms
 // ---------------------------------------------------------------------------
 
+/// A transfer encode applied to `scale · |v|` with the sign restored: what OCIO
+/// calls "MIRROR NEGS". Invertible.
+fn mirrored(t: Transfer, scale: f64) -> Op {
+    let name = format!("{t:?} encode, mirrored negatives, scale {scale}");
+    Op::custom_invertible(
+        &name,
+        move |c| c.map(|v| v.signum() * t.encode(v.abs() * scale)),
+        move |c| c.map(|v| v.signum() * t.decode(v.abs()) / scale),
+    )
+}
+
 /// The ACES output styles this build answers with its own output transform.
 ///
 /// It has the ACES 2.0 tonescale — exact on the neutral axis against
@@ -1798,6 +1872,47 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
             camera(Transfer::CanonLog3, Primaries::CANON_CINEMA_GAMUT)
         }
         "DISPLAY - CIE-XYZ-D65_to_sRGB" => display(Primaries::REC709, Op::encode(Transfer::SRgb)),
+        // The OCIO 2.5 display styles of the released ACES configs. "MIRROR
+        // NEGS" applies the curve to |v| and restores the sign, rather than
+        // clamping negatives; Display P3 (and its HDR variant) and ST 2084 in
+        // P3-D65 mirror too, and none of them clamp above 1. Each is checked
+        // against OpenColorIO 2.5.2 on in- and out-of-range samples
+        // (`tests/data/display-styles.tsv`).
+        "DISPLAY - CIE-XYZ-D65_to_sRGB - MIRROR NEGS" => vec![
+            Op::matrix(Primaries::REC709.xyz_to_rgb()),
+            mirrored(Transfer::SRgb, 1.0),
+        ],
+        "DISPLAY - CIE-XYZ-D65_to_G2.2-REC.709 - MIRROR NEGS" => {
+            vec![
+                Op::matrix(Primaries::REC709.xyz_to_rgb()),
+                mirrored(Transfer::Gamma(2.2), 1.0),
+            ]
+        }
+        "DISPLAY - CIE-XYZ-D65_to_REC.1886-REC.709 - MIRROR NEGS" => {
+            vec![
+                Op::matrix(Primaries::REC709.xyz_to_rgb()),
+                mirrored(Transfer::Gamma(2.4), 1.0),
+            ]
+        }
+        "DISPLAY - CIE-XYZ-D65_to_G2.6-P3-D65 - MIRROR NEGS" => {
+            vec![
+                Op::matrix(Primaries::DISPLAY_P3.xyz_to_rgb()),
+                mirrored(Transfer::Gamma(2.6), 1.0),
+            ]
+        }
+        "DISPLAY - CIE-XYZ-D65_to_DisplayP3" | "DISPLAY - CIE-XYZ-D65_to_DisplayP3-HDR" => {
+            vec![
+                Op::matrix(Primaries::DISPLAY_P3.xyz_to_rgb()),
+                mirrored(Transfer::SRgb, 1.0),
+            ]
+        }
+        // Display reference 1.0 = 100 nits; the PQ curve's 1.0 is 10 000 nits.
+        "DISPLAY - CIE-XYZ-D65_to_ST2084-P3-D65" => {
+            vec![
+                Op::matrix(Primaries::DISPLAY_P3.xyz_to_rgb()),
+                mirrored(Transfer::Pq, 100.0 / 10_000.0),
+            ]
+        }
         "DISPLAY - CIE-XYZ-D65_to_REC.709" => {
             display(Primaries::REC709, Op::encode(Transfer::Gamma(2.4)))
         }
@@ -1850,13 +1965,18 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
                  `_2.0` style instead."
             )))
         }
+        // The OpenColorIO 2.5 names used by the released ACES 2.0 configs, and
+        // this crate's older names for the same two transforms.
         "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0"
-        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_2.0" => {
-            let ot = OutputTransform::for_display(if st.contains("P3lim") {
-                Display::P3D65
-            } else {
-                Display::Rec709
-            });
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_2.0"
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-REC709_2.0"
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-P3-D65_2.0" => {
+            let ot =
+                OutputTransform::for_display(if st.contains("P3lim") || st.contains("P3-D65") {
+                    Display::P3D65
+                } else {
+                    Display::Rec709
+                });
             vec![
                 aces2_approximation(st),
                 Op::matrix(rgb_to_rgb_matrix(
@@ -1878,7 +1998,8 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
                  an equivalent substitute"
             )))
         }
-        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1" => {
+        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1"
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-1000nit-REC2020_2.0" => {
             let ot = OutputTransform::for_display(Display::Rec2020Pq1000);
             vec![
                 aces2_approximation(st),
