@@ -159,6 +159,27 @@ restart                                  sequence, conform flag, rewritten line,
   the asset it names.
 * **Every burst of replies stalled 40 ms** on Nagle's algorithm.
 
+## The production office
+
+The Production workspace shows what the screenplay implies for the shoot, as the
+logistics reactor keeps it: a breakdown per scene, a stripboard in the industry
+colours with pages in eighths, a call sheet per day, and each scene's shots with
+the takes shot against them. Scheduling constraints are edited as a draft and
+applied as one reschedule.
+
+Measured against the running application (`ui/e2e/production.mjs`, dev build
+with optimised dependencies, two clients):
+
+```
+production projection                7.1 ms
+dialogue rewrite, full cascade       14.2 ms   impact: Previs, Production, Script, Sound, VFX
+scene 1 after the rewrite            2/8 → 13/8 pages, on the stripboard and the call sheet
+undo                                 page count restored in every client
+```
+
+Strips cannot be dragged, breakdown elements cannot be tagged by hand, there is
+no day-out-of-days report and no budget; the capability says so.
+
 ## What remains
 
 * **No multi-select, no linked selection, no sync-break indicator.** Edits follow
