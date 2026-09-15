@@ -1,96 +1,268 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CascadeResult, ChangeNotification, RpcClient, SceneSummary } from "./rpc/client";
-import { ScriptPanel } from "./panels/ScriptPanel";
-import { Viewport } from "./panels/Viewport";
-import { CascadePanel } from "./panels/CascadePanel";
-import { InspectorPanel } from "./panels/InspectorPanel";
+import { Browser } from "./panels/Browser";
+import { Capabilities } from "./panels/Capabilities";
+import { Inspector } from "./panels/Inspector";
+import { Timeline, itemKey } from "./panels/Timeline";
+import { Viewer } from "./panels/Viewer";
+import { TimelineItem, TimelineTrack } from "./rpc/client";
+import { useSession } from "./state/session";
+import { WORKSPACES, canOpen, workspaceReason, workspaceState } from "./workspaces";
 
-// The runtime serves this page and its API from the same origin, so the socket
-// address is derived rather than configured — the runtime may have moved to
-// another port if 7331 was busy, and a hard-coded default would then connect to
-// nothing (or, worse, to a different project's runtime).
-//
-// VITE_CINE_BRIDGE overrides it for `vite dev`, where the page is served by
-// vite on 5173 and the runtime is elsewhere.
-function runtimeUrl(): string {
-  const override = (import.meta as any).env?.VITE_CINE_BRIDGE;
-  if (override) return override;
-  if (typeof window !== "undefined" && window.location?.host) {
-    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${scheme}://${window.location.host}/ws`;
-  }
-  return "ws://127.0.0.1:7331/ws";
-}
-
-const BRIDGE_URL = runtimeUrl();
-
+/**
+ * The application shell.
+ *
+ * A menu bar that names the project, workspace navigation across the whole
+ * intended application, the working area, and a status bar carrying the one
+ * number that matters for coherence: the revision every client shares.
+ */
 export function App() {
-  const client = useMemo(() => new RpcClient(BRIDGE_URL), []);
-  const [connected, setConnected] = useState(false);
-  const [scenes, setScenes] = useState<SceneSummary[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [report, setReport] = useState("");
-  const [cascade, setCascade] = useState<CascadeResult | null>(null);
-  const [changes, setChanges] = useState<ChangeNotification[]>([]);
-  const [revision, setRevision] = useState<number>(0);
+  const session = useSession();
+  const [workspace, setWorkspace] = useState("editorial");
+  const [selection, setSelection] = useState<{ item: TimelineItem; track: TimelineTrack } | null>(
+    null,
+  );
+  const [mediaId, setMediaId] = useState<string | null>(null);
+  const [picture, setPicture] = useState(0);
+  const [playhead, setPlayhead] = useState(0);
 
-  const refresh = useCallback(async () => {
-    const s = await client.scenes();
-    setScenes(s);
-    const stats = await client.stats();
-    setRevision(Number(stats.revision ?? 0));
-    if (selected) setReport(await client.sceneReport(selected));
-  }, [client, selected]);
+  const media = useMemo(
+    () => session.media.find((m) => m.id === mediaId) ?? session.media[0] ?? null,
+    [session.media, mediaId],
+  );
 
-  useEffect(() => {
-    client.onState(setConnected);
-    client.onChange((n) => setChanges((c) => [n, ...c].slice(0, 200)));
-    client.connect().then(refresh).catch(() => setConnected(false));
-  }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Selecting a clip moves the playhead to its start, which is what clicking a
+  // clip means in every editor.
+  const onSelect = useCallback((item: TimelineItem, track: TimelineTrack) => {
+    setSelection({ item, track });
+    setPlayhead(item.at.start.seconds);
+  }, []);
 
-  useEffect(() => {
-    if (selected && connected) client.sceneReport(selected).then(setReport);
-  }, [selected, connected, revision, client]);
+  useKeyboard({
+    onStep: (by) => setPicture((p) => Math.max(0, p + by)),
+    onHome: () => {
+      setPicture(0);
+      setPlayhead(0);
+    },
+    undo: session.undo,
+    redo: session.redo,
+    save: session.save,
+  });
 
-  const onEdit = async (line: string, text: string) => {
-    const r = await client.editDialogue(line, text);
-    setCascade(r);
-    await refresh();
-  };
-  const onUndo = async () => { setCascade(await client.undo()); await refresh(); };
-  const onRedo = async () => { setCascade(await client.redo()); await refresh(); };
+  const selectedKey = selection ? itemKey(selection.item, selection.track) : null;
 
   return (
-    <div className="app">
-      <div className="topbar">
-        <strong>CINE-OMNI</strong>
-        <button onClick={onUndo}>Undo</button>
-        <button onClick={onRedo}>Redo</button>
-        <button onClick={() => client.save()}>Save</button>
-        <span className="status">{connected ? `connected · revision ${revision}` : `not connected to ${BRIDGE_URL}`}</span>
-      </div>
-      <div className="panel">
-        <h2>Screenplay</h2>
-        <div className="body">
-          <ScriptPanel client={client} scenes={scenes} selected={selected} onSelect={setSelected} onEdit={onEdit} />
+    <div className="shell">
+      <MenuBar session={session} />
+      <nav className="workspaces" role="tablist">
+        {WORKSPACES.map((w) => {
+          const state = workspaceState(w, session.capabilities);
+          const open = canOpen(w, session.capabilities);
+          return (
+            <button
+              key={w.id}
+              role="tab"
+              aria-selected={workspace === w.id}
+              disabled={!open}
+              title={open ? w.name : workspaceReason(w, session.capabilities)}
+              onClick={() => open && setWorkspace(w.id)}
+            >
+              <span className={`dot ${state}`} />
+              {w.name}
+            </button>
+          );
+        })}
+      </nav>
+
+      {workspace === "editorial" && (
+        <div className="work editorial">
+          <Browser
+            timelines={session.timelines}
+            structure={session.structure}
+            media={session.media}
+            selectedTimeline={session.timeline?.id ?? null}
+            selectedMedia={media?.id ?? null}
+            onTimeline={session.selectTimeline}
+            onMedia={setMediaId}
+          />
+          <Viewer
+            media={media}
+            capabilities={session.capabilities}
+            index={picture}
+            onIndex={setPicture}
+          />
+          <Inspector timeline={session.timeline} selection={selection} media={media} />
+          <Timeline
+            timeline={session.timeline}
+            selected={selectedKey}
+            onSelect={onSelect}
+            playhead={playhead}
+            onScrub={setPlayhead}
+            onTrackState={(track, key, value) => void session.setTrackState(track, key, value)}
+          />
         </div>
-      </div>
-      <div className="panel">
-        <h2>Previs viewport</h2>
-        <Viewport client={client} scene={selected} revision={revision} />
-      </div>
-      <div className="panel">
-        <h2>Inspector</h2>
-        <div className="body">
-          <InspectorPanel report={report} />
+      )}
+
+      {workspace === "media" && (
+        <div className="work media">
+          <Browser
+            timelines={session.timelines}
+            structure={session.structure}
+            media={session.media}
+            selectedTimeline={session.timeline?.id ?? null}
+            selectedMedia={media?.id ?? null}
+            onTimeline={session.selectTimeline}
+            onMedia={setMediaId}
+          />
+          <Viewer
+            media={media}
+            capabilities={session.capabilities}
+            index={picture}
+            onIndex={setPicture}
+          />
+          <Capabilities capabilities={session.capabilities} />
         </div>
-      </div>
-      <div className="panel bottom">
-        <h2>Context graph activity</h2>
-        <div className="body">
-          <CascadePanel cascade={cascade} changes={changes} />
+      )}
+
+      <StatusBar session={session} />
+    </div>
+  );
+}
+
+function MenuBar({ session }: { session: ReturnType<typeof useSession> }) {
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    const close = () => setOpen(null);
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, []);
+
+  const menu = (name: string, items: React.ReactNode) => (
+    <div className={`menu${open === name ? " open" : ""}`}>
+      <button
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          setOpen(open === name ? null : name);
+        }}
+      >
+        {name}
+      </button>
+      {open === name && (
+        <div className="menu-items" onMouseDown={(e) => e.stopPropagation()}>
+          {items}
         </div>
+      )}
+    </div>
+  );
+
+  const entry = (label: string, shortcut: string, run: () => void, why?: string) => (
+    <button
+      onClick={() => {
+        run();
+        setOpen(null);
+      }}
+      disabled={!!why}
+      title={why ?? ""}
+    >
+      <span>{label}</span>
+      <span className="shortcut">{shortcut}</span>
+    </button>
+  );
+
+  const notWired = "Implemented in the engine; no protocol reaches it from here yet.";
+
+  return (
+    <div className="menubar">
+      <span className="brand">CINE-OMNI</span>
+      {menu(
+        "Project",
+        <>
+          {entry("Save", "⌘S", () => void session.save())}
+          <div className="menu-sep" />
+          {entry("Export screenplay…", "", () => {}, notWired)}
+        </>,
+      )}
+      {menu(
+        "Edit",
+        <>
+          {entry("Undo", "⌘Z", () => void session.undo())}
+          {entry("Redo", "⇧⌘Z", () => void session.redo())}
+          <div className="menu-sep" />
+          {entry("Ripple trim", "", () => {}, notWired)}
+          {entry("Roll", "", () => {}, notWired)}
+          {entry("Slip", "", () => {}, notWired)}
+          {entry("Slide", "", () => {}, notWired)}
+        </>,
+      )}
+      {menu("View", <>{entry("Refresh", "", () => void session.refresh())}</>)}
+
+      <div className="project-id">
+        <strong>{session.project?.name ?? "—"}</strong>
+        <span className="path">{session.project?.path ?? ""}</span>
       </div>
     </div>
   );
+}
+
+function StatusBar({ session }: { session: ReturnType<typeof useSession> }) {
+  const p = session.project;
+  const last = session.changes[0];
+  return (
+    <div className="statusbar">
+      <span className={`conn${session.connected ? " on" : ""}`}>
+        <span className="dot" />
+        {session.connected ? "runtime attached" : "no runtime"}
+      </span>
+      {p && (
+        <>
+          <span className="mono">rev {p.revision}</span>
+          <span className="mono">
+            {p.nodes} nodes · {p.edges} edges
+          </span>
+          <span className="mono">
+            {p.clients} client{p.clients === 1 ? "" : "s"}
+          </span>
+          <span className="mono">undo {p.undo_depth}</span>
+        </>
+      )}
+      {last && (
+        <span title={`touched ${last.touched.length} entities`}>
+          last: {last.label} → rev {last.revision}
+        </span>
+      )}
+      <span className="spacer" />
+      {session.error && <span style={{ color: "var(--bad)" }}>{session.error}</span>}
+    </div>
+  );
+}
+
+/** Keyboard model: the few things that are genuinely wired. */
+function useKeyboard(on: {
+  onStep(by: number): void;
+  onHome(): void;
+  undo(): Promise<void>;
+  redo(): Promise<void>;
+  save(): Promise<void>;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        void (e.shiftKey ? on.redo() : on.undo());
+      } else if (meta && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void on.save();
+      } else if (e.key === "ArrowRight") {
+        on.onStep(1);
+      } else if (e.key === "ArrowLeft") {
+        on.onStep(-1);
+      } else if (e.key === "Home") {
+        on.onHome();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [on]);
 }
