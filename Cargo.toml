@@ -72,5 +72,23 @@ codegen-units = 4
 [profile.dev]
 opt-level = 1
 
+# Dependencies are compiled optimised and **without debug information**.
+#
+# Measured on this workspace: a cold `cargo test --workspace --no-run` into a
+# fresh target directory is 9.41 GB with dependency debuginfo and 6.59 GB
+# without — 30% smaller, and the smaller build contained three more test
+# binaries than the larger one. The reason is that test binaries link
+# statically: 159 executables measured 11.99 GiB on disk, of which 95% was
+# `.debug*` sections, most of it from dependencies.
+#
+# The cost is that a debugger cannot step into `wgpu`, `naga` or `symphonia`.
+# Workspace crates keep full debug information, which is where debugging
+# actually happens. Turn this back on temporarily if you genuinely need to step
+# into a dependency:
+#
+#     cargo test --config 'profile.dev.package."*".debug=true'
+#
+# See docs/blueprint/STORAGE-POLICY.md.
 [profile.dev.package."*"]
 opt-level = 2
+debug = false

@@ -17,7 +17,7 @@ interleave two op logs and corrupt the history. See
 ## Build & test
 ```
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"   # this machine: rustup + zig linker
-cargo test --workspace
+CARGO_INCREMENTAL=0 cargo test --workspace   # see the storage rule below
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p cine-cli -- demo
 cd ui && npm test && npm run build
@@ -68,6 +68,15 @@ cd ui && npm test && npm run build
   buffer is bounded by *bytes*, checked before decoding rather than after:
   checking after let a picture that did not fit be decoded, evicted, and decoded
   again forever.
+* Storage: `CARGO_INCREMENTAL=0` for whole-workspace builds and tests, and
+  **never two `cargo` processes against one `target/`** — that combination
+  corrupted the incremental cache into 20 GB of unusable sessions and
+  `undefined hidden symbol` link errors. Per-crate edit loops may keep
+  incremental on. Dependencies build without debuginfo (30% smaller, measured);
+  workspace crates keep it. `du -sh target` occasionally — the last time nobody
+  looked it reached 60 GB. Read `docs/blueprint/STORAGE-POLICY.md` before adding
+  anything that writes to disk: every byte belongs to a class, and only caches
+  and temporary files may ever be deleted automatically.
 * A cross-check is not an oracle. When two implementations disagree, adjudicate
   against something exact before deciding which is wrong — the true-peak
   "defect" was real divergence with the blame reversed.
