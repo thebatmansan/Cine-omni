@@ -24,6 +24,7 @@ pub mod decoder;
 pub mod edit_list;
 pub mod error;
 pub mod frame;
+pub mod h264_sps;
 pub mod identity;
 pub mod probe;
 pub mod reader;

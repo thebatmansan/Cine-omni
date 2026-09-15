@@ -152,10 +152,13 @@ impl VideoReader {
             .map(|(display, _)| display)
             .collect();
 
-        // Colour is whatever the container declared. H.264 VUI parsing is not
-        // implemented, so this is currently absent rather than assumed; see the
-        // gaps section of the Phase 2 blueprint.
-        let color = ColorMetadata::default();
+        // Colour is what the stream declares in its SPS video signal type.
+        // Unspecified code points stay absent rather than being assumed; a
+        // parameter set that cannot be read leaves everything absent and the
+        // viewer says the interpretation is assumed.
+        let color = crate::h264_sps::parse(&sps)
+            .map(|s| s.color())
+            .unwrap_or_default();
         let decoder: Box<dyn VideoDecoder> = Box::new(H264Decoder::new(&sps, &pps, color));
 
         Ok(VideoReader {

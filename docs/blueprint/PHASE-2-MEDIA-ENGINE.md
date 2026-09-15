@@ -29,7 +29,7 @@ so the numbers can be read in context rather than generalised.
 | Video timing | timescale 12288, 240 samples, 24 fps exactly, B-pyramid |
 | GOP | 2 sync samples in 240 frames — a mean GOP of 120 |
 | Audio | AAC-LC, 48 kHz, stereo, ~10.03 s |
-| Colour metadata | **absent** — no `colr` box, no parsed VUI |
+| Colour metadata | **declared where the SPS declares it** (`h264_sps`); no `colr` box, no mastering-display SEI |
 
 Supporting assets: a real PNG and a real RIFF/WAVE file from the system.
 
@@ -406,7 +406,7 @@ unverified on real media of that type; **no** = absent.
 | Embedded timecode track | **no** | `start_timecode` is always `None` |
 | CFR frame rate | **measured** | 24 fps derived exactly from the sample table |
 | VFR detection | **weak** | Derived from the *mean* sample duration; a genuinely variable stream whose mean lands on a known rate is misreported as CFR. Needs a full `stts` scan |
-| Colour metadata (H.273) | **structure only** | Representable and honestly absent; `colr` box and VUI **not parsed** |
+| Colour metadata (H.273) | **partial** | H.264 SPS video signal type parsed (`h264_sps`) and carried on every picture; `colr` box and mastering-display SEI **not parsed** |
 | HDR (PQ/HLG, MDCV, CLLI) | **no** | Representable in principle; nothing parsed |
 | Alpha | structure only | `AlphaMode` exists; no format that carries alpha is decoded |
 

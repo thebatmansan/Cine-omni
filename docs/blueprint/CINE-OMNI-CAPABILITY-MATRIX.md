@@ -85,7 +85,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Capability | Reference | What professionals need | Status | Now | Requires | Model | Deps / licensing | Perf | Cx | P | Validation |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Card offload with verification | Silverstack, ShotPut Pro, Hedge | Copy to ≥2 destinations, verify, never mark verified what was not | **PLANNED** | state machine designed (R15) | BE jobs · FE queue | offload.job | — | I/O bound with xxHash (6.7 GiB/s CPU) | M | P1 | bit-flip detection; resume after pull |
-| Checksum manifests | ASC MHL | ASC MHL v2 manifests, xxh64/xxh128, chain of custody | **PLANNED** | hashes exist; no MHL | BE MHL writer/reader | offload.manifest | ASC MHL is BSD-style (verify) | — | S | P1 | validates in reference `ascmhl` |
+| Checksum manifests | ASC MHL | ASC MHL v2 manifests, xxh64/xxh128, chain of custody | **PARTIAL** | whole-file SHA-256 established then verified as a job, mismatch recorded without overwriting the reference (catches a mid-file byte the fingerprint cannot); no MHL manifest, no xxHash | BE MHL writer/reader | offload.manifest | ASC MHL is BSD-style (verify) | ~40 MiB/s measured in a debug test build | S | P1 | validates in reference `ascmhl` |
 | Media registration & identity | Every NLE | Content identity, relink after move, offline as a state | **VERIFIED** | content hash, relink, online flag | — | asset.media | — | — | — | P0 | relink test; visible in browser |
 | Camera & lens metadata | Silverstack, ARRI/RED tools | Camera, lens, focal length, T-stop, focus distance, per frame where available | **PARTIAL** | kinds modelled (R15) | BE parsers · M | media metadata | RAW SDK terms (below) | — | L | P1 | round-trip vs camera reports |
 | Takes, slates, circle takes | Script supervisor, Moviola | Take status vocabulary (not boolean), slate identity, circled takes | **PARTIAL** | takes bind to media | FE · BE status vocab | logistics.take | — | — | M | P1 | take survives shot regeneration (tested) |
@@ -147,7 +147,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Camera RAW (BRAW, R3D, ARRIRAW, CinemaDNG) | vendor SDKs | Debayer with metadata-driven colour | **BLOCKED** | — | separate process or dynamic SDK | — | BRAW SDK free; R3D SDK redistributable only unmodified as part of a larger product; ARRI SDK terms unverified | — | L | P2 | vendor sample clips |
 | EXR / image sequences | OpenImageIO, OpenEXR | Multipart, deep, data windows, AOVs | **MISSING** | — | M · data windows | image sequence | OpenEXR BSD-3, OIIO Apache-2.0 | tile/scanline streaming | M | **P0** (blocks VFX) | OpenEXR test images |
 | Audio decode | FFmpeg, symphonia | WAV/BWF, AIFF, AAC, MP3, FLAC | **PARTIAL** | symphonia (MPL-2.0) | M | — | MPL-2.0 file-level: fine unmodified | — | S | P0 | — |
-| Colour metadata parsing | FFmpeg | `colr`, VUI, mastering display | **MISSING** | every picture's colour assumed | M | media colour meta | — | — | S | **P0** | declared vs assumed |
+| Colour metadata parsing | FFmpeg | `colr`, VUI, mastering display | **PARTIAL** | H.264 SPS/VUI parsed (clean-room from H.264 §7.3.2.1.1, Annex E); pictures carry what the stream declares, unspecified stays absent; `colr` box and mastering-display SEI not parsed | `colr` · SEI | media colour meta | — | — | S | **P0** | parsed size = decoded size on real streams (`sps_real.rs`) |
 | Hardware decode | NVDEC, VA-API, VideoToolbox | Where available, with software fallback | **MISSING** | none claimed | M · G · OS APIs | capability registry | vendor APIs | — | L | P1 | parity vs software decode |
 | Playback scheduler & decode-ahead | Every NLE | Real time, dropped-frame honesty | **VERIFIED** (native) | 144/144 at 24 fps | — | — | — | — | — | P0 | 60 tests + measured |
 | Multiresolution / proxies in playback | Resolve | Choose decode resolution adaptively | **MISSING** | — | M · G | — | — | — | M | P1 | — |
@@ -256,7 +256,7 @@ separate process costs weeks and is legally clean.
 | One runtime, many clients | Resolve collaboration | Shared live state | **VERIFIED** | loopback only | auth for remote | — | — | — | — | P0 | — |
 | `cine start` single entry point | — | One command, whole app | **PARTIAL** | serves browser app; not native workspace | BE supervise native shell | — | — | open <2 s | M | **P0** | e2e test (browser part verified) |
 | Capability reporting | (CINE-OMNI's own) | Honest states with reasons | **VERIFIED** | 28 capabilities | — | — | — | — | — | P0 | e2e test |
-| Background job system | Resolve, Silverstack | Offload, proxies, renders, analysis — queued, resumable, visible | **MISSING** | decode-ahead worker only | BE job graph · FE queue | job | — | bounded concurrency | L | **P0** (unblocks 10+ rows) | kill mid-job, resume |
+| Background job system | Resolve, Silverstack | Offload, proxies, renders, analysis — queued, resumable, visible | **VERIFIED** | `cine-jobs`: per-resource workers, priority, dependencies, cancel, retry, panic containment, dedup by key, journal with resume; runtime runners for checksum and thumbnails; live jobs panel | proxy / render / transcode kinds | job | — | bounded concurrency | L | **P0** (unblocks 10+ rows) | `jobs.rs` (8 guarantees), `jobs_protocol.rs` |
 | Users, roles, permissions | Avid, ShotGrid | Departments see and edit their parts | **MISSING** | — | BE auth · FE | permission model | — | — | L | P2 | — |
 | Remote collaboration & review | Frame.io, ShotGrid | Review links, timecoded comments | **MISSING** | — | BE · auth · M streaming | note on timecode | — | — | L | P2 | — |
 | Plugin / extension API | OFX, VST3, Python in Resolve | Scripting and third-party tools | **MISSING** | — | BE API · sandbox | — | — | — | L | P2 | — |
@@ -274,12 +274,12 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 
 | Status | Count |
 |---|---:|
-| VERIFIED | 14 |
+| VERIFIED | 15 |
 | IMPLEMENTED | 6 |
-| PARTIAL | 43 |
+| PARTIAL | 45 |
 | PROTOTYPE | 3 |
-| PLANNED | 7 |
-| MISSING | 62 |
+| PLANNED | 6 |
+| MISSING | 60 |
 | BLOCKED | 10 |
 | DEFERRED | 8 |
 
