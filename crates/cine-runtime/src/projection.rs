@@ -290,66 +290,66 @@ pub fn structure(graph: &Graph) -> J {
     json!({ "scenes": scenes })
 }
 
-/// The picture a sequence shows at `at`: the top-most visible picture track
-/// with a clip there, the asset that clip plays, and which picture of it.
+/// The picture a sequence shows at `at`: the clip there on the flattened edit
+/// list, the asset it plays, and which picture of it.
 ///
-/// This is composition, so it is answered here and not in the browser. A gap
-/// answers `black`; a clip whose asset declares no available range answers with
-/// no index, because which picture it plays cannot be known.
+/// Composition is answered by [`crate::playlist`], the same list the native
+/// player plays. A gap answers `black`; a clip whose asset declares no available
+/// range answers with no index, because which picture it plays cannot be known.
 pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result<J, String> {
     use ucg_core::Rounding;
-    let composed = tl::export_timeline(graph, timeline).map_err(|e| e.to_string())?;
-    let solo = cine_timeline::session::any_solo_of(&composed, cine_timeline::TrackKind::Video);
+    let list = crate::playlist::edit_list(graph, timeline)?;
+    let Some(entry) = list.at(at) else {
+        return Ok(json!({ "black": true }));
+    };
+    let offset = entry
+        .offset
+        .map(|o| o.checked_add(&at.checked_sub(&entry.record.start_time)));
+    let available = entry
+        .asset
+        .and_then(|a| graph.node(a))
+        .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
+        .and_then(ucg_core::Value::as_range);
+    let index = offset.zip(available).map(|(o, a)| {
+        // Pictures are counted at the rate the asset declares its range in.
+        let (t, _) = o.rescale_checked(a.start_time.rate_exact(), Rounding::Floor);
+        t.ticks()
+    });
     let track_ids = track_entity_ids(graph, timeline);
-    let tracks: Vec<(usize, &cine_timeline::Track)> = composed.tracks().enumerate().collect();
-    for (ti, track) in tracks.into_iter().rev() {
-        if track.kind != cine_timeline::TrackKind::Video
-            || !track.enabled
-            || !cine_timeline::session::is_visible(track, solo)
-        {
-            continue;
-        }
-        for (i, item) in track.children.iter().enumerate() {
-            let Some(clip) = item.as_clip() else { continue };
-            if !clip.enabled {
-                continue;
-            }
-            let Some(span) = track.range_of_child(i) else {
-                continue;
-            };
-            if !span.contains(at) {
-                continue;
-            }
-            let Some(source) = clip.trimmed_range() else {
-                continue;
-            };
-            let offset = at.checked_sub(&span.start_time);
-            let source_time = source.start_time.checked_add(&offset);
-            let asset = item.ucg_id().and_then(|c| tl::media_of_clip(graph, c));
-            let available = asset
-                .and_then(|a| graph.node(a))
-                .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
-                .and_then(ucg_core::Value::as_range);
-            let index = available.map(|a| {
-                let rate = a.start_time.rate_exact();
-                let (t, _) = source_time.rescale_checked(rate, Rounding::Floor);
-                t.ticks() - a.start_time.ticks()
-            });
-            return Ok(json!({
-                "black": false,
-                "track": track_ids.get(ti),
-                "track_name": track.name,
-                "clip": item.ucg_id(),
-                "name": item.name(),
-                "asset": asset,
-                "online": asset.and_then(|a| graph.node(a))
-                    .and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
-                "source": time(source_time),
-                "index": index.filter(|i| *i >= 0),
-            }));
-        }
-    }
-    Ok(json!({ "black": true }))
+    Ok(json!({
+        "black": false,
+        "track": track_ids.get(entry.track),
+        "track_name": tl::export_timeline(graph, timeline).ok()
+            .and_then(|t| t.tracks().nth(entry.track).map(|t| t.name.clone())),
+        "clip": entry.clip,
+        "name": entry.name,
+        "asset": entry.asset,
+        "online": entry.online,
+        "source": offset.zip(available).map(|(o, a)| time(a.start_time.checked_add(&o))),
+        "index": index.filter(|i| *i >= 0),
+    }))
+}
+
+/// The flattened edit list, for players and for inspection.
+pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<J, String> {
+    let list = crate::playlist::edit_list(graph, timeline)?;
+    Ok(json!({
+        "timeline": list.timeline,
+        "name": list.name,
+        "rate_num": list.rate.num(),
+        "rate_den": list.rate.den(),
+        "end": time(list.end),
+        "transitions_played_as_cuts": list.transitions,
+        "entries": list.entries.iter().map(|e| json!({
+            "record": range(e.record),
+            "clip": e.clip,
+            "name": e.name,
+            "asset": e.asset,
+            "offset": e.offset.map(time),
+            "playable": e.unplayable().is_none(),
+            "why_not": e.unplayable(),
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 /// Children of `parent` of `kind`, in their stored order.

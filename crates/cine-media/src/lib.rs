@@ -21,6 +21,7 @@ pub mod capability;
 pub mod clock;
 pub mod decode_ahead;
 pub mod decoder;
+pub mod edit_list;
 pub mod error;
 pub mod frame;
 pub mod identity;
@@ -37,6 +38,7 @@ pub use capability::{BackendKind, Capability, Chroma, Verification};
 pub use clock::{PlaybackClock, PlaybackRate, PlaybackTelemetry, TransportState};
 pub use decode_ahead::{AheadConfig, AheadStats, DecodeAhead};
 pub use decoder::{Packet, VideoDecoder};
+pub use edit_list::{EditEntry, EditListSource};
 pub use error::{Error, Result};
 pub use frame::{AlphaMode, AudioFrame, ColorMetadata, Frame, PixelFormat, VideoFrame};
 pub use identity::{

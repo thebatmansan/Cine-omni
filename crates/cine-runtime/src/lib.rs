@@ -45,6 +45,7 @@ pub mod frames;
 pub mod http;
 pub mod impact;
 pub mod lock;
+pub mod playlist;
 pub mod projection;
 pub mod rpc;
 pub mod server;

@@ -1,0 +1,117 @@
+//! The sequence as something to play: flattened picture segments resolved to
+//! files and media offsets.
+//!
+//! Composition is `cine_timeline::flatten`; this module only resolves each
+//! segment's clip to the asset it plays and expresses the media time as an
+//! offset from the start of that asset's available range — the coordinate a
+//! decoder can turn into a picture without knowing anything about the cut.
+//!
+//! Both the browser's record monitor (`picture_at`) and the native player read
+//! this, so the two surfaces cannot disagree about which picture is where.
+
+use cine_timeline::graph as tl;
+use std::path::PathBuf;
+use ucg_core::{EntityId, Graph, Rate, RationalTime, TimeRange, Value};
+use ucg_schema::attrs;
+
+/// One playable stretch of the sequence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub record: TimeRange,
+    pub clip: Option<EntityId>,
+    pub name: String,
+    pub track: usize,
+    pub asset: Option<EntityId>,
+    pub path: Option<PathBuf>,
+    /// Media time at `record.start`, measured from the start of the asset's
+    /// available range. `None` when the asset declares no range — which picture
+    /// it shows then cannot be known, and the entry is not playable.
+    pub offset: Option<RationalTime>,
+    pub online: Option<bool>,
+}
+
+impl Entry {
+    /// Why this entry cannot be played, if it cannot.
+    pub fn unplayable(&self) -> Option<&'static str> {
+        if self.asset.is_none() || self.path.is_none() {
+            Some("the clip is bound to no media asset")
+        } else if self.offset.is_none() {
+            Some("the media declares no available range")
+        } else if self.online == Some(false) {
+            Some("the media is offline")
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditList {
+    pub timeline: EntityId,
+    pub name: String,
+    /// The sequence's frame rate.
+    pub rate: Rate,
+    pub end: RationalTime,
+    pub entries: Vec<Entry>,
+    /// Transitions played as cuts.
+    pub transitions: usize,
+}
+
+impl EditList {
+    /// The entry showing at `at`, if any.
+    pub fn at(&self, at: RationalTime) -> Option<&Entry> {
+        self.entries.iter().find(|e| e.record.contains(at))
+    }
+}
+
+/// Resolve a timeline into its edit list.
+pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> {
+    let composed = tl::export_timeline(graph, timeline).map_err(|e| e.to_string())?;
+    let flat = cine_timeline::picture_segments(&composed);
+    let tracks: Vec<&cine_timeline::Track> = composed.tracks().collect();
+    let rate = composed
+        .global_start_time
+        .map(|t| t.rate_exact())
+        .or_else(|| {
+            flat.segments
+                .first()
+                .map(|s| s.record.start_time.rate_exact())
+        })
+        .unwrap_or(Rate::F24);
+    let entries = flat
+        .segments
+        .iter()
+        .map(|s| {
+            let name = tracks
+                .get(s.track)
+                .and_then(|t| t.children.get(s.item))
+                .map(|i| i.name().to_string())
+                .unwrap_or_default();
+            let asset = s.clip.and_then(|c| tl::media_of_clip(graph, c));
+            let node = asset.and_then(|a| graph.node(a));
+            let available = node
+                .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
+                .and_then(Value::as_range);
+            Entry {
+                record: s.record,
+                clip: s.clip,
+                name,
+                track: s.track,
+                asset,
+                path: node
+                    .and_then(|n| n.get_str(attrs::MEDIA_PATH))
+                    .map(PathBuf::from),
+                offset: available.map(|a| s.source_start.checked_sub(&a.start_time)),
+                online: node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
+            }
+        })
+        .collect();
+    Ok(EditList {
+        timeline,
+        name: composed.name.clone(),
+        rate,
+        end: flat.end.unwrap_or_else(|| RationalTime::zero(rate)),
+        entries,
+        transitions: flat.transitions,
+    })
+}
