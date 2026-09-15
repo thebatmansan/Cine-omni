@@ -40,11 +40,12 @@ pub mod error;
 pub mod graph;
 pub mod otio;
 pub mod otio_json;
+pub mod session;
 pub mod sync;
 
 pub use edit::{
-    diff, diff_tracks, extract, insert, join, lift, overwrite, ripple_trim, roll, slide, slip,
-    split_at, Change, ChangeKind, Edge,
+    diff, diff_tracks, extract, insert, join, lift, overwrite, replace, ripple_trim, roll, slide,
+    slip, split_at, Change, ChangeKind, Edge,
 };
 pub use error::{Error, Result};
 pub use graph::{
@@ -56,13 +57,17 @@ pub use otio::{
     TrackKind, Transition, TransitionType, UCG_ID_KEY,
 };
 pub use otio_json::{read_otio, write_otio};
+pub use session::{
+    any_solo, any_solo_of, ensure_unlocked, handles, is_audible, is_visible, link_of,
+    linked_positions, set_link, snap, snap_targets, snapped, targeted_tracks, TrackState,
+};
 pub use sync::{align_clip, find_offset, sync_clips, SyncResult};
 
 /// Everything most callers need.
 pub mod prelude {
     pub use crate::edit::{
-        diff, extract, insert, join, lift, overwrite, ripple_trim, roll, slide, slip, split_at,
-        Change, ChangeKind, Edge,
+        diff, extract, insert, join, lift, overwrite, replace, ripple_trim, roll, slide, slip,
+        split_at, Change, ChangeKind, Edge,
     };
     pub use crate::error::{Error, Result};
     pub use crate::graph::{

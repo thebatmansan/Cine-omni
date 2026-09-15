@@ -133,6 +133,12 @@ argument for the evidence discipline, not against it.
 | Multiple media references / proxy conform | Yes | 🟢 VERIFIED | Preserved through round-trip; conform swaps without losing either |
 | EDL / AAF / FCPXML | Yes | 🔴 NOT IMPLEMENTED | AAF container is CFB (`cfb` crate, MIT); **`LibAAF` is GPL-2.0 and must not be read** |
 | Editing operations (ripple/roll/slip/slide…) | Yes | 🟢 IMPLEMENTED | 15-operation semantics table; no semantic errors found. Gap: no transition media-handle check, so a dissolve can validate and be unrenderable |
+| Editorial session state (lock/mute/solo/target) | Yes | 🟢 VERIFIED | In OTIO `metadata["CINE-OMNI"]`, not invented schema. Locks refused in `commit`, so every operation honours them; survives OTIO *and* the project graph. 19 tests |
+| Linked audio/video | Yes | 🟡 PARTIAL | Link groups are stored, queried and survive a round trip. **Edits do not yet follow a link** — moving one clip does not move its pair |
+| Replace edit | Yes | 🟢 VERIFIED | Keeps the hole's duration, refuses a replacement with too little media |
+| Snapping | Yes | 🟢 VERIFIED | Cuts, track ends and markers; exact across rates; ties resolve to the earlier target. Tolerance is a duration, never pixels |
+| Media handles | Yes | 🟢 VERIFIED | `(head, tail)`; unknown when the clip declares no available range, which is not the same as zero |
+| Multi-selection, track targeting UI | Yes | 🔴 NOT IMPLEMENTED | Targeting is stored and queryable; nothing consumes it yet |
 | Shot → take → media traceability | Yes | 🟡 PARTIAL | Takes now survive shot-list regeneration; full production model designed, not built |
 | Offload verification state machine | Yes | 🔵 PLANNED | Designed: `discovered → copying → copied → verifying → verified`, `failed` absorbing |
 | Loudness (EBU R128 / BS.1770) | Yes | 🟢 VERIFIED | `lufs_integrated` agrees with `ebur128` to **0.000 LU** across five signals including 5.1 |

@@ -47,7 +47,12 @@ type Bound = Option<RationalTime>;
 
 /// Run `f` on a working copy of the track; commit only if it succeeds and
 /// the result satisfies the invariants.
+///
+/// Every editing operation in this module goes through here, which is why a
+/// locked track is refused here: a lock that each operation had to remember to
+/// honour would eventually be forgotten by one of them.
 fn commit<T>(track: &mut Track, f: impl FnOnce(&mut Track) -> Result<T>) -> Result<T> {
+    crate::session::ensure_unlocked(track)?;
     let mut work = track.clone();
     let out = f(&mut work)?;
     work.validate()?;
@@ -508,6 +513,40 @@ pub fn overwrite(track: &mut Track, at_time: RationalTime, item: Item) -> Result
         t.children.drain(i..j);
         t.children.insert(i, item);
         Ok(i)
+    })
+}
+
+/// Replace the item at `index` with `item`, keeping the track's shape.
+///
+/// The replacement plays for exactly as long as what it replaced, so nothing
+/// after it moves: this is the replace edit of a cutting room, not a delete
+/// followed by an insert. It is refused if the replacement has less media than
+/// the hole needs — silently playing something shorter and leaving a hole would
+/// be worse than saying no.
+pub fn replace(track: &mut Track, index: usize, item: Item) -> Result<()> {
+    commit(track, |t| {
+        let wanted = timed_item(t, index)?
+            .source_range()
+            .ok_or_else(|| Error::Edit("the item being replaced has no duration".into()))?
+            .duration;
+        let mut replacement = item;
+        let source = replacement
+            .source_range()
+            .ok_or_else(|| Error::Edit("the replacement has no source range".into()))?;
+        if let Some(available) = available_range(&replacement) {
+            let room = available
+                .end_time_exclusive()
+                .checked_sub(&source.start_time);
+            if room < wanted {
+                return Err(Error::Edit(format!(
+                    "the replacement has {room:?} of media from its start point, \
+                     but {wanted:?} is needed to fill the hole"
+                )));
+            }
+        }
+        replacement.set_source_range(TimeRange::new(source.start_time, wanted));
+        t.children[index] = replacement;
+        Ok(())
     })
 }
 

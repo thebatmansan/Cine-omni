@@ -7,6 +7,10 @@ use ucg_core::{EntityId, RationalTime, UcgError};
 /// operations and the graph integration.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// An edit was attempted on a locked track. The track is unchanged.
+    #[error("track `{0}` is locked")]
+    TrackLocked(String),
+
     /// A failure in the Unified Context Graph.
     #[error(transparent)]
     Ucg(#[from] UcgError),
@@ -31,6 +35,9 @@ pub enum Error {
     /// `join` was asked to merge items that do not continue each other in media.
     #[error("items {0} and {1} are not continuous in media")]
     NotContinuous(usize, usize),
+    /// An edit that cannot be carried out as asked, with the reason.
+    #[error("edit refused: {0}")]
+    Edit(String),
     /// A track violates a structural invariant.
     #[error("track invariant violated: {0}")]
     Invariant(String),
