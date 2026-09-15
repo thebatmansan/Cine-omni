@@ -995,6 +995,76 @@ pub fn perform_edit(
     })
 }
 
+/// Create an empty sequence under `project`: one picture and one sound track,
+/// at an exact `rate` recorded as its start time so an empty cut still knows
+/// what a frame is. Returns the timeline entity.
+pub fn create_sequence(
+    tx: &mut Tx,
+    project: EntityId,
+    name: &str,
+    rate: ucg_core::Rate,
+) -> Result<EntityId> {
+    let mut key = format!("sequence:{name}");
+    let mut n = 1;
+    while tx
+        .graph()
+        .contains(EntityId::from_key(&format!("nle:{key}")))
+    {
+        n += 1;
+        key = format!("sequence:{name}:{n}");
+    }
+    let mut timeline = Timeline::new(name);
+    timeline.global_start_time = Some(RationalTime::zero(rate));
+    timeline
+        .tracks
+        .children
+        .push(Composable::Track(Track::new("V1", TrackKind::Video)));
+    timeline
+        .tracks
+        .children
+        .push(Composable::Track(Track::new("A1", TrackKind::Audio)));
+    import_timeline(tx, project, &timeline, &key)
+}
+
+/// Place new material on several tracks at once — typically a take's picture
+/// and its sound — inserting (rippling each track) or overwriting, and link the
+/// pieces so later edits keep them together. Tracks not named are not moved.
+/// Returns the new clips, in the order of `tracks`.
+pub fn place_material(
+    tx: &mut Tx,
+    tracks: &[EntityId],
+    time: RationalTime,
+    spec: &ClipSpec,
+    overwrite: bool,
+) -> Result<Vec<EntityId>> {
+    let mut placed = Vec::with_capacity(tracks.len());
+    for track in tracks {
+        let op = if overwrite {
+            EditOp::Overwrite {
+                time,
+                clip: spec.clone(),
+            }
+        } else {
+            EditOp::Insert {
+                time,
+                clip: spec.clone(),
+            }
+        };
+        let out = perform_edit(tx, *track, op, false)?;
+        placed.push(
+            out.item
+                .ok_or_else(|| Error::Edit("placed material has no entity".into()))?,
+        );
+    }
+    if placed.len() > 1 {
+        let group = format!("take:{}", placed[0]);
+        for clip in &placed {
+            set_clip_link(tx, *clip, Some(&group))?;
+        }
+    }
+    Ok(placed)
+}
+
 /// Put a clip into a link group (or take it out with `None`).
 pub fn set_clip_link(tx: &mut Tx, clip: EntityId, group: Option<&str>) -> Result<()> {
     require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;

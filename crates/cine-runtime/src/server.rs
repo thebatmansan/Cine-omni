@@ -111,6 +111,11 @@ impl Server {
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 Err(e) => return Err(e),
             };
+            // Replies are small and a client pipelines several. With Nagle's
+            // algorithm on, the second reply waits for the ACK of the first,
+            // which the client delays: a 40 ms stall per burst, measured as
+            // a 46 ms median to refetch seven 1–3 ms projections.
+            let _ = stream.set_nodelay(true);
             let runtime = self.runtime.clone();
             let ui_dir = ui_dir.clone();
             let shutdown = shutdown.clone();

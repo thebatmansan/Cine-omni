@@ -114,10 +114,27 @@ fn capabilities() -> J {
         }),
         json!({
             "id": "editorial.operations",
-            "name": "Ripple, roll, slip, slide, trim",
+            "name": "Trim, roll, slip, slide, split, lift, extract, insert, overwrite, replace, join",
             "group": "Editorial",
-            "state": "unavailable",
-            "detail": "Implemented and tested in cine-timeline; no protocol reaches them yet",
+            "state": "verified",
+            "detail": "Each edit is one undoable transaction carried to linked material; \
+                       tested over the protocol (editorial_protocol.rs)",
+        }),
+        json!({
+            "id": "project.impact",
+            "name": "What a change affected, by department",
+            "group": "Project",
+            "state": "verified",
+            "detail": "Read from the committed deltas of the change and its reactor cascade; \
+                       nothing is inferred",
+        }),
+        json!({
+            "id": "script.lines",
+            "name": "Screenplay reading and line editing",
+            "group": "Script",
+            "state": "degraded",
+            "detail": "Scenes and elements read from the graph; dialogue text is editable and \
+                       cascades. Writing new scenes, pagination and revisions are not built",
         }),
         json!({
             "id": "media.preview",
@@ -435,6 +452,82 @@ pub fn dispatch_with(
                 "cascade": cascade_json(&group),
                 "impact": crate::impact::of_group(&g, &group),
             })
+        }
+        "new_timeline" => {
+            let name = params
+                .get("name")
+                .and_then(J::as_str)
+                .unwrap_or("Sequence")
+                .to_string();
+            let num = params.get("rate_num").and_then(J::as_u64).unwrap_or(24);
+            let den = params.get("rate_den").and_then(J::as_u64).unwrap_or(1);
+            let rate = u32::try_from(num)
+                .ok()
+                .zip(u32::try_from(den).ok())
+                .and_then(|(n, d)| ucg_core::Rate::new(n, d))
+                .ok_or_else(|| format!("invalid rate {num}/{den}"))?;
+            let root = p.root;
+            let mut id = EntityId::nil();
+            let group = p
+                .engine
+                .transact(&format!("new sequence {name}"), |tx| {
+                    id = cine_timeline::graph::create_sequence(tx, root, &name, rate)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                    Ok(())
+                })
+                .map_err(|x| x.to_string())?;
+            let mut out = with_impact(p, &group);
+            out["id"] = json!(id);
+            out
+        }
+        "place" => {
+            let tracks: Vec<EntityId> = params
+                .get("tracks")
+                .and_then(J::as_array)
+                .ok_or("missing param `tracks`")?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .and_then(EntityId::parse)
+                        .ok_or("`tracks` must be entity ids")
+                })
+                .collect::<std::result::Result<_, _>>()?;
+            let time: RationalTime =
+                serde_json::from_value(params.get("time").cloned().ok_or("missing param `time`")?)
+                    .map_err(|e| format!("invalid time: {e}"))?;
+            let spec: cine_timeline::ClipSpec =
+                serde_json::from_value(params.get("clip").cloned().ok_or("missing param `clip`")?)
+                    .map_err(|e| format!("invalid clip: {e}"))?;
+            let overwrite = params.get("mode").and_then(J::as_str) == Some("overwrite");
+            let mut placed = Vec::new();
+            let group = p
+                .engine
+                .transact(
+                    if overwrite {
+                        "edit: overwrite"
+                    } else {
+                        "edit: insert"
+                    },
+                    |tx| {
+                        placed = cine_timeline::graph::place_material(
+                            tx, &tracks, time, &spec, overwrite,
+                        )
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                        Ok(())
+                    },
+                )
+                .map_err(|x| x.to_string())?;
+            let mut out = with_impact(p, &group);
+            out["clips"] = json!(placed);
+            out
+        }
+        "picture_at" => {
+            let timeline = entity(params, "timeline")?;
+            let at: RationalTime =
+                serde_json::from_value(params.get("time").cloned().ok_or("missing param `time`")?)
+                    .map_err(|e| format!("invalid time: {e}"))?;
+            let g = p.engine.read();
+            crate::projection::picture_at(&g, timeline, at)?
         }
         "link" => {
             let clips: Vec<EntityId> = params

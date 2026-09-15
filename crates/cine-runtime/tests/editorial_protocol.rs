@@ -344,3 +344,89 @@ fn a_script_change_flags_only_the_material_bound_to_that_scene() {
         true
     );
 }
+
+/// A cut made of real media, from nothing: a new sequence, a real file
+/// ingested, its picture and sound placed as a linked pair, and the record
+/// monitor resolving — in the runtime — which decoded picture the cut shows.
+#[test]
+fn a_real_cut_is_built_from_ingested_media_and_its_record_picture_decodes() {
+    let Some(path) = common::media_path() else {
+        eprintln!("SKIP: no real media on this machine");
+        return;
+    };
+    let h = Harness::start();
+    let mut c = h.client();
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Assembly", "rate_num": 24, "rate_den": 1 }),
+    );
+    let tl = made["id"].as_str().unwrap().to_string();
+    let seq = c.call("timeline", json!({ "id": tl }));
+    assert_eq!(seq["name"], "Assembly");
+    let v1 = seq["tracks"][0]["id"].as_str().unwrap().to_string();
+    let a1 = seq["tracks"][1]["id"].as_str().unwrap().to_string();
+
+    let asset = c.call("ingest", json!({ "path": path.display().to_string() }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let media = c.call("media", json!({}));
+    let info = media
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == asset)
+        .unwrap()
+        .clone();
+    let (num, den) = (
+        info["video"]["rate_num"].as_u64().unwrap(),
+        info["video"]["rate_den"].as_u64().unwrap(),
+    );
+    let at = |ticks: i64| json!({ "ticks": ticks, "rate_num": num, "rate_den": den });
+
+    // Pictures 30..54 of the file, at the head of the sequence, on picture and sound.
+    let placed = c.call(
+        "place",
+        json!({ "tracks": [v1, a1], "time": { "ticks": 0, "rate_num": 24, "rate_den": 1 },
+                "clip": { "media": asset, "source_range": { "start_time": at(30), "duration": at(24) } } }),
+    );
+    let clips = placed["clips"].as_array().unwrap();
+    assert_eq!(clips.len(), 2);
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let v = &seq["tracks"][0]["items"][0];
+    let a = &seq["tracks"][1]["items"][0];
+    assert_eq!(v["asset"], asset);
+    assert_eq!(a["asset"], asset);
+    assert!(
+        v["link"].is_string() && v["link"] == a["link"],
+        "picture and sound are linked"
+    );
+
+    // Ten frames into the cut is picture 40 of the file.
+    let shown = c.call(
+        "picture_at",
+        json!({ "timeline": tl, "time": { "ticks": 10, "rate_num": 24, "rate_den": 1 } }),
+    );
+    assert_eq!(shown["black"], false);
+    assert_eq!(shown["asset"], asset);
+    if (num, den) == (24, 1) {
+        assert_eq!(shown["index"], 40);
+    }
+    let index = shown["index"]
+        .as_i64()
+        .expect("an ingested asset declares its range");
+    let (status, headers, body) = h.get(&format!("/frame?media={asset}&index={index}"));
+    assert!(status.contains("200"), "{status}");
+    assert_eq!(
+        common::header(&headers, "x-cine-index"),
+        Some(index.to_string().as_str())
+    );
+    assert!(body.starts_with(b"\x89PNG"));
+
+    // Past the end of the cut there is nothing to show, and it says so.
+    let after = c.call(
+        "picture_at",
+        json!({ "timeline": tl, "time": { "ticks": 500, "rate_num": 24, "rate_den": 1 } }),
+    );
+    assert_eq!(after["black"], true);
+}

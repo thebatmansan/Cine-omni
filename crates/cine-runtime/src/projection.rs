@@ -290,6 +290,68 @@ pub fn structure(graph: &Graph) -> J {
     json!({ "scenes": scenes })
 }
 
+/// The picture a sequence shows at `at`: the top-most visible picture track
+/// with a clip there, the asset that clip plays, and which picture of it.
+///
+/// This is composition, so it is answered here and not in the browser. A gap
+/// answers `black`; a clip whose asset declares no available range answers with
+/// no index, because which picture it plays cannot be known.
+pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result<J, String> {
+    use ucg_core::Rounding;
+    let composed = tl::export_timeline(graph, timeline).map_err(|e| e.to_string())?;
+    let solo = cine_timeline::session::any_solo_of(&composed, cine_timeline::TrackKind::Video);
+    let track_ids = track_entity_ids(graph, timeline);
+    let tracks: Vec<(usize, &cine_timeline::Track)> = composed.tracks().enumerate().collect();
+    for (ti, track) in tracks.into_iter().rev() {
+        if track.kind != cine_timeline::TrackKind::Video
+            || !track.enabled
+            || !cine_timeline::session::is_visible(track, solo)
+        {
+            continue;
+        }
+        for (i, item) in track.children.iter().enumerate() {
+            let Some(clip) = item.as_clip() else { continue };
+            if !clip.enabled {
+                continue;
+            }
+            let Some(span) = track.range_of_child(i) else {
+                continue;
+            };
+            if !span.contains(at) {
+                continue;
+            }
+            let Some(source) = clip.trimmed_range() else {
+                continue;
+            };
+            let offset = at.checked_sub(&span.start_time);
+            let source_time = source.start_time.checked_add(&offset);
+            let asset = item.ucg_id().and_then(|c| tl::media_of_clip(graph, c));
+            let available = asset
+                .and_then(|a| graph.node(a))
+                .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
+                .and_then(ucg_core::Value::as_range);
+            let index = available.map(|a| {
+                let rate = a.start_time.rate_exact();
+                let (t, _) = source_time.rescale_checked(rate, Rounding::Floor);
+                t.ticks() - a.start_time.ticks()
+            });
+            return Ok(json!({
+                "black": false,
+                "track": track_ids.get(ti),
+                "track_name": track.name,
+                "clip": item.ucg_id(),
+                "name": item.name(),
+                "asset": asset,
+                "online": asset.and_then(|a| graph.node(a))
+                    .and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
+                "source": time(source_time),
+                "index": index.filter(|i| *i >= 0),
+            }));
+        }
+    }
+    Ok(json!({ "black": true }))
+}
+
 /// Children of `parent` of `kind`, in their stored order.
 fn ordered_children(graph: &Graph, parent: EntityId, kind: Option<&str>) -> Vec<EntityId> {
     let mut out: Vec<(i64, EntityId)> = graph
