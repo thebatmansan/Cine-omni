@@ -15,6 +15,10 @@ cine-previs.workspace = true
 cine-logistics.workspace = true
 cine-timeline.workspace = true
 cine-media.workspace = true
+# The CPU colour conversion the GPU path is verified against. Without the
+# `wgpu` feature this is a small, dependency-light crate; the point is to have
+# one definition of "what colour is this picture", not two.
+cine-gpu.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -24,6 +28,10 @@ crossbeam-channel.workspace = true
 # The WebSocket handshake is specified in terms of SHA-1 and base64. These are
 # the whole of the protocol's cryptographic surface; a full async stack would be
 # a large dependency for a job the standard library and two small crates do.
+# A decoded picture has to reach a browser as an image, and JSON cannot carry
+# one. PNG only: no decoding, no other formats.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 sha1 = "0.11"
 base64 = "0.23"
 

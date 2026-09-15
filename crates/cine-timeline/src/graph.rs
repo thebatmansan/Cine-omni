@@ -782,6 +782,40 @@ pub fn apply_edit(tx: &mut Tx, track: EntityId, op: EditOp) -> Result<()> {
     write_track_items(tx, track, &t, &ids)
 }
 
+/// Read a track node's editorial state.
+///
+/// The state lives in the track's OTIO metadata, which the graph already stores
+/// verbatim, so this is the same state [`crate::session::TrackState::of`] reads
+/// from an exported `Track` and the same state an edit is refused by. Going
+/// through here rather than poking the attribute keeps one representation.
+pub fn track_state(graph: &Graph, track_id: EntityId) -> Result<crate::session::TrackState> {
+    require_kind(graph, track_id, kinds::NLE_TRACK)?;
+    let track = export_track(graph, track_id)?;
+    Ok(crate::session::TrackState::of(&track))
+}
+
+/// Write a track node's editorial state, leaving every other metadata key and
+/// every item alone.
+pub fn set_track_state(
+    tx: &mut Tx,
+    track_id: EntityId,
+    state: crate::session::TrackState,
+) -> Result<()> {
+    require_kind(tx.graph(), track_id, kinds::NLE_TRACK)?;
+    let mut metadata = value_to_metadata(
+        tx.graph()
+            .node(track_id)
+            .and_then(|n| n.get(attrs::METADATA)),
+    );
+    // Apply to a bare track so only the namespace this owns is touched.
+    let mut carrier = Track::new("", TrackKind::Video);
+    carrier.metadata = metadata.clone();
+    state.apply(&mut carrier);
+    metadata = carrier.metadata;
+    tx.set(track_id, attrs::METADATA, metadata_to_value(&metadata))?;
+    Ok(())
+}
+
 /// Replace the items of a track node with those of `track` (same id policy
 /// as [`apply_edit`]). Useful after pure edits done outside the graph.
 pub fn write_track(tx: &mut Tx, track_id: EntityId, track: &Track) -> Result<()> {

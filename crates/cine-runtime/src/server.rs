@@ -155,7 +155,12 @@ fn handle_connection(
         return serve_websocket(stream, reader, runtime, &agent, shutdown);
     }
 
-    match request.path.split('?').next().unwrap_or("") {
+    let (route, query) = match request.path.split_once('?') {
+        Some((r, q)) => (r, q),
+        None => (request.path.as_str(), ""),
+    };
+    match route {
+        "/frame" => serve_frame(&mut stream, &runtime, query),
         "/health" => {
             let body = serde_json::json!({
                 "status": "ok",
@@ -271,13 +276,89 @@ fn serve_websocket(
 }
 
 /// Handle one JSON-RPC line. `None` means the request was a notification.
+/// One decoded picture, as a PNG.
+///
+/// `?media=<entity id>&index=<n>`. The media must already be registered in the
+/// project: this serves the project's media, not an arbitrary path off the
+/// filesystem, which is also what keeps it from becoming a file-read endpoint.
+fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
+    let mut media = None;
+    let mut index = 0usize;
+    for pair in query.split('&') {
+        match pair.split_once('=') {
+            Some(("media", v)) => media = ucg_core::EntityId::parse(v),
+            Some(("index", v)) => index = v.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    let Some(media) = media else {
+        respond(
+            stream,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            b"usage: /frame?media=<entity id>&index=<picture>",
+        );
+        return;
+    };
+    // The path comes from the graph, never from the request.
+    let path = {
+        let g = runtime.project.engine.read();
+        g.node(media)
+            .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH).map(str::to_string))
+    };
+    let Some(path) = path else {
+        respond(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"no media with that id in this project",
+        );
+        return;
+    };
+    match runtime.frames.picture(std::path::Path::new(&path), index) {
+        Ok(picture) => {
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\
+                 Cache-Control: no-store\r\nX-Cine-Index: {}\r\nX-Cine-Decode-Ms: {:.1}\r\n\
+                 X-Cine-Colour: {}\r\nX-Cine-Colour-Assumed: {}\r\n\r\n",
+                picture.png.len(),
+                picture.index,
+                picture.decode_ms,
+                picture.colour,
+                picture.colour_assumed,
+            );
+            let _ = stream.write_all(headers.as_bytes());
+            let _ = stream.write_all(&picture.png);
+            let _ = stream.flush();
+        }
+        // A decoder that cannot decode says so. It does not return a blank
+        // image, which would look like a black frame in the media.
+        Err(why) => respond(
+            stream,
+            "422 Unprocessable Content",
+            "text/plain; charset=utf-8",
+            why.as_bytes(),
+        ),
+    }
+}
+
 fn handle_rpc_line(runtime: &Runtime, line: &str) -> Option<String> {
     let request = match Request::parse(line) {
         Ok(r) => r,
         Err(e) => return Some(rpc::error_response(&serde_json::Value::Null, -32700, &e)),
     };
     let id = request.id.clone()?;
-    match rpc::dispatch(&runtime.project, &request.method, &request.params) {
+    // Session facts the project itself does not know.
+    let session = rpc::SessionFacts {
+        clients: runtime.client_count(),
+        uptime_s: runtime.uptime().as_secs(),
+    };
+    match rpc::dispatch_with(
+        &runtime.project,
+        &request.method,
+        &request.params,
+        Some(session),
+    ) {
         Ok(result) => Some(rpc::ok_response(&id, result)),
         Err(e) => Some(rpc::error_response(&id, -32000, &e)),
     }

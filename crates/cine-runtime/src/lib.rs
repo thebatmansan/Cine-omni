@@ -41,8 +41,10 @@
 //! Synchronous and thread-per-client throughout, matching the rest of the
 //! workspace. This serves a handful of local windows, not the public internet.
 
+pub mod frames;
 pub mod http;
 pub mod lock;
+pub mod projection;
 pub mod rpc;
 pub mod server;
 pub mod session;

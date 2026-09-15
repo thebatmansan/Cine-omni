@@ -454,6 +454,7 @@ name = "cine-runtime"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cine-gpu",
  "cine-logistics",
  "cine-media",
  "cine-pipeline",
@@ -461,6 +462,7 @@ dependencies = [
  "cine-script",
  "cine-timeline",
  "crossbeam-channel",
+ "image",
  "parking_lot",
  "serde",
  "serde_json",

@@ -39,6 +39,8 @@ struct Client {
 
 /// The shared application runtime.
 pub struct Runtime {
+    /// One open decoder, shared by every client asking for a picture.
+    pub frames: crate::frames::FrameService,
     pub project: Arc<OmniProject>,
     /// Where the project lives on disk, for reporting and for the instance lock.
     pub root_dir: std::path::PathBuf,
@@ -55,6 +57,7 @@ impl Runtime {
             clients: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
             started: std::time::Instant::now(),
+            frames: crate::frames::FrameService::new(),
         })
     }
 

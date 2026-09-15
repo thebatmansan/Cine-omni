@@ -58,6 +58,110 @@ pub fn change_notification(cs: &ucg_core::ChangeSet) -> String {
     .to_string()
 }
 
+/// What this build can actually do, in the words of the systems that know.
+///
+/// Two sources, neither of them invented here. Codec support comes from
+/// `cine_media::capability::REGISTRY`, which carries its own evidence and
+/// refuses to name a hardware path it does not have. The rest are facts about
+/// *this* runtime and this transport, and they are stated rather than implied:
+/// a browser cannot receive GPU textures, so the thing it can show is a decoded
+/// picture at a time, and it must say so.
+///
+/// States are deliberately the same four the rest of the project uses:
+/// `verified`, `degraded`, `unavailable`, `refused`.
+fn capabilities() -> J {
+    use cine_media::capability::{Verification, REGISTRY};
+
+    let codecs: Vec<J> = REGISTRY
+        .iter()
+        .map(|c| {
+            let (state, detail) = match c.verification {
+                Verification::Verified { evidence } => ("verified", evidence),
+                Verification::Unverified { note } => ("degraded", note),
+                Verification::Refused { reason } => ("refused", reason),
+            };
+            json!({
+                "id": format!("codec.{}{}", c.codec, c.profile.map(|p| format!(".{p}")).unwrap_or_default()),
+                "name": c.to_string(),
+                "group": "Decoding",
+                "state": state,
+                "detail": detail,
+            })
+        })
+        .collect();
+
+    let session = vec![
+        json!({
+            "id": "project.graph",
+            "name": "Project graph, undo and operation log",
+            "group": "Project",
+            "state": "verified",
+            "detail": "One engine per project; every commit is broadcast to every client",
+        }),
+        json!({
+            "id": "project.live_sync",
+            "name": "Live state across clients",
+            "group": "Project",
+            "state": "verified",
+            "detail": "The runtime owns the only engine; clients hold projections, never state",
+        }),
+        json!({
+            "id": "editorial.timeline",
+            "name": "Timeline, tracks, clips, track state",
+            "group": "Editorial",
+            "state": "verified",
+            "detail": "Read from the graph; lock, mute, solo and target commit through it",
+        }),
+        json!({
+            "id": "editorial.operations",
+            "name": "Ripple, roll, slip, slide, trim",
+            "group": "Editorial",
+            "state": "unavailable",
+            "detail": "Implemented and tested in cine-timeline; no protocol reaches them yet",
+        }),
+        json!({
+            "id": "media.preview",
+            "name": "Decoded picture preview",
+            "group": "Media",
+            "state": "degraded",
+            "detail": "Real decoding, one picture per request, encoded as PNG. \
+                       Frame-accurate stepping, not real-time playback",
+        }),
+        json!({
+            "id": "media.playback",
+            "name": "Real-time playback in the browser",
+            "group": "Media",
+            "state": "unavailable",
+            "detail": "The verified playback path decodes to GPU textures and never leaves the \
+                       GPU. A browser cannot receive those. Real-time playback runs in cine-shell",
+        }),
+        json!({
+            "id": "audio.monitoring",
+            "name": "Audio monitoring and A/V sync",
+            "group": "Audio",
+            "state": "unavailable",
+            "detail": "No audio device backend on this build; the clock architecture exists and \
+                       is tested, nothing has ever been heard",
+        }),
+        json!({
+            "id": "colour.management",
+            "name": "Colour management",
+            "group": "Colour",
+            "state": "unavailable",
+            "detail": "The display transform is not ACES-verified; see PHASE-3-STATUS.md",
+        }),
+        json!({
+            "id": "colour.scopes",
+            "name": "Scopes",
+            "group": "Colour",
+            "state": "unavailable",
+            "detail": "Implemented in cine-color, not wired to any viewer",
+        }),
+    ];
+
+    json!({ "capabilities": session.into_iter().chain(codecs).collect::<Vec<_>>() })
+}
+
 fn entity(params: &J, key: &str) -> std::result::Result<EntityId, String> {
     params
         .get(key)
@@ -180,7 +284,108 @@ pub fn cascade_json(group: &UndoGroup) -> J {
 /// Read guards are scoped inside each arm: the engine's lock is not reentrant,
 /// and holding one across a `transact` deadlocks.
 pub fn dispatch(p: &OmniProject, method: &str, params: &J) -> RpcResult {
+    dispatch_with(p, method, params, None)
+}
+
+/// Session facts a bare project does not know: how many clients are attached
+/// and how long the runtime has been up.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SessionFacts {
+    pub clients: usize,
+    pub uptime_s: u64,
+}
+
+/// Dispatch, with optional session facts for the methods that report them.
+pub fn dispatch_with(
+    p: &OmniProject,
+    method: &str,
+    params: &J,
+    session: Option<SessionFacts>,
+) -> RpcResult {
+    let session = session.unwrap_or_default();
     Ok(match method {
+        // -- what the project is ------------------------------------------
+        "project" => {
+            let stats = p.engine.stats();
+            let g = p.engine.read();
+            let path = p.disk.as_ref().map(|d| d.path.clone()).unwrap_or_default();
+            crate::projection::project(&g, &stats, &path, session.clients, session.uptime_s)
+        }
+        "capabilities" => capabilities(),
+
+        // -- editorial ------------------------------------------------------
+        "timelines" => {
+            let g = p.engine.read();
+            crate::projection::timelines(&g)
+        }
+        "timeline" => {
+            let id = entity(params, "id")?;
+            let g = p.engine.read();
+            crate::projection::timeline(&g, id)?
+        }
+        "track_state" => {
+            let track = entity(params, "track")?;
+            let key = str_param(params, "key")?.to_string();
+            let on = params.get("value").and_then(J::as_bool).unwrap_or(false);
+            let state = {
+                let g = p.engine.read();
+                cine_timeline::graph::track_state(&g, track).map_err(|x| x.to_string())?
+            };
+            let mut next = state;
+            match key.as_str() {
+                "locked" => next.locked = on,
+                "muted" => next.muted = on,
+                "solo" => next.solo = on,
+                "targeted" => next.targeted = on,
+                other => return Err(format!("unknown track state `{other}`")),
+            }
+            let group = p
+                .engine
+                .transact(&format!("track {key}"), |tx| {
+                    cine_timeline::graph::set_track_state(tx, track, next)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                })
+                .map_err(|x| x.to_string())?;
+            cascade_json(&group)
+        }
+        "import_otio" => {
+            let text = str_param(params, "text")?;
+            let key = params
+                .get("key")
+                .and_then(J::as_str)
+                .unwrap_or("timeline.otio");
+            let id = p.import_otio(text, key).map_err(|x| x.to_string())?;
+            json!({ "id": id })
+        }
+
+        // -- media ----------------------------------------------------------
+        "media" => {
+            let g = p.engine.read();
+            crate::projection::media(&g)
+        }
+        "ingest" => {
+            let path = std::path::PathBuf::from(str_param(params, "path")?);
+            if !path.exists() {
+                return Err(format!("no file at {}", path.display()));
+            }
+            let root = p.root;
+            let mut id = ucg_core::EntityId::nil();
+            p.engine
+                .transact("ingest media", |tx| {
+                    id = cine_media::ucg::ingest(tx, root, &path)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                    Ok(())
+                })
+                .map_err(|x| x.to_string())?;
+            json!({ "id": id })
+        }
+
+        // -- the production chain -------------------------------------------
+        "structure" => {
+            let g = p.engine.read();
+            crate::projection::structure(&g)
+        }
+
         "stats" => serde_json::to_value(p.engine.stats()).map_err(|x| x.to_string())?,
         "node" => {
             let id = entity(params, "id")?;
