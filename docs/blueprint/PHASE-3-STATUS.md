@@ -149,6 +149,18 @@ argument for the evidence discipline, not against it.
 | Plugin hosting | Yes | 🔵 PLANNED | CLAP and VST3 now both viable — see §5 |
 | Sample-accurate splices | Yes | 🟢 VERIFIED | Reproduced the defect at 29.97 and fixed it |
 
+### Application (frontend)
+
+| Capability | Required | Current | Evidence |
+|---|---|---|---|
+| Application shell | Yes | 🟢 VERIFIED | Menu bar, workspace navigation, browser / viewer / inspector / timeline, status bar. Served by `cine start` and fetched in an end-to-end test |
+| Editorial workspace | Yes | 🟡 PARTIAL | The cut is visible and track state is editable; **no editing operations are reachable** |
+| Live state across clients | Yes | 🟢 VERIFIED | A locks → B sees it → B soloes → A sees it, with A's change intact; undo propagates too |
+| Real media in the interface | Yes | 🟡 DEGRADED | Real decoded pictures as PNG: 782 KB in 94–114 ms, stepping 486 ms, a cold jump 2.6 s. Frame-accurate, not playback |
+| Real-time playback in the browser | Yes | 🔴 UNAVAILABLE | The verified path decodes to GPU textures a browser cannot receive. Reported as unavailable *by the protocol*, and no play button exists |
+| Capability honesty in the interface | Yes | 🟢 VERIFIED | The interface renders `capabilities` directly; 28 reported, each with a reason, asserted by test |
+| Workspaces beyond editorial and media | Yes | 🔴 NOT IMPLEMENTED | All are listed with their real state; none can be opened |
+
 ### Platform
 
 | Capability | Required | Current | Evidence |
@@ -295,6 +307,8 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * OTIO output that parses in real OpenTimelineIO
 
 **May not be claimed**:
+* "Editor" — the cut is visible and track state commits, but no ripple, roll,
+  slip, slide, trim, insert or overwrite is reachable from the interface
 * "Editorial workspace" as a working editor — the panels and transport are real
   and measured, but no timeline is loaded into it and nothing can be cut from it
 * "ACES-compatible" — measured 30% off on saturated colour

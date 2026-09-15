@@ -79,6 +79,13 @@ cd ui && npm test && npm run build
   looked it reached 60 GB. Read `docs/blueprint/STORAGE-POLICY.md` before adding
   anything that writes to disk: every byte belongs to a class, and only caches
   and temporary files may ever be deleted automatically.
+* A backend capability is not finished until there is a path to it: protocol →
+  frontend state → visible interface → interaction → test. The frontend holds a
+  *projection* of the graph and sends intents back; it never computes
+  composition, never writes project state locally, and never claims a capability
+  the runtime did not report. Read `docs/blueprint/APPLICATION.md`. Where
+  something is backend-only by necessity, write down why — real-time playback is
+  native because a frame must not leave the GPU, and `capabilities` says so.
 * A cross-check is not an oracle. When two implementations disagree, adjudicate
   against something exact before deciding which is wrong — the true-peak
   "defect" was real divergence with the blame reversed.
