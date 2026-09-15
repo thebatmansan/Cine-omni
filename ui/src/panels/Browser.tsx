@@ -105,9 +105,12 @@ export function Browser({
               onMouseDown={() => onMedia(m.id)}
               title={m.path ?? ""}
             >
+              <Thumb id={m.id} />
               <span className="kind">{m.video ? "V" : "A"}</span>
               <span className="label">{m.name}</span>
               <span className="meta">
+                {m.checksum?.last?.result === "mismatch" && <span className="bad">checksum ✗ </span>}
+                {m.checksum?.last && m.checksum.last.result !== "mismatch" && <span className="good">✓ </span>}
                 {m.online === false ? "offline" : m.video?.frames ? `${m.video.frames}f` : ""}
               </span>
             </div>
@@ -140,4 +143,11 @@ function Group({
       {open && children}
     </>
   );
+}
+
+/** A cached thumbnail, when one has been made; nothing when not. */
+function Thumb({ id }: { id: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return <img className="thumb" src={`/thumbnail?media=${id}&index=0`} alt="" onError={() => setFailed(true)} />;
 }

@@ -138,6 +138,33 @@ export interface ScriptView {
   documents: { id: string; name: string; source_key: string | null; scenes: ScriptScene[] }[];
 }
 
+export type JobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface JobView {
+  id: number;
+  kind: string;
+  label: string;
+  state: JobState;
+  progress: number | null;
+  message: string | null;
+  attempts: number;
+  max_attempts: number;
+  error: string | null;
+  output: Record<string, unknown> | null;
+  resource: "cpu" | "gpu" | "io";
+  priority: number;
+  resumed: boolean;
+  elapsed_ms: number | null;
+  params: Record<string, unknown>;
+}
+
+export interface ChecksumRecord {
+  algorithm: string;
+  sha256: string;
+  size: number;
+  last?: { result: "established" | "match" | "mismatch"; sha256: string; seconds: number; job: number };
+}
+
 export interface PictureAt {
   black: boolean;
   track?: string | null;
@@ -287,6 +314,7 @@ export interface MediaView {
     decodable: boolean;
   } | null;
   streams: MediaStream[];
+  checksum: ChecksumRecord | null;
 }
 
 export interface StructureView {
@@ -311,6 +339,7 @@ export class RpcClient {
   private listeners = new Set<(n: ChangeNotification) => void>();
   private stateListeners = new Set<(open: boolean) => void>();
   private focusListeners = new Set<(timeline: string | null) => void>();
+  private jobListeners = new Set<(job: JobView) => void>();
 
   constructor(private url: string) {}
 
@@ -345,6 +374,10 @@ export class RpcClient {
       this.listeners.forEach((l) => l(msg.params as ChangeNotification));
       return;
     }
+    if (msg.method === "job") {
+      this.jobListeners.forEach((l) => l(msg.params as JobView));
+      return;
+    }
     if (msg.method === "focus") {
       this.focusListeners.forEach((l) => l((msg.params?.timeline as string | null) ?? null));
       return;
@@ -359,6 +392,12 @@ export class RpcClient {
   onChange(l: (n: ChangeNotification) => void): () => void {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
+  }
+
+  /** A job changed state or reported progress. */
+  onJob(l: (job: JobView) => void): () => void {
+    this.jobListeners.add(l);
+    return () => this.jobListeners.delete(l);
   }
 
   /** Another surface opened a sequence. */
@@ -427,6 +466,10 @@ export class RpcClient {
   impact(revision?: number) { return this.call<ImpactView | null>("impact", revision == null ? {} : { revision }); }
   history(limit = 100) { return this.call<HistoryView>("history", { limit }); }
   pictureAt(timeline: string, time: ExactTime) { return this.call<PictureAt>("picture_at", { timeline, time }); }
+  jobs(limit = 100) { return this.call<JobView[]>("jobs", { limit }); }
+  submitJob(kind: string, params: Record<string, unknown>) { return this.call<JobView>("job_submit", { kind, ...params }); }
+  cancelJob(id: number) { return this.call<JobView>("job_cancel", { id }); }
+  retryJob(id: number) { return this.call<JobView>("job_retry", { id }); }
   focus(timeline?: string | null) {
     return this.call<{ timeline: string | null }>("focus", timeline === undefined ? {} : { timeline });
   }

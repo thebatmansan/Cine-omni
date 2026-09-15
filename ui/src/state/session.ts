@@ -4,6 +4,7 @@ import {
   ChangeNotification,
   HistoryView,
   ImpactView,
+  JobView,
   MediaView,
   ProjectView,
   RpcClient,
@@ -41,6 +42,8 @@ export interface Session {
   impact: ImpactView | null;
   /** Most recent commits, newest first — the shared history, not a local log. */
   changes: ChangeNotification[];
+  /** Background work, newest first, live. */
+  jobs: JobView[];
   /** The last refused request, in the runtime's words. */
   refusal: string | null;
   client: RpcClient;
@@ -87,6 +90,7 @@ export function useSession(url: string = runtimeUrl()): Session {
   const [impact, setImpact] = useState<ImpactView | null>(null);
   const [changes, setChanges] = useState<ChangeNotification[]>([]);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<JobView[]>([]);
   const selected = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -139,6 +143,12 @@ export function useSession(url: string = runtimeUrl()): Session {
           .catch(() => {});
       }, SETTLE_MS);
     });
+    // Jobs report progress many times a second; each notification is the whole
+    // record, so it replaces what was there rather than being merged.
+    client.onJob((job) => {
+      if (!live) return;
+      setJobs((all) => [job, ...all.filter((j) => j.id !== job.id)].sort((x, y) => y.id - x.id).slice(0, 200));
+    });
     client.onFocus((timeline) => {
       if (!live || !timeline || timeline === selected.current) return;
       selected.current = timeline;
@@ -149,6 +159,7 @@ export function useSession(url: string = runtimeUrl()): Session {
       .then(async () => {
         if (!live) return;
         setCapabilities(await client.capabilities());
+        void client.jobs().then((j) => live && setJobs(j)).catch(() => {});
         const focus = await client.focus();
         if (focus.timeline) selected.current = focus.timeline;
         await refresh();
@@ -210,6 +221,7 @@ export function useSession(url: string = runtimeUrl()): Session {
     impact,
     changes,
     refusal,
+    jobs,
     client,
     selectTimeline,
     setTrackState,

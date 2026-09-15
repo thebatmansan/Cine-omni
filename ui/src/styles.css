@@ -714,3 +714,23 @@ select, input, textarea {
 .dialog-body textarea { font-family: var(--mono); font-size: 11px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
 .statusbar .refusal { color: var(--warn); max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- jobs ------------------------------------------------------------- */
+
+.work.media { grid-template-columns: 300px minmax(0, 1fr) 340px 300px; }
+.job { padding: 5px 8px; border-bottom: 1px solid var(--line); font-size: 11px; }
+.job-line { display: flex; gap: 6px; align-items: center; }
+.job-line .label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-line .meta { color: var(--text-faint); font-family: var(--mono); font-size: 10px; }
+.job-line button { height: 16px; padding: 0 6px; font-size: 10px; }
+.job-state { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; min-width: 62px; color: var(--text-faint); }
+.job-state.running { color: var(--accent); }
+.job-state.succeeded { color: var(--ok); }
+.job-state.failed { color: var(--bad); }
+.job-state.cancelled { color: var(--warn); }
+.job-progress { height: 3px; background: var(--sunken); margin: 4px 0 2px; }
+.job-progress > div { height: 100%; background: var(--accent); }
+.job-detail { display: flex; flex-wrap: wrap; gap: 8px; color: var(--text-faint); font-size: 10px; }
+.bad { color: var(--bad); }
+.good { color: var(--ok); }
+.tree-row .thumb { height: 18px; width: 32px; object-fit: cover; border-radius: 1px; }

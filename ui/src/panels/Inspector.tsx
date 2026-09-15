@@ -11,6 +11,7 @@ export function Inspector({
   onConformDone,
   onBind,
   onUnbind,
+  onJob,
 }: {
   timeline: TimelineView | null;
   selection: { item: TimelineItem; track: TimelineTrack } | null;
@@ -19,6 +20,7 @@ export function Inspector({
   onConformDone?(clip: string): void;
   onBind?(clip: string, scene: string): void;
   onUnbind?(clip: string, scene: string): void;
+  onJob?(kind: string, params: Record<string, unknown>): void;
 }) {
   return (
     <div className="inspector">
@@ -38,7 +40,7 @@ export function Inspector({
             )}
           </>
         )}
-        {!selection && media && <MediaDetail media={media} />}
+        {!selection && media && <MediaDetail media={media} onJob={onJob} />}
         {!selection && !media && (
           <div className="empty">Select a clip or a media item.</div>
         )}
@@ -203,10 +205,37 @@ function ClipDetail({ item, track }: { item: TimelineItem; track: TimelineTrack 
   );
 }
 
-function MediaDetail({ media }: { media: MediaView }) {
+function MediaDetail({
+  media,
+  onJob,
+}: {
+  media: MediaView;
+  onJob?(kind: string, params: Record<string, unknown>): void;
+}) {
   const v = media.video;
+  const c = media.checksum;
   return (
     <>
+      <div className="section-title">Integrity</div>
+      {!c && <div className="hint">No checksum yet. The content hash above is a head-and-tail fingerprint, not a verification.</div>}
+      {c && (
+        <dl className="props">
+          <dt>sha256</dt>
+          <dd title={c.sha256}>{c.sha256.slice(0, 16)}…</dd>
+          <dt>last check</dt>
+          <dd className={c.last?.result === "mismatch" ? "bad" : ""}>{c.last?.result ?? "—"}</dd>
+        </dl>
+      )}
+      {onJob && (
+        <div className="binding">
+          <button onClick={() => onJob("media.checksum", { media: media.id })}>
+            {c ? "Verify checksum" : "Establish checksum"}
+          </button>
+          <button disabled={!v?.decodable} onClick={() => onJob("media.thumbnail", { media: media.id, index: 0 })}>
+            Make thumbnail
+          </button>
+        </div>
+      )}
       <div className="section-title">Media</div>
       <dl className="props">
         <dt>name</dt>

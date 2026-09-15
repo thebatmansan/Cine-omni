@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Browser } from "./panels/Browser";
 import { Capabilities } from "./panels/Capabilities";
 import { History, Impact } from "./panels/Impact";
+import { Jobs } from "./panels/Jobs";
 import { Inspector } from "./panels/Inspector";
 import { Record } from "./panels/Record";
 import { Script } from "./panels/Script";
@@ -41,7 +42,7 @@ export function App() {
   const [monitor, setMonitor] = useState<"source" | "record">("record");
   const [lastApplied, setLastApplied] = useState<string | null>(null);
   const [sceneId, setSceneId] = useState<string | null>(null);
-  const [rightTab, setRightTab] = useState<"inspector" | "history">("inspector");
+  const [rightTab, setRightTab] = useState<"inspector" | "history" | "jobs">("inspector");
   const [dialog, setDialog] = useState<Dialog>(null);
 
   const media = useMemo(
@@ -265,6 +266,9 @@ export function App() {
                 <button aria-selected={rightTab === "history"} onClick={() => setRightTab("history")}>
                   History
                 </button>
+                <button aria-selected={rightTab === "jobs"} onClick={() => setRightTab("jobs")}>
+                  Jobs{session.jobs.some((j) => j.state === "running" || j.state === "queued") ? " ●" : ""}
+                </button>
               </div>
               {rightTab === "inspector" ? (
                 <Inspector
@@ -275,6 +279,13 @@ export function App() {
                   onConformDone={(clip) => void session.run("mark conformed", () => client.conformDone(clip))}
                   onBind={(clip, scene) => void session.run("bind", () => client.bindClip(clip, scene))}
                   onUnbind={(clip, scene) => void session.run("unbind", () => client.unbindClip(clip, scene))}
+                  onJob={(kind, params) => void session.run(kind, () => client.submitJob(kind, params))}
+                />
+              ) : rightTab === "jobs" ? (
+                <Jobs
+                  jobs={session.jobs}
+                  onCancel={(id) => void session.run("cancel job", () => client.cancelJob(id))}
+                  onRetry={(id) => void session.run("retry job", () => client.retryJob(id))}
                 />
               ) : (
                 <History history={session.history} onUndo={() => void session.undo()} onRedo={() => void session.redo()} />
@@ -324,6 +335,22 @@ export function App() {
         <div className="work media">
           {browser}
           <Viewer media={media} capabilities={session.capabilities} index={picture} onIndex={setPicture} />
+          <div className="right-stack">
+            <div className="panel tabs-panel">
+              <div className="panel-head">Media</div>
+              <Inspector
+                timeline={null}
+                selection={null}
+                media={media}
+                onJob={(kind, params) => void session.run(kind, () => client.submitJob(kind, params))}
+              />
+            </div>
+            <Jobs
+              jobs={session.jobs}
+              onCancel={(id) => void session.run("cancel job", () => client.cancelJob(id))}
+              onRetry={(id) => void session.run("retry job", () => client.retryJob(id))}
+            />
+          </div>
           <Capabilities capabilities={session.capabilities} />
         </div>
       )}
