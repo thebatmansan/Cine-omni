@@ -323,7 +323,19 @@ fn plays_in_reverse_over_real_media_and_reports_what_it_costs() {
         stats.mean_decode(),
         s.state()
     );
-    if stats.dropped > 0 {
+    // Synchronous reverse decode is slow enough (8.5–12.4 s per picture
+    // measured) that the playhead can run past the first picture while one
+    // decode is in flight. Reaching the start stops the transport, and a
+    // stopped transport is `Paused`, not `Degraded` — the drops are still
+    // counted. Asserting `Degraded` unconditionally made this pass or fail
+    // with the machine's load rather than with the scheduler's behaviour.
+    if stats.end_of_media > 0 {
+        assert_eq!(s.state(), TransportState::Paused);
+        assert!(
+            stats.dropped > 0,
+            "running out of media mid-decode must count what was missed"
+        );
+    } else if stats.dropped > 0 {
         assert_eq!(s.state(), TransportState::Degraded);
     }
 }
