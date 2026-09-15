@@ -38,6 +38,7 @@
 pub mod edit;
 pub mod error;
 pub mod graph;
+pub mod linked;
 pub mod otio;
 pub mod otio_json;
 pub mod session;
@@ -50,8 +51,10 @@ pub use edit::{
 pub use error::{Error, Result};
 pub use graph::{
     apply_edit, bind_clip_to_scene, clear_conform, clip_track_range, clips_synced_to,
-    export_timeline, export_track, flag_conform, import_timeline, media_of_clip, EditOp,
+    export_timeline, export_track, flag_conform, import_timeline, media_of_clip, perform_edit,
+    ClipSpec, EditOp, GraphEditOutcome,
 };
+pub use linked::{apply_linked, EditOutcome, TrackEdit};
 pub use otio::{
     Clip, Composable, Gap, Item, Marker, MediaReference, Metadata, Stack, Timeline, Track,
     TrackKind, Transition, TransitionType, UCG_ID_KEY,

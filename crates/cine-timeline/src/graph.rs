@@ -20,7 +20,7 @@
 //! item's id into its metadata, so ids survive a round trip through external
 //! OTIO tools. Re-importing an unchanged timeline produces zero ops.
 
-use crate::edit::{self, Edge};
+use crate::edit::Edge;
 use crate::error::{Error, Result};
 use crate::otio::*;
 use crate::otio_json;
@@ -74,6 +74,111 @@ pub enum EditOp {
     Lift {
         range: TimeRange,
     },
+    /// Ripple-insert new material at `time`.
+    Insert {
+        time: RationalTime,
+        clip: ClipSpec,
+    },
+    /// Overwrite whatever lies under the new material; nothing moves.
+    Overwrite {
+        time: RationalTime,
+        clip: ClipSpec,
+    },
+    /// Replace the item at `index`, keeping its duration.
+    Replace {
+        index: usize,
+        clip: ClipSpec,
+    },
+    /// Join the item at `index` with the one after it.
+    Join {
+        index: usize,
+    },
+}
+
+/// New material for an insert, overwrite or replace: a range of a media asset
+/// already in the project.
+///
+/// Material is named by entity, never by path. A path is where a file was last
+/// seen; the asset is what the project knows about it, including its available
+/// range, which is what keeps a later trim inside real media.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ClipSpec {
+    pub media: EntityId,
+    pub source_range: TimeRange,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl EditOp {
+    /// Resolve against the graph into a model edit.
+    pub fn resolve(&self, graph: &Graph) -> Result<crate::linked::TrackEdit> {
+        use crate::linked::TrackEdit as T;
+        Ok(match self.clone() {
+            EditOp::RippleTrim { index, edge, delta } => T::RippleTrim { index, edge, delta },
+            EditOp::Roll { cut, delta } => T::Roll { cut, delta },
+            EditOp::Slip { index, delta } => T::Slip { index, delta },
+            EditOp::Slide { index, delta } => T::Slide { index, delta },
+            EditOp::SplitAt { time } => T::SplitAt { time },
+            EditOp::Extract { range } => T::Extract { range },
+            EditOp::Lift { range } => T::Lift { range },
+            EditOp::Insert { time, clip } => T::Insert {
+                time,
+                item: clip_item(graph, &clip)?,
+            },
+            EditOp::Overwrite { time, clip } => T::Overwrite {
+                time,
+                item: clip_item(graph, &clip)?,
+            },
+            EditOp::Replace { index, clip } => T::Replace {
+                index,
+                item: clip_item(graph, &clip)?,
+            },
+            EditOp::Join { index } => T::Join { index },
+        })
+    }
+}
+
+/// Build a clip item for `spec` from the media asset it names.
+///
+/// Refused when the asset has no path, or when the requested range is not
+/// inside the media's available range: an edit that plays media that does not
+/// exist is not an edit.
+pub fn clip_item(graph: &Graph, spec: &ClipSpec) -> Result<Item> {
+    require_kind(graph, spec.media, kinds::ASSET_MEDIA)?;
+    let node = graph.require(spec.media)?;
+    let path = node.get_str(attrs::MEDIA_PATH).ok_or(Error::MissingAttr {
+        id: spec.media,
+        attr: attrs::MEDIA_PATH,
+    })?;
+    let available = node.get(attrs::AVAILABLE_RANGE).and_then(Value::as_range);
+    let zero = RationalTime::zero(spec.source_range.duration.rate_exact());
+    if spec.source_range.duration <= zero {
+        return Err(Error::Edit(
+            "new material must have a positive duration".into(),
+        ));
+    }
+    if let Some(a) = available {
+        if spec.source_range.start_time < a.start_time
+            || spec.source_range.end_time_exclusive() > a.end_time_exclusive()
+        {
+            return Err(Error::Edit(format!(
+                "the requested range is outside the media: {} has {:?}",
+                node.get_str(attrs::NAME).unwrap_or(path),
+                a
+            )));
+        }
+    }
+    let name = spec
+        .name
+        .clone()
+        .or_else(|| node.get_str(attrs::NAME).map(str::to_string))
+        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string());
+    Ok(Item::Clip(Clip::external(
+        name,
+        path,
+        available,
+        Some(spec.source_range),
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +504,17 @@ fn write_media_reference(
             available_range,
         } => {
             let media = EntityId::from_key(&format!("media:{target_url}"));
+            // An asset already known by another identity — ingested and keyed
+            // by content — is bound as it is. A clip is derived material: it
+            // must not mint a second identity for the same file, and it must
+            // not rewrite what ingest recorded about it.
+            if !tx.graph().contains(media) {
+                if let Some(existing) = asset_at_path(tx.graph(), clip, target_url) {
+                    tx.remove_attr(clip, nle_attrs::MEDIA_REF)?;
+                    rebind(tx, clip, existing)?;
+                    return Ok(Some(existing));
+                }
+            }
             ensure_kind(tx, media, kinds::ASSET_MEDIA)?;
             tx.set(media, attrs::MEDIA_PATH, target_url.as_str())?;
             tx.set(
@@ -419,7 +535,42 @@ fn write_media_reference(
             None
         }
     };
-    // Exactly one Binds edge to an asset.media.
+    match media_id {
+        Some(m) => rebind(tx, clip, m)?,
+        None => unbind_all(tx, clip, None)?,
+    }
+    Ok(media_id)
+}
+
+/// The asset whose recorded path is `path`: the one the clip is already bound
+/// to if it matches, otherwise any.
+fn asset_at_path(graph: &Graph, clip: EntityId, path: &str) -> Option<EntityId> {
+    let at_path = |m: &EntityId| {
+        graph.node(*m).is_some_and(|n| {
+            n.kind.as_str() == kinds::ASSET_MEDIA && n.get_str(attrs::MEDIA_PATH) == Some(path)
+        })
+    };
+    graph
+        .targets(clip, EdgeKind::Binds)
+        .into_iter()
+        .find(at_path)
+        .or_else(|| {
+            graph
+                .of_kind(kinds::ASSET_MEDIA)
+                .iter()
+                .map(|n| n.id)
+                .find(at_path)
+        })
+}
+
+/// Exactly one `Binds` edge from `clip` to an asset, and it goes to `media`.
+fn rebind(tx: &mut Tx, clip: EntityId, media: EntityId) -> Result<()> {
+    unbind_all(tx, clip, Some(media))?;
+    tx.link(clip, media, EdgeKind::Binds)?;
+    Ok(())
+}
+
+fn unbind_all(tx: &mut Tx, clip: EntityId, keep: Option<EntityId>) -> Result<()> {
     let bound: Vec<EntityId> = tx
         .graph()
         .targets(clip, EdgeKind::Binds)
@@ -432,14 +583,11 @@ fn write_media_reference(
         })
         .collect();
     for m in bound {
-        if Some(m) != media_id {
+        if Some(m) != keep {
             tx.unlink(clip, m, EdgeKind::Binds)?;
         }
     }
-    if let Some(m) = media_id {
-        tx.link(clip, m, EdgeKind::Binds)?;
-    }
-    Ok(media_id)
+    Ok(())
 }
 
 fn write_markers(tx: &mut Tx, owner: EntityId, markers: &[Marker]) -> Result<Vec<EntityId>> {
@@ -753,33 +901,125 @@ fn item_key_prefix(graph: &Graph, track: EntityId) -> String {
 /// [`export_track`] stamps on each item; items created by a split reuse the
 /// id at their position when free, otherwise the position key.
 pub fn apply_edit(tx: &mut Tx, track: EntityId, op: EditOp) -> Result<()> {
+    let edit = op.resolve(tx.graph())?;
     let mut t = export_track(tx.graph(), track)?;
-    match op {
-        EditOp::RippleTrim { index, edge, delta } => {
-            edit::ripple_trim(&mut t, index, edge, delta)?;
-        }
-        EditOp::Roll { cut, delta } => {
-            edit::roll(&mut t, cut, delta)?;
-        }
-        EditOp::Slip { index, delta } => {
-            edit::slip(&mut t, index, delta)?;
-        }
-        EditOp::Slide { index, delta } => {
-            edit::slide(&mut t, index, delta)?;
-        }
-        EditOp::SplitAt { time } => {
-            edit::split_at(&mut t, time)?;
-        }
-        EditOp::Extract { range } => {
-            edit::extract(&mut t, range)?;
-        }
-        EditOp::Lift { range } => {
-            edit::lift(&mut t, range)?;
-        }
-    }
+    crate::linked::apply_one(&mut t, &edit)?;
     let prefix = item_key_prefix(tx.graph(), track);
     let ids = assign_item_ids(tx.graph(), track, &t, &prefix, true);
     write_track_items(tx, track, &t, &ids)
+}
+
+/// What [`perform_edit`] did, in graph terms.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GraphEditOutcome {
+    pub label: &'static str,
+    pub requested: Option<RationalTime>,
+    pub applied: Option<RationalTime>,
+    /// The item the edit produced or acted on, on the primary track.
+    pub item: Option<EntityId>,
+    pub changed_tracks: Vec<EntityId>,
+    pub linked_clips: usize,
+}
+
+/// The tracks sharing a stack with `track`, in order.
+pub fn sibling_tracks(graph: &Graph, track: EntityId) -> Result<Vec<EntityId>> {
+    require_kind(graph, track, kinds::NLE_TRACK)?;
+    let Some(parent) = graph.parent(track) else {
+        return Ok(vec![track]);
+    };
+    let mut tracks: Vec<(i64, EntityId)> = graph
+        .children(parent)
+        .into_iter()
+        .filter(|c| {
+            graph
+                .node(*c)
+                .is_some_and(|n| n.kind.as_str() == kinds::NLE_TRACK)
+        })
+        .map(|c| {
+            (
+                graph
+                    .attr(c, attrs::ORDER)
+                    .and_then(Value::as_int)
+                    .unwrap_or(0),
+                c,
+            )
+        })
+        .collect();
+    tracks.sort();
+    Ok(tracks.into_iter().map(|(_, c)| c).collect())
+}
+
+/// Apply an edit to `track` and, when `follow_links`, to the material linked
+/// to it on the other tracks of its stack — in the caller's transaction, so
+/// the whole edit is one undo step. See [`crate::linked`].
+pub fn perform_edit(
+    tx: &mut Tx,
+    track: EntityId,
+    op: EditOp,
+    follow_links: bool,
+) -> Result<GraphEditOutcome> {
+    let edit = op.resolve(tx.graph())?;
+    let label = edit.label();
+    let ids = sibling_tracks(tx.graph(), track)?;
+    let primary = ids.iter().position(|t| *t == track).unwrap_or(0);
+    let mut tracks = ids
+        .iter()
+        .map(|t| export_track(tx.graph(), *t))
+        .collect::<Result<Vec<_>>>()?;
+    let outcome = crate::linked::apply_linked(&mut tracks, primary, edit, follow_links)?;
+    let mut item = None;
+    for ti in &outcome.changed_tracks {
+        let id = ids[*ti];
+        let t = &tracks[*ti];
+        let prefix = item_key_prefix(tx.graph(), id);
+        let item_ids = assign_item_ids(tx.graph(), id, t, &prefix, true);
+        if *ti == primary {
+            item = outcome.index.and_then(|i| item_ids.get(i).copied());
+        }
+        write_track_items(tx, id, t, &item_ids)?;
+    }
+    if item.is_none() {
+        // Unchanged primary (e.g. a zero-delta trim): name the existing item.
+        item = outcome
+            .index
+            .and_then(|i| tracks[primary].children.get(i))
+            .and_then(Item::ucg_id);
+    }
+    Ok(GraphEditOutcome {
+        label,
+        requested: outcome.requested,
+        applied: outcome.applied,
+        item,
+        changed_tracks: outcome.changed_tracks.iter().map(|i| ids[*i]).collect(),
+        linked_clips: outcome.linked_clips,
+    })
+}
+
+/// Put a clip into a link group (or take it out with `None`).
+pub fn set_clip_link(tx: &mut Tx, clip: EntityId, group: Option<&str>) -> Result<()> {
+    require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;
+    let mut carrier = Clip {
+        metadata: value_to_metadata(tx.graph().node(clip).and_then(|n| n.get(attrs::METADATA))),
+        ..Default::default()
+    };
+    match group {
+        Some(g) => crate::session::set_link(&mut carrier, g),
+        None => crate::session::clear_link(&mut carrier),
+    }
+    tx.set(clip, attrs::METADATA, metadata_to_value(&carrier.metadata))?;
+    Ok(())
+}
+
+/// Remove a `SyncedTo` edge from `clip` to `scene`.
+pub fn unbind_clip_from_scene(tx: &mut Tx, clip: EntityId, scene: EntityId) -> Result<()> {
+    require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;
+    tx.unlink(clip, scene, EdgeKind::SyncedTo)?;
+    Ok(())
+}
+
+/// Scenes (or shots) a clip is bound to.
+pub fn scenes_of_clip(graph: &Graph, clip: EntityId) -> Vec<EntityId> {
+    graph.targets(clip, EdgeKind::SyncedTo)
 }
 
 /// Read a track node's editorial state.

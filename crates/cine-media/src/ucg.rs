@@ -66,6 +66,12 @@ pub fn register_media(tx: &mut Tx, project: EntityId, info: &MediaFile) -> Resul
     tx.set(id, HASH_ATTR, info.hash.hex())?;
     tx.set(id, ONLINE_ATTR, info.path.exists())?;
     tx.set(id, MEDIA_INFO_ATTR, Value::from_serde(info)?)?;
+    // What an edit may play. Clips clamp trims against this, so a file with no
+    // stated length records none rather than a guess.
+    match available_range(info) {
+        Some(r) => tx.set(id, attrs::AVAILABLE_RANGE, r)?,
+        None => tx.remove_attr(id, attrs::AVAILABLE_RANGE)?,
+    }
     if tx.graph().contains(project) {
         tx.link(project, id, EdgeKind::Contains)?;
     }
@@ -100,6 +106,31 @@ pub fn register_media(tx: &mut Tx, project: EntityId, info: &MediaFile) -> Resul
         tx.delete(s)?;
     }
     Ok(id)
+}
+
+/// The range of a file an edit can use: the picture's frames at its nominal
+/// rate when the container counts them, otherwise the first stream's stated
+/// duration in its own time base. Exact either way; `None` when neither is known.
+pub fn available_range(info: &MediaFile) -> Option<ucg_core::TimeRange> {
+    use ucg_core::{RationalTime, TimeRange};
+    let picture = info.video_streams().find_map(|s| {
+        let v = s.video.as_ref()?;
+        let rate = v.frame_rate?;
+        let count = i64::try_from(v.frame_count?).ok()?;
+        Some(TimeRange::new(
+            RationalTime::zero(rate),
+            RationalTime::exact(count, rate),
+        ))
+    });
+    picture.or_else(|| {
+        info.streams.iter().find_map(|s| {
+            let ticks = s.duration_ticks?;
+            Some(TimeRange::new(
+                RationalTime::zero(s.time_base),
+                RationalTime::exact(ticks, s.time_base),
+            ))
+        })
+    })
 }
 
 fn file_label(info: &MediaFile) -> String {
