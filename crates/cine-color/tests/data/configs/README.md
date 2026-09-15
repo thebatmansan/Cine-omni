@@ -7,7 +7,7 @@ Serialised by PyOpenColorIO 2.5.2 from its built-in configurations:
 
 These configs are produced by the Academy Software Foundation's
 OpenColorIO-Config-ACES project and distributed with OpenColorIO under the
-BSD-3-Clause licence. They are used here unmodified, only as test input: to
-measure which of their display/view pairs `cine-color` compiles, which it
-compiles as marked approximations, and which it refuses
-(`tests/released_configs.rs`).
+BSD-3-Clause licence. They are used here unmodified, only as test input: every display/view pair is
+compiled by `cine-color` and its pixels compared with OpenColorIO rendering the
+same file (`../config-views.tsv`, from `../generate_config_views.py`;
+`tests/released_configs.rs`). Recorded in `licenses/THIRD-PARTY.toml`.

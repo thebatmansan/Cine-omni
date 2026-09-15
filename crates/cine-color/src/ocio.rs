@@ -7,14 +7,13 @@
 //! convert to/from the display reference (CIE XYZ D65, 1.0 = 100 cd/m²), and
 //! view transforms bridge the two.
 
-use crate::aces::{Display, OutputTransform};
 use crate::error::{Error, Result};
 use crate::lut::{parse_cube, Interpolation, Lut};
 use crate::processor::{Direction, LogParams, Op, Processor};
 use crate::space::{
     bradford_adaptation, rgb_to_rgb_matrix, Mat3, Primaries, WHITE_ACES, WHITE_D65,
 };
-use crate::transfer::{hlg_eotf_nits, hlg_inverse_eotf_nits, Transfer};
+use crate::transfer::Transfer;
 use crate::yaml::{self, Yaml};
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
@@ -143,13 +142,26 @@ pub struct Look {
     pub inverse_transform: Option<TransformDef>,
 }
 
-/// A view transform (scene reference ↔ display reference).
-#[derive(Clone, Debug, PartialEq)]
+/// A view transform: scene reference → display reference, or — when it is
+/// written with `from_display_reference` / `to_display_reference` — display
+/// reference → display reference.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewTransformDef {
     pub name: String,
     pub description: String,
     pub from_scene_reference: Option<TransformDef>,
     pub to_scene_reference: Option<TransformDef>,
+    pub from_display_reference: Option<TransformDef>,
+    pub to_display_reference: Option<TransformDef>,
+}
+
+impl ViewTransformDef {
+    /// Written against the display reference rather than the scene reference.
+    pub fn is_display_referred(&self) -> bool {
+        (self.from_display_reference.is_some() || self.to_display_reference.is_some())
+            && self.from_scene_reference.is_none()
+            && self.to_scene_reference.is_none()
+    }
 }
 
 /// An OCIO config.
@@ -566,6 +578,16 @@ impl Config {
                     .filter(|t| !t.is_null())
                     .map(parse_transform)
                     .transpose()?,
+                from_display_reference: vt
+                    .get("from_display_reference")
+                    .filter(|t| !t.is_null())
+                    .map(parse_transform)
+                    .transpose()?,
+                to_display_reference: vt
+                    .get("to_display_reference")
+                    .filter(|t| !t.is_null())
+                    .map(parse_transform)
+                    .transpose()?,
             });
         }
         cfg.default_view_transform = s("default_view_transform");
@@ -668,11 +690,19 @@ impl Config {
             .find(|v| v.name.eq_ignore_ascii_case(name))
     }
 
+    /// The view transform that bridges scene and display references: the
+    /// named default, or else the first one — scene-referred either way, as in
+    /// OpenColorIO, since a display-referred one cannot bridge.
     fn default_view_transform(&self) -> Option<&ViewTransformDef> {
         self.default_view_transform
             .as_deref()
             .and_then(|n| self.view_transform(n))
-            .or_else(|| self.view_transforms.first())
+            .filter(|vt| !vt.is_display_referred())
+            .or_else(|| {
+                self.view_transforms
+                    .iter()
+                    .find(|vt| !vt.is_display_referred())
+            })
     }
 
     // ---- compilation -------------------------------------------------------
@@ -920,20 +950,25 @@ impl Config {
         direction: Direction,
         depth: usize,
     ) -> Result<Vec<Op>> {
+        let (from, to) = if vt.is_display_referred() {
+            (&vt.from_display_reference, &vt.to_display_reference)
+        } else {
+            (&vt.from_scene_reference, &vt.to_scene_reference)
+        };
         match direction {
             Direction::Forward => {
-                if let Some(t) = &vt.from_scene_reference {
+                if let Some(t) = from {
                     self.compile_depth(t, Direction::Forward, depth)
-                } else if let Some(t) = &vt.to_scene_reference {
+                } else if let Some(t) = to {
                     self.compile_depth(t, Direction::Inverse, depth)
                 } else {
                     Ok(Vec::new())
                 }
             }
             Direction::Inverse => {
-                if let Some(t) = &vt.to_scene_reference {
+                if let Some(t) = to {
                     self.compile_depth(t, Direction::Forward, depth)
-                } else if let Some(t) = &vt.from_scene_reference {
+                } else if let Some(t) = from {
                     self.compile_depth(t, Direction::Inverse, depth)
                 } else {
                     Ok(Vec::new())
@@ -1053,6 +1088,12 @@ impl Config {
         let vt = self
             .view_transform(vt_name)
             .ok_or_else(|| Error::Invalid(format!("unknown view transform `{vt_name}`")))?;
+        // A display-referred view transform starts from the display reference,
+        // so a scene-referred source crosses to it through the default view
+        // transform first, as OpenColorIO does.
+        if vt.is_display_referred() {
+            ops.extend(self.scene_to_display_ops(depth)?);
+        }
         ops.extend(self.view_transform_ops(vt, Direction::Forward, depth)?);
         let dcs_name = v
             .display_colorspace
@@ -1108,8 +1149,8 @@ impl Config {
             ..Default::default()
         };
         let hdr_view = |dcs: &str| View {
-            name: "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)".into(),
-            view_transform: Some("ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)".into()),
+            name: "ACES 2.0 - HDR Video (1000 nits, Rec.2020)".into(),
+            view_transform: Some("ACES 2.0 - HDR Video (1000 nits, Rec.2020)".into()),
             display_colorspace: Some(dcs.into()),
             ..Default::default()
         };
@@ -1135,28 +1176,38 @@ impl Config {
         cfg.active_displays = cfg.displays.keys().cloned().collect();
         cfg.active_views = vec![
             "ACES 2.0 - SDR Video".into(),
-            "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)".into(),
+            "ACES 2.0 - HDR Video (1000 nits, Rec.2020)".into(),
             "Un-tone-mapped".into(),
             "Raw".into(),
         ];
         cfg.view_transforms = vec![
             ViewTransformDef {
                 name: "ACES 2.0 - SDR Video".into(),
-                description: "ACES-style SDR output (parametric tonescale, 100 nits)".into(),
-                from_scene_reference: Some(TransformDef::Builtin { style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0".into(), direction: Direction::Forward }),
-                to_scene_reference: None,
+                description: "ACES 2.0 output transform, 100 nits, Rec.709 limited".into(),
+                from_scene_reference: Some(TransformDef::Builtin {
+                    style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-REC709_2.0".into(),
+                    direction: Direction::Forward,
+                }),
+                ..Default::default()
             },
             ViewTransformDef {
-                name: "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)".into(),
-                description: "ACES-style HDR output (parametric tonescale, 1000 nits)".into(),
-                from_scene_reference: Some(TransformDef::Builtin { style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1".into(), direction: Direction::Forward }),
-                to_scene_reference: None,
+                name: "ACES 2.0 - HDR Video (1000 nits, Rec.2020)".into(),
+                description: "ACES 2.0 output transform, 1000 nits, Rec.2020 limited".into(),
+                from_scene_reference: Some(TransformDef::Builtin {
+                    style: "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-1000nit-REC2020_2.0"
+                        .into(),
+                    direction: Direction::Forward,
+                }),
+                ..Default::default()
             },
             ViewTransformDef {
                 name: "Un-tone-mapped".into(),
                 description: "Colorimetric, no tone mapping".into(),
-                from_scene_reference: Some(TransformDef::Builtin { style: "UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD".into(), direction: Direction::Forward }),
-                to_scene_reference: None,
+                from_scene_reference: Some(TransformDef::Builtin {
+                    style: "UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD".into(),
+                    direction: Direction::Forward,
+                }),
+                ..Default::default()
             },
         ];
         cfg.default_view_transform = Some("Un-tone-mapped".into());
@@ -1512,6 +1563,18 @@ impl Config {
                         write_transform(t, 6)
                     ));
                 }
+                if let Some(t) = &vt.from_display_reference {
+                    s.push_str(&format!(
+                        "    from_display_reference: {}\n",
+                        write_transform(t, 6)
+                    ));
+                }
+                if let Some(t) = &vt.to_display_reference {
+                    s.push_str(&format!(
+                        "    to_display_reference: {}\n",
+                        write_transform(t, 6)
+                    ));
+                }
             }
         }
         // Display colorspaces live in their own block; the block of whichever
@@ -1810,6 +1873,37 @@ fn write_colorspace(s: &mut String, c: &ColorSpaceDef, display: bool) {
 // Builtin transforms
 // ---------------------------------------------------------------------------
 
+/// Rec.2100 HLG for a 1000-nit display, as OpenColorIO 2.5 builds it: the
+/// inverse OOTF (system gamma 1.2) followed by the OETF with negatives
+/// mirrored and nothing clamped. In range this is BT.2100's inverse EOTF
+/// ([`crate::transfer::hlg_inverse_eotf_nits`]); what OpenColorIO adds, and what was measured
+/// against it to 8e-6, is the handling outside it: luminance is taken as
+/// `|Y|` with a floor (1e-4 in its display scale of `nits · 3^1.2 / 1000`,
+/// `1e-4^(1/1.2)` on the scene side), so negative and near-black colour stays
+/// finite and invertible instead of collapsing to zero.
+fn hlg_1000nit_display() -> Op {
+    const GAMMA: f64 = 1.2;
+    let lum = |c: [f64; 3]| 0.2627 * c[0] + 0.6780 * c[1] + 0.0593 * c[2];
+    // Display reference (1.0 = 100 nits) to OpenColorIO's display scale.
+    let to_display = 100.0 * 3f64.powf(GAMMA) / 1000.0;
+    Op::custom_invertible(
+        "HLG 1000nit inverse EOTF, mirrored negatives",
+        move |rgb| {
+            let u = rgb.map(|v| v * to_display);
+            let k = lum(u).abs().max(1e-4).powf(1.0 / GAMMA - 1.0) / 3.0;
+            u.map(|v| v.signum() * Transfer::Hlg.encode(v.abs() * k))
+        },
+        move |code| {
+            let t = code.map(|v| v.signum() * Transfer::Hlg.decode(v.abs()) * 3.0);
+            let k = lum(t)
+                .abs()
+                .max(1e-4f64.powf(1.0 / GAMMA))
+                .powf(GAMMA - 1.0);
+            t.map(|v| v * k / to_display)
+        },
+    )
+}
+
 /// A transfer encode applied to `scale · |v|` with the sign restored: what OCIO
 /// calls "MIRROR NEGS". Invertible.
 fn mirrored(t: Transfer, scale: f64) -> Op {
@@ -1821,20 +1915,44 @@ fn mirrored(t: Transfer, scale: f64) -> Op {
     )
 }
 
-/// The ACES output styles this build answers with its own output transform.
-///
-/// It has the ACES 2.0 tonescale — exact on the neutral axis against
-/// OpenColorIO — but not ACES 2.0's chroma compression or gamut mapping, so
-/// saturated colour differs by up to 0.30 of full scale (research 13 §0,
-/// `tests/ocio_conformance.rs`). That is useful as a preview and wrong as a
-/// claim, so every processor built from these styles carries the fact.
-fn aces2_approximation(style: &str) -> Op {
-    Op::Approximation(crate::processor::Approximation {
-        of: style.to_string(),
-        reason: "ACES 2.0 tonescale applied per channel without chroma compression or gamut \
-                 mapping; neutrals match OpenColorIO, saturated colour differs by up to 0.30"
-            .into(),
-    })
+/// An ACES 2.0 output transform style, answered by the port of the Academy's
+/// reference implementation ([`crate::aces2`]). Every style it accepts is
+/// checked against OpenColorIO in both directions; the tables are built once
+/// per display and shared.
+fn aces2_output(style: &str) -> Option<Op> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static BUILT: OnceLock<Mutex<HashMap<String, Arc<crate::aces2::DisplayTransform>>>> =
+        OnceLock::new();
+    // This crate's earlier names for the two SDR transforms.
+    let style = match style {
+        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0" => {
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-REC709_2.0"
+        }
+        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_2.0" => {
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-P3-D65_2.0"
+        }
+        other => other,
+    };
+    let mut built = BUILT
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let t = match built.get(style) {
+        Some(t) => t.clone(),
+        None => {
+            let t = Arc::new(crate::aces2::DisplayTransform::for_style(style)?);
+            built.insert(style.to_string(), t.clone());
+            t
+        }
+    };
+    drop(built);
+    let (fwd, inv) = (t.clone(), t);
+    Some(Op::custom_invertible(
+        &format!("ACES 2.0 output {}", fwd.display),
+        move |c| fwd.to_xyz(c),
+        move |c| inv.from_xyz(c),
+    ))
 }
 
 /// Ops for a `BuiltinTransform` style in the given direction.
@@ -1935,93 +2053,42 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
         "DISPLAY - CIE-XYZ-D65_to_G2.6-P3-D65" => {
             display(Primaries::DISPLAY_P3, Op::encode(Transfer::Gamma(2.6)))
         }
-        "DISPLAY - CIE-XYZ-D65_to_REC.2100-PQ" => {
-            // display reference 1.0 = 100 nits; PQ 1.0 = 10 000 nits
-            vec![
-                Op::matrix(Primaries::REC2020.xyz_to_rgb()),
-                Op::scale(100.0 / 10_000.0),
-                Op::clamp(0.0, 1.0),
-                Op::encode(Transfer::Pq),
-            ]
-        }
-        "DISPLAY - CIE-XYZ-D65_to_REC.2100-HLG-1000nit" => {
-            vec![
-                Op::matrix(Primaries::REC2020.xyz_to_rgb()),
-                Op::scale(100.0),
-                Op::custom_invertible(
-                    "HLG 1000nit inverse EOTF",
-                    |nits| hlg_inverse_eotf_nits(nits.map(|v| v.clamp(0.0, 1000.0)), 1000.0),
-                    |code| hlg_eotf_nits(code.map(|v| v.clamp(0.0, 1.0)), 1000.0),
-                ),
-            ]
-        }
-        // ACES 1.0's SDR output transform is the RRT + ODT pair, which this
-        // build does not implement — its output transform is ACES 2.0's.
-        // Answering an ACES 1.0 request with ACES 2.0 was measured against
-        // OpenColorIO 2.5.2 at 0.18 wrong **on the neutral axis**: not a
-        // saturated-colour edge case but visibly wrong greys, with nothing to
-        // indicate a substitution had happened. Every other output path in this
-        // crate matches OCIO's neutrals to within 5e-6, which is what makes
-        // this one unmistakable.
+        // Display reference 1.0 = 100 nits; PQ 1.0 = 10 000 nits. Like the
+        // P3 variant, OpenColorIO 2.5 mirrors negatives and does not clamp
+        // (measured through the released configs, `tests/released_configs.rs`).
+        "DISPLAY - CIE-XYZ-D65_to_REC.2100-PQ" => vec![
+            Op::matrix(Primaries::REC2020.xyz_to_rgb()),
+            mirrored(Transfer::Pq, 100.0 / 10_000.0),
+        ],
+        "DISPLAY - CIE-XYZ-D65_to_REC.2100-HLG-1000nit" => vec![
+            Op::matrix(Primaries::REC2020.xyz_to_rgb()),
+            hlg_1000nit_display(),
+        ],
+        // ACES 1.x output transforms are the RRT + ODT pair, which this build
+        // does not implement — its output transform is ACES 2.0's. Answering
+        // an ACES 1.0 request with ACES 2.0 was measured against OpenColorIO
+        // 2.5.2 at 0.18 wrong **on the neutral axis**: not a saturated-colour
+        // edge case but visibly wrong greys, with nothing to indicate a
+        // substitution had happened.
         "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0"
-        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_1.1" => {
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_1.1"
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1"
+        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1" => {
             return Err(Error::Unsupported(format!(
-                "BuiltinTransform style `{st}`: the ACES 1.0 output transform (RRT + ODT) \
-                 is not implemented. This build implements ACES 2.0, whose tonescale differs \
-                 by roughly 0.18 on the neutral axis — it is not a substitute. Use the \
+                "BuiltinTransform style `{st}`: the ACES 1.0 and 1.1 output transforms \
+                 (RRT + ODT) are not implemented. This build implements ACES 2.0, whose rendering differs \
+                 by roughly 0.18 on the neutral axis — it is not a substitute. Use an \
                  `_2.0` style instead."
             )))
         }
-        // The OpenColorIO 2.5 names used by the released ACES 2.0 configs, and
-        // this crate's older names for the same two transforms.
-        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0"
-        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_2.0"
-        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-REC709_2.0"
-        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-P3-D65_2.0" => {
-            let ot =
-                OutputTransform::for_display(if st.contains("P3lim") || st.contains("P3-D65") {
-                    Display::P3D65
-                } else {
-                    Display::Rec709
-                });
-            vec![
-                aces2_approximation(st),
-                Op::matrix(rgb_to_rgb_matrix(
-                    &Primaries::ACES_AP0,
-                    &Primaries::ACES_AP1,
-                )),
-                ot.to_xyz_d65_op(),
-            ]
-        }
-        // P3-limited HDR is a *different* gamut limit from Rec.2020-limited, and
-        // this build implements only the latter. Answering the P3lim request
-        // with the Rec.2020lim transform would return plausible-looking but
-        // wrong colour, with nothing to indicate it — the worst failure mode a
-        // colour pipeline has. Refusing names exactly what is missing.
-        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1" => {
-            return Err(Error::Unsupported(format!(
-                "BuiltinTransform style `{st}`: P3-limited HDR output is not implemented \
-                 (gamut limiting to P3 is absent); the Rec.2020-limited transform is not \
-                 an equivalent substitute"
-            )))
-        }
-        "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1"
-        | "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-1000nit-REC2020_2.0" => {
-            let ot = OutputTransform::for_display(Display::Rec2020Pq1000);
-            vec![
-                aces2_approximation(st),
-                Op::matrix(rgb_to_rgb_matrix(
-                    &Primaries::ACES_AP0,
-                    &Primaries::ACES_AP1,
-                )),
-                ot.to_xyz_d65_op(),
-            ]
-        }
-        other => {
-            return Err(Error::Unsupported(format!(
-                "BuiltinTransform style `{other}`"
-            )))
-        }
+        other => match aces2_output(other) {
+            Some(op) => vec![op],
+            None => {
+                return Err(Error::Unsupported(format!(
+                    "BuiltinTransform style `{other}`"
+                )))
+            }
+        },
     };
     match direction {
         Direction::Forward => Ok(forward),
@@ -2124,7 +2191,7 @@ mod tests {
             .display_processor(
                 "ACEScg",
                 "Rec.2100-PQ",
-                "ACES 1.1 - HDR Video (1000 nits & Rec.2020 lim)",
+                "ACES 2.0 - HDR Video (1000 nits, Rec.2020)",
             )
             .unwrap();
         let g = pq.apply_rgb(&[0.18; 3]);
@@ -2172,29 +2239,25 @@ mod tests {
     /// plausible and is wrong, which is worse than an error.
     #[test]
     fn an_unimplemented_output_transform_is_refused_not_substituted() {
-        let p3lim = "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1";
-        let rec2020lim =
-            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1";
-
-        match builtin_ops(p3lim, Direction::Forward) {
-            Err(Error::Unsupported(msg)) => {
-                assert!(
-                    msg.contains("P3"),
-                    "the error must name what is missing: {msg}"
-                );
-                assert!(
-                    msg.contains("not an equivalent substitute"),
-                    "the error must say why the near-neighbour was not used: {msg}"
-                );
+        for style in [
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-P3lim_1.1",
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1",
+            // Parses like an ACES 2.0 display, but OpenColorIO defines no such one.
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-750nit-P3-D65_2.0",
+        ] {
+            match builtin_ops(style, Direction::Forward) {
+                Err(Error::Unsupported(msg)) => assert!(msg.contains(style), "{msg}"),
+                Err(e) => panic!("expected Unsupported, got {e}"),
+                Ok(_) => panic!("`{style}` is not implemented and must not be answered"),
             }
-            Err(e) => panic!("expected Unsupported, got {e}"),
-            Ok(_) => panic!(
-                "P3-limited HDR output is not implemented; returning the Rec.2020-limited \
-                 transform for it is silently wrong colour"
-            ),
         }
-        // The one that *is* implemented still works.
-        assert!(builtin_ops(rec2020lim, Direction::Forward).is_ok());
+        // The ACES 2.0 transforms for those displays are.
+        for style in [
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-1000nit-P3-D65_2.0",
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-1000nit-REC2020_2.0",
+        ] {
+            assert!(builtin_ops(style, Direction::Forward).is_ok(), "{style}");
+        }
     }
 
     #[test]
@@ -2222,7 +2285,8 @@ mod tests {
             "DISPLAY - CIE-XYZ-D65_to_REC.2100-HLG-1000nit",
             "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_2.0",
             "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO-P3lim_2.0",
-            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1",
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-1000nit-REC2020_2.0",
+            "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-108nit-P3-D60-in-P3-D65_2.0",
         ];
         for style in styles {
             let fwd = Processor::new(builtin_ops(style, Direction::Forward).unwrap());
@@ -2326,39 +2390,31 @@ mod aces_version_tests {
         }
     }
 
-    /// The substitution research 13 found: a view named for ACES 2.0 delivering
-    /// something measurably different, with nothing on the processor to say so.
+    /// Research 13 found a view named for ACES 2.0 delivering a per-channel
+    /// tonescale without ACES 2.0's chroma compression or gamut mapping —
+    /// measurably different, and marked as an approximation until the real
+    /// rendering existed. It now does: the view carries no approximation, and
+    /// its pixels are the port's (itself checked against OpenColorIO in
+    /// `tests/aces2_oracle.rs`).
     #[test]
-    fn a_view_named_for_aces_2_says_it_is_an_approximation() {
+    fn a_view_named_for_aces_2_is_the_aces_2_rendering() {
         let c = Config::aces_default();
-        let view = c
-            .views("sRGB")
-            .unwrap()
-            .iter()
-            .find(|v| v.name.contains("ACES 2.0"))
-            .unwrap()
-            .name
-            .clone();
-        let p = c.display_processor("ACEScg", "sRGB", &view).unwrap();
-        let notes = p.approximations();
-        assert_eq!(notes.len(), 1, "{:?}", p.ops());
-        assert!(notes[0].reason.contains("gamut"), "{}", notes[0].reason);
-        // A chain that is what it says carries nothing.
-        assert!(c
-            .processor("ACEScg", "ACES2065-1")
-            .unwrap()
-            .approximations()
-            .is_empty());
-        // The note does not change a pixel.
-        let without: Vec<Op> = p
-            .ops()
-            .iter()
-            .filter(|o| !matches!(o, Op::Approximation(_)))
-            .cloned()
-            .collect();
-        let q = Processor::new(without);
-        let x = [0.4, 0.2, 0.05];
-        assert_eq!(p.apply_f64(x), q.apply_f64(x));
+        let p = c
+            .display_processor("ACES2065-1", "Rec.709", "ACES 2.0 - SDR Video")
+            .unwrap();
+        assert!(p.approximations().is_empty(), "{:?}", p.ops());
+        let port = crate::aces2::DisplayTransform::new("SDR-100nit-REC709").unwrap();
+        // A saturated colour, where the old approximation was 0.30 away.
+        let aces = [0.4, 0.05, 0.02];
+        let xyz = port.to_xyz(aces);
+        let expect = Processor::new(
+            builtin_ops("DISPLAY - CIE-XYZ-D65_to_REC.709", Direction::Forward).unwrap(),
+        )
+        .apply_f64(xyz);
+        let got = p.apply_f64(aces);
+        for ch in 0..3 {
+            assert!((got[ch] - expect[ch]).abs() < 1e-9, "{got:?} vs {expect:?}");
+        }
     }
 
     /// What this build does implement must still work, under its real name.
@@ -2381,7 +2437,7 @@ mod aces_version_tests {
             !c.views("sRGB")
                 .unwrap()
                 .iter()
-                .any(|v| v.name.contains("ACES 1.0")),
+                .any(|v| v.name.contains("ACES 1.")),
             "the config must not advertise an ACES version this build does not implement"
         );
     }

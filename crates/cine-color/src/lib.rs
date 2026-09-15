@@ -50,6 +50,7 @@
 //! ```
 
 pub mod aces;
+pub mod aces2;
 pub mod curve;
 pub mod error;
 pub mod grade;
