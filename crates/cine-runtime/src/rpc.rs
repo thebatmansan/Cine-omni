@@ -152,6 +152,16 @@ fn capabilities() -> J {
                        transcodes are not yet kinds of work",
         }),
         json!({
+            "id": "production.planning",
+            "name": "Breakdown, stripboard, call sheets, shot lists",
+            "group": "Production",
+            "state": "degraded",
+            "detail": "Derived from the screenplay and kept current by the logistics reactor; \
+                       scheduling constraints are editable and reschedule the film. Strips \
+                       cannot be moved by hand, breakdown elements cannot be tagged by hand, \
+                       and there is no budget",
+        }),
+        json!({
             "id": "project.impact",
             "name": "What a change affected, by department",
             "group": "Project",
@@ -614,6 +624,48 @@ pub fn dispatch_with(
                 ));
             }
             crate::jobs::record_json(&jobs.get(id).ok_or("no such job")?)
+        }
+        "production" => {
+            let document = match params.get("document") {
+                Some(_) => entity(params, "document")?,
+                None => first_document(p).ok_or("no screenplay in this project")?,
+            };
+            let g = p.engine.read();
+            crate::projection::production(&g, document)?
+        }
+        "schedule_constraints" => {
+            let document = entity(params, "document")?;
+            let constraints: cine_logistics::schedule::ScheduleConstraints =
+                serde_json::from_value(
+                    params
+                        .get("constraints")
+                        .cloned()
+                        .ok_or("missing param `constraints`")?,
+                )
+                .map_err(|e| format!("invalid constraints: {e}"))?;
+            // NaN and infinity are refused along with zero and negatives.
+            let positive = |v: f64| v.is_finite() && v > 0.0;
+            if !positive(constraints.max_pages_per_day)
+                || !positive(constraints.max_hours_per_day)
+                || !(1..=7).contains(&constraints.shooting_days_per_week)
+            {
+                return Err(
+                    "constraints need positive pages and hours per day, and 1–7 shooting days a week"
+                        .into(),
+                );
+            }
+            let value = Value::from_serde(&constraints).map_err(|e| e.to_string())?;
+            let group = p
+                .engine
+                .transact("schedule constraints", |tx| {
+                    tx.set(
+                        document,
+                        cine_pipeline::reactors::SCHEDULE_CONSTRAINTS_ATTR,
+                        value,
+                    )
+                })
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
         }
         "focus" => {
             // With `timeline`, open that sequence in every surface; `null`

@@ -353,6 +353,80 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<J, String> {
     }))
 }
 
+/// The production office's view of a screenplay: every scene's breakdown, the
+/// stripboard the scheduler built, each day's call sheet, the constraints it
+/// was built under, and the shot list with the takes shot against each shot.
+///
+/// All of it is derived state the logistics reactor keeps current; nothing is
+/// computed here beyond gathering it.
+pub fn production(graph: &Graph, document: EntityId) -> Result<J, String> {
+    use cine_logistics::graph as lg;
+    if !graph
+        .node(document)
+        .is_some_and(|n| n.kind.as_str() == kinds::SCRIPT_DOCUMENT)
+    {
+        return Err(format!("{document} is not a screenplay"));
+    }
+    let breakdowns = cine_logistics::breakdown::breakdown_document(graph, document);
+    let schedule = lg::read_schedule(graph, document);
+    let constraints = cine_pipeline::reactors::read_constraints(graph, document);
+    let sheets: Vec<J> = schedule
+        .as_ref()
+        .map(|s| {
+            s.days
+                .iter()
+                .filter_map(|d| {
+                    let day = lg::day_id(lg::schedule_id(document), d.index);
+                    lg::read_call_sheet(graph, day).and_then(|c| serde_json::to_value(c).ok())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let shots: Vec<J> = breakdowns
+        .iter()
+        .map(|b| {
+            let list: Vec<J> = lg::read_shot_list(graph, b.scene)
+                .iter()
+                .map(|shot| {
+                    let id = lg::shot_id(shot.camera);
+                    let takes: Vec<J> = lg::takes_of_shot(graph, id)
+                        .into_iter()
+                        .filter_map(|t| {
+                            let n = graph.node(t)?;
+                            Some(json!({ "id": t, "name": n.name() }))
+                        })
+                        .collect();
+                    json!({
+                        "id": id,
+                        "number": shot.spec.number,
+                        "size": format!("{:?}", shot.spec.size),
+                        "movement": format!("{:?}", shot.spec.movement),
+                        "lens_mm": shot.gear.lens_mm,
+                        "camera_body": shot.gear.camera_body,
+                        "support": format!("{:?}", shot.gear.support),
+                        "description": shot.spec.description,
+                        "stale": graph.node(id).and_then(|n| n.get_bool(attrs::STALE)).unwrap_or(false),
+                        "takes": takes,
+                    })
+                })
+                .collect();
+            json!({ "scene": b.scene, "shots": list })
+        })
+        .collect();
+    Ok(json!({
+        "document": document,
+        "breakdowns": breakdowns,
+        "schedule": schedule.as_ref().map(|s| json!({
+            "days": s.days,
+            "warnings": s.warnings,
+            "company_moves": s.company_moves(),
+        })),
+        "call_sheets": sheets,
+        "constraints": constraints,
+        "shots": shots,
+    }))
+}
+
 /// Children of `parent` of `kind`, in their stored order.
 fn ordered_children(graph: &Graph, parent: EntityId, kind: Option<&str>) -> Vec<EntityId> {
     let mut out: Vec<(i64, EntityId)> = graph
