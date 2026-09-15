@@ -137,6 +137,34 @@ fn title_page_from_value(v: Option<&Value>) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// The identity every scene of `sp` would have when imported under
+/// `source_key`: `(stable key, scene key, entity id)`, in script order.
+///
+/// A scene's identity is its **scene number** when it has one, otherwise its
+/// heading and how many scenes before it share that heading. So renaming a
+/// numbered scene keeps it, and renaming an unnumbered one makes a different
+/// scene — which is why numbering scenes is what locks a script for production.
+/// The importer and anything that previews an import use this one function.
+pub fn scene_identities(sp: &Screenplay, source_key: &str) -> Vec<(String, String, EntityId)> {
+    let doc_key = format!("script:{source_key}");
+    let mut occurrences: HashMap<&str, usize> = HashMap::new();
+    let mut used_keys: HashSet<String> = HashSet::new();
+    sp.scenes()
+        .iter()
+        .map(|scene| {
+            let occ = occurrences.entry(scene.heading_text).or_insert(0);
+            let mut stable = scene.stable_key(*occ);
+            *occ += 1;
+            while !used_keys.insert(stable.clone()) {
+                stable.push_str("#dup");
+            }
+            let scene_key = format!("{doc_key}:scene:{stable}");
+            let sid = EntityId::from_key(&scene_key);
+            (stable, scene_key, sid)
+        })
+        .collect()
+}
+
 /// Import (or re-import) a screenplay under `project`. Returns the document id.
 ///
 /// Ids are deterministic (see the module docs), so importing a modified
@@ -202,17 +230,7 @@ pub fn import_screenplay(
     }
 
     // Scenes.
-    let mut occurrences: HashMap<&str, usize> = HashMap::new();
-    let mut used_keys: HashSet<String> = HashSet::new();
-    for scene in &scenes {
-        let occ = occurrences.entry(scene.heading_text).or_insert(0);
-        let mut stable = scene.stable_key(*occ);
-        *occ += 1;
-        while !used_keys.insert(stable.clone()) {
-            stable.push_str("#dup");
-        }
-        let scene_key = format!("{doc_key}:scene:{stable}");
-        let sid = EntityId::from_key(&scene_key);
+    for (scene, (stable, scene_key, sid)) in scenes.iter().zip(scene_identities(sp, source_key)) {
         ensure_kind(tx, sid, kinds::SCRIPT_SCENE)?;
         tx.link(doc, sid, EdgeKind::Contains)?;
         keep.insert(sid);

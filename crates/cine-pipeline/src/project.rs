@@ -185,6 +185,82 @@ impl OmniProject {
         Ok(id)
     }
 
+    /// Rewrite a screenplay from Fountain text, in place.
+    ///
+    /// The document keeps its source key, so unchanged scenes are unchanged
+    /// nodes and the cascade touches only what moved. A scene that disappears
+    /// takes its planned shots with it — and cuts loose the clips bound to it
+    /// and the takes recorded against its shots. That is refused unless
+    /// `allow_orphans`, and the refusal names every scene and what it holds, so
+    /// a writer who only renamed an unnumbered scene can number it instead.
+    pub fn rewrite_fountain(
+        &self,
+        document: EntityId,
+        text: &str,
+        allow_orphans: bool,
+    ) -> Result<Rewrite> {
+        let source_key = {
+            let g = self.engine.read();
+            let node = g
+                .node(document)
+                .filter(|n| n.kind.as_str() == kinds::SCRIPT_DOCUMENT)
+                .ok_or_else(|| PipelineError::Script(format!("{document} is not a screenplay")))?;
+            node.get_str(attrs::SOURCE_KEY)
+                .ok_or_else(|| PipelineError::Script("the screenplay has no source key".into()))?
+                .to_string()
+        };
+        let sp = cine_script::fountain::parse_fountain(text);
+        let planned: std::collections::HashSet<EntityId> =
+            cine_script::graph::scene_identities(&sp, &source_key)
+                .into_iter()
+                .map(|(_, _, id)| id)
+                .collect();
+        let orphans: Vec<Orphan> = {
+            let g = self.engine.read();
+            g.children(document)
+                .into_iter()
+                .filter(|c| {
+                    g.node(*c)
+                        .is_some_and(|n| n.kind.as_str() == kinds::SCRIPT_SCENE)
+                        && !planned.contains(c)
+                })
+                .filter_map(|scene| {
+                    let clips = cine_timeline::graph::clips_synced_to(&g, scene).len();
+                    let takes = cine_logistics::graph::read_shot_list(&g, scene)
+                        .iter()
+                        .map(|shot| {
+                            cine_logistics::graph::takes_of_shot(
+                                &g,
+                                cine_logistics::graph::shot_id(shot.camera),
+                            )
+                            .len()
+                        })
+                        .sum();
+                    (clips > 0 || takes > 0).then(|| Orphan {
+                        scene,
+                        heading: g
+                            .node(scene)
+                            .and_then(|n| n.get_str(attrs::HEADING))
+                            .unwrap_or_default()
+                            .to_string(),
+                        clips,
+                        takes,
+                    })
+                })
+                .collect()
+        };
+        if !orphans.is_empty() && !allow_orphans {
+            return Ok(Rewrite::Refused(orphans));
+        }
+        let root = self.root;
+        let group = self.engine.transact("rewrite screenplay", |tx| {
+            cine_script::graph::import_screenplay(tx, root, &sp, &source_key)
+                .map_err(|e| crate::engine_err("script", e))?;
+            Ok(())
+        })?;
+        Ok(Rewrite::Applied { group, orphans })
+    }
+
     /// Export the screenplay back to Fountain text (bidirectional sync).
     pub fn export_fountain(&self, document: EntityId) -> Result<String> {
         let g = self.engine.read();
@@ -343,4 +419,25 @@ impl OmniProject {
         }
         out
     }
+}
+
+/// A scene a rewrite would remove that holds production work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Orphan {
+    pub scene: EntityId,
+    pub heading: String,
+    /// Clips bound to the scene.
+    pub clips: usize,
+    /// Takes recorded against the scene's shots.
+    pub takes: usize,
+}
+
+/// What [`OmniProject::rewrite_fountain`] did.
+#[derive(Debug)]
+pub enum Rewrite {
+    Applied {
+        group: UndoGroup,
+        orphans: Vec<Orphan>,
+    },
+    Refused(Vec<Orphan>),
 }

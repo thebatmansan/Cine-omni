@@ -625,6 +625,34 @@ pub fn dispatch_with(
             }
             crate::jobs::record_json(&jobs.get(id).ok_or("no such job")?)
         }
+        "script_text" => {
+            let document = entity(params, "document")?;
+            J::String(p.export_fountain(document).map_err(|e| e.to_string())?)
+        }
+        "script_write" => {
+            let document = entity(params, "document")?;
+            let text = str_param(params, "text")?;
+            let allow = params
+                .get("allow_orphans")
+                .and_then(J::as_bool)
+                .unwrap_or(false);
+            let orphan_json = |o: &cine_pipeline::Orphan| json!({ "scene": o.scene, "heading": o.heading, "clips": o.clips, "takes": o.takes });
+            match p
+                .rewrite_fountain(document, text, allow)
+                .map_err(|e| e.to_string())?
+            {
+                cine_pipeline::Rewrite::Refused(orphans) => json!({
+                    "refused": true,
+                    "orphans": orphans.iter().map(orphan_json).collect::<Vec<_>>(),
+                }),
+                cine_pipeline::Rewrite::Applied { group, orphans } => {
+                    let mut out = with_impact(p, &group);
+                    out["refused"] = json!(false);
+                    out["orphans"] = json!(orphans.iter().map(orphan_json).collect::<Vec<_>>());
+                    out
+                }
+            }
+        }
         "production" => {
             let document = match params.get("document") {
                 Some(_) => entity(params, "document")?,

@@ -24,7 +24,7 @@ pub mod project;
 pub mod reactors;
 pub mod session;
 
-pub use project::{OmniProject, ProjectSetup};
+pub use project::{OmniProject, Orphan, ProjectSetup, Rewrite};
 pub use reactors::install_all;
 
 use thiserror::Error;
