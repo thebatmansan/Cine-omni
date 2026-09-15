@@ -24,11 +24,11 @@ that has not been earned.
 | 8 | Audio research | **Done** — `cine-audio` assessed and measured; plugin formats, backends, loudness, immersive delivery and RT/UCG discipline decided. **Overturns the VST3 finding in §01** | [`research/14-audio-architecture.md`](research/14-audio-architecture.md) |
 | 9 | Production / collaboration research | **Done** — on-set/script supervision, dailies/DIT verification, ASC MHL verified against the spec, and a collaboration model for the existing op log | [`research/15-production-dailies-collaboration.md`](research/15-production-dailies-collaboration.md) |
 | 10 | GPU / runtime / UI shell research | **Done** — shell decided (native Rust: winit + wgpu + egui), GPU runtime specified | [`research/11-shell-and-gpu-runtime.md`](research/11-shell-and-gpu-runtime.md) |
-| 11 | Feature matrix (§46) | **Blocked** on 6–10 | — |
-| 12 | Full license matrix (§42) | **Blocked** on 6–10 | — |
+| 11 | Feature matrix (§46) | **Done** — 153 capabilities with status, pro reference, infrastructure and validation | [`CINE-OMNI-CAPABILITY-MATRIX.md`](CINE-OMNI-CAPABILITY-MATRIX.md) |
+| 12 | Full license matrix (§42) | **Done** for linked crates and proposed integrations; several items marked NEEDS REVIEW | [`PRODUCT-STRATEGY.md`](PRODUCT-STRATEGY.md) §5 |
 | 13 | Full integration matrix (§41) | **Blocked** on 6–10 | — |
 | 14 | Target architecture | **Directional only** | [`02-TARGET-ARCHITECTURE.md`](02-TARGET-ARCHITECTURE.md) |
-| 15 | Phased implementation plan | **Phase 1 fully specified; later phases outlined** | [`03-PHASED-PLAN.md`](03-PHASED-PLAN.md) |
+| 15 | Phased implementation plan | **Superseded for ordering** by the master roadmap (from the master audit) | [`MASTER-ROADMAP.md`](MASTER-ROADMAP.md), [`MASTER-AUDIT.md`](MASTER-AUDIT.md) |
 | 16 | Risk register | **Done** | [`04-RISK-REGISTER.md`](04-RISK-REGISTER.md) |
 | 17 | **Phase 1 hardening (A–E)** | **Done** | [`05-PHASE-1-RESULTS.md`](05-PHASE-1-RESULTS.md) |
 
