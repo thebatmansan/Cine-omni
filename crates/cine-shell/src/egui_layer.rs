@@ -88,7 +88,7 @@ impl EguiLayer {
         build: impl FnMut(&mut egui::Ui),
     ) -> std::time::Duration {
         let input = self.state.take_egui_input(window);
-        let output = self.ctx.run_ui(input, build);
+        let mut output = self.ctx.run_ui(input, build);
         self.state
             .handle_platform_output(window, output.platform_output);
 
@@ -137,6 +137,10 @@ impl EguiLayer {
         for id in &output.textures_delta.free {
             self.renderer.free_texture(id);
         }
+        // Every delta above has been applied. epaint 0.36 checks that on drop
+        // in debug builds and panics otherwise — which release builds never
+        // saw, and a debug `--ui-smoke` did.
+        output.textures_delta.clear();
         output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
