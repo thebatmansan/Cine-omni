@@ -598,6 +598,13 @@ impl Config {
             "default_view_transform",
             "display_colorspaces",
             "colorspaces",
+            // Recognised, and without effect on anything this parser does:
+            // `luma` is deprecated and unused by OCIO v2 processing;
+            // `strictparsing` governs looking up a colorspace from a file path,
+            // which is part of file rules, which are not implemented (and are
+            // reported as such when present).
+            "luma",
+            "strictparsing",
         ];
         cfg.unimplemented = doc
             .as_map()
