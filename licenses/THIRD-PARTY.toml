@@ -50,13 +50,17 @@ obligations = "Apache-2.0 §4: ship the license text; keep the attribution comme
 [[entry]]
 project = "OpenColorIO-Config-ACES (released configs as shipped in OpenColorIO 2.5.2)"
 url = "https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES"
-version = "cg-config-v4.0.0_aces-v2.0_ocio-v2.5, studio-config-v4.0.0_aces-v2.0_ocio-v2.5"
+version = "cg-config-v4.0.0_aces-v2.0_ocio-v2.5, studio-config-v4.0.0_aces-v2.0_ocio-v2.5 (license text fetched at main b7b08c8c2750)"
 license = "BSD-3-Clause"
 copyright = "Contributors to the OpenColorIO Project"
-integration = "test-data"
-used_by = ["crates/cine-color/tests/data/configs/"]
-modifications = "none; serialised by PyOpenColorIO"
-obligations = "BSD-3-Clause attribution if redistributed; not part of the shipped application."
+integration = "bundled-data"
+used_by = [
+  "crates/cine-color/src/ucg.rs (BUNDLED_CONFIG: the cg config, compiled into the application as every new project's colour config)",
+  "crates/cine-color/tests/data/configs/ (both configs, as test data)",
+]
+modifications = "none; serialised by PyOpenColorIO. A project stores it re-serialised by cine-color, verified to render identically (released_configs.rs)."
+license_text = "licenses/OpenColorIO-Config-ACES-BSD-3-Clause.txt"
+obligations = "BSD-3-Clause: binary distributions must reproduce the copyright notice, conditions and disclaimer in their documentation; no endorsement by the copyright holders' names."
 
 [[entry]]
 project = "OpenColorIO / PyOpenColorIO"

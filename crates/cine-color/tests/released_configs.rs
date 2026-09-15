@@ -236,3 +236,46 @@ fn every_colorspace_converts_as_opencolorio_does() {
         failures.join("\n")
     );
 }
+
+/// A project stores its config as `Config::to_yaml`, not as the original
+/// text. Every view and conversion must render the same after that round trip,
+/// or the verified config is not the one a project uses.
+#[test]
+fn the_bundled_config_renders_the_same_after_the_round_trip_a_project_stores() {
+    let original = Config::parse(cine_color::ucg::BUNDLED_CONFIG).unwrap();
+    let stored = Config::parse(&original.to_yaml()).unwrap();
+    assert_eq!(stored.file_rules, original.file_rules);
+    let samples = [
+        [0.18, 0.18, 0.18],
+        [0.4, 0.05, 0.02],
+        [2.0, 1.0, 0.5],
+        [-0.02, 0.1, 0.3],
+    ];
+    let mut compared = 0;
+    for (display, views) in &original.displays {
+        for v in views {
+            let a = original
+                .display_processor("ACES2065-1", display, &v.name)
+                .unwrap();
+            let b = stored
+                .display_processor("ACES2065-1", display, &v.name)
+                .unwrap();
+            for x in samples {
+                assert_eq!(a.apply_f64(x), b.apply_f64(x), "{display} / {}", v.name);
+                compared += 1;
+            }
+        }
+    }
+    for cs in original.colorspace_names() {
+        if original.colorspace(cs).unwrap().isdata {
+            continue;
+        }
+        let a = original.processor("ACES2065-1", cs).unwrap();
+        let b = stored.processor("ACES2065-1", cs).unwrap();
+        for x in samples {
+            assert_eq!(a.apply_f64(x), b.apply_f64(x), "{cs}");
+            compared += 1;
+        }
+    }
+    assert!(compared > 200, "{compared}");
+}

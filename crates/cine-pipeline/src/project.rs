@@ -44,6 +44,7 @@ impl OmniProject {
         let engine = Arc::new(Engine::new());
         let root = Self::init_root(&engine, &setup)?;
         crate::reactors::install_all(&engine);
+        Self::ensure_color_config(&engine, root)?;
         Ok(OmniProject {
             engine,
             root,
@@ -59,6 +60,7 @@ impl OmniProject {
         let engine = disk.engine.clone();
         let root = Self::init_root(&engine, &setup)?;
         crate::reactors::install_all(&engine);
+        Self::ensure_color_config(&engine, root)?;
         disk.enable_autosave();
         Ok(OmniProject {
             engine,
@@ -108,6 +110,43 @@ impl OmniProject {
         if moved > 0 {
             eprintln!("      migrated {moved} take(s) into the production log");
         }
+        Self::ensure_color_config(&self.engine, self.root)?;
+        // Media ingested before projects had a config has no input colorspace.
+        let unassigned: Vec<EntityId> = {
+            let g = self.engine.read();
+            g.of_kind(kinds::ASSET_MEDIA)
+                .iter()
+                .filter(|n| n.get_str(cine_color::ucg::ATTR_INPUT_SOURCE).is_none())
+                .map(|n| n.id)
+                .collect()
+        };
+        if !unassigned.is_empty() {
+            self.engine
+                .commit_system("migrate: input colorspaces by file rule", |tx| {
+                    let config = cine_color::ucg::project_config(tx.graph(), self.root)
+                        .map(|c| cine_color::ucg::load_config(tx.graph(), c))
+                        .transpose()
+                        .map_err(|e| crate::engine_err("color", e))?;
+                    if let Some(config) = config {
+                        for media in &unassigned {
+                            cine_color::ucg::assign_input_colorspace(tx, *media, &config)
+                                .map_err(|e| crate::engine_err("color", e))?;
+                        }
+                    }
+                    Ok(())
+                })?;
+        }
+        Ok(())
+    }
+
+    /// A project without a colour config gets the bundled one. A system change:
+    /// it is how the project is set up, not an edit anyone would undo.
+    fn ensure_color_config(engine: &Engine, root: EntityId) -> Result<()> {
+        engine.commit_system("colour config", |tx| {
+            cine_color::ucg::ensure_project_config(tx, root)
+                .map_err(|e| crate::engine_err("color", e))?;
+            Ok(())
+        })?;
         Ok(())
     }
 

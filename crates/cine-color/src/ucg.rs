@@ -28,6 +28,115 @@ pub const ATTR_ENCODING: &str = "color.encoding";
 pub const ATTR_ALIASES: &str = "color.aliases";
 /// Attribute marking a `color.space` node as a display colorspace.
 pub const ATTR_IS_DISPLAY: &str = "color.is_display";
+/// Where a project's `color.config` came from.
+pub const ATTR_CONFIG_SOURCE: &str = "color.config_source";
+/// Why media has the input colorspace it has: `rule:<file rule name>` when the
+/// config's file rules decided, `user` when someone chose it.
+pub const ATTR_INPUT_SOURCE: &str = "color.input_source";
+
+/// The config a project gets when it has none: the ACES 2.0 CG config
+/// OpenColorIO 2.5.2 ships (Academy Software Foundation, BSD-3-Clause). It is
+/// the very file the conformance tests compare against OpenColorIO
+/// (`tests/released_configs.rs`), so what ships is what was verified.
+pub const BUNDLED_CONFIG: &str =
+    include_str!("../tests/data/configs/cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio");
+/// The name [`BUNDLED_CONFIG`] is recorded under.
+pub const BUNDLED_CONFIG_NAME: &str = "cg-config-v4.0.0_aces-v2.0_ocio-v2.5";
+
+/// The project's colour config entity, if one is installed.
+pub fn project_config(graph: &Graph, project: EntityId) -> Option<EntityId> {
+    let id = EntityId::derived(project, kinds::COLOR_CONFIG);
+    graph.contains(id).then_some(id)
+}
+
+/// Install [`BUNDLED_CONFIG`] under `project` unless it already has a config.
+/// Returns the config entity. Idempotent.
+pub fn ensure_project_config(tx: &mut Tx, project: EntityId) -> Result<EntityId> {
+    if let Some(id) = project_config(tx.graph(), project) {
+        return Ok(id);
+    }
+    let config = Config::parse(BUNDLED_CONFIG)?;
+    let id = install_config(tx, project, &config)?;
+    tx.set(
+        id,
+        ATTR_CONFIG_SOURCE,
+        format!("bundled: {BUNDLED_CONFIG_NAME} (OpenColorIO 2.5.2)"),
+    )?;
+    Ok(id)
+}
+
+fn default_meta(config: &Config, input: String) -> ColorMeta {
+    ColorMeta {
+        input_colorspace: input,
+        working_colorspace: config.role("scene_linear").unwrap_or("ACEScg").to_string(),
+        display: config
+            .active_displays
+            .first()
+            .or_else(|| config.displays.keys().next())
+            .cloned()
+            .unwrap_or_default(),
+        look_lut: None,
+        cdl: Default::default(),
+    }
+}
+
+/// Give `media` the input colorspace the config's file rules decide for its
+/// path, recording which rule decided. A colorspace someone chose is left
+/// alone. Returns whether anything changed. Idempotent.
+pub fn assign_input_colorspace(tx: &mut Tx, media: EntityId, config: &Config) -> Result<bool> {
+    let g = tx.graph();
+    let node = g.require(media)?;
+    if node.get_str(ATTR_INPUT_SOURCE) == Some("user") {
+        return Ok(false);
+    }
+    let Some(path) = node.get_str(attrs::MEDIA_PATH).map(str::to_string) else {
+        return Ok(false);
+    };
+    let Some(decided) = config.colorspace_for_path(&path)? else {
+        return Ok(false);
+    };
+    let existing = ColorMeta::read_from(g, media);
+    let mut meta = existing
+        .clone()
+        .unwrap_or_else(|| default_meta(config, decided.colorspace.clone()));
+    meta.input_colorspace = decided.colorspace;
+    let mut changed = false;
+    if existing.as_ref() != Some(&meta) {
+        meta.write(tx, media)?;
+        changed = true;
+    }
+    let source = format!("rule:{}", decided.rule);
+    if tx.graph().require(media)?.get_str(ATTR_INPUT_SOURCE) != Some(source.as_str()) {
+        tx.set(media, ATTR_INPUT_SOURCE, source)?;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// Someone's choice of input colorspace for `media`. Refuses a name the
+/// config does not have. From here on file rules no longer change it.
+pub fn set_input_colorspace(
+    tx: &mut Tx,
+    media: EntityId,
+    config: &Config,
+    colorspace: &str,
+) -> Result<()> {
+    let cs = config
+        .colorspace(colorspace)
+        .ok_or_else(|| Error::UnknownColorSpace(colorspace.to_string()))?
+        .name
+        .clone();
+    let existing = ColorMeta::read_from(tx.graph(), media);
+    let mut meta = existing
+        .clone()
+        .unwrap_or_else(|| default_meta(config, cs.clone()));
+    meta.input_colorspace = cs;
+    if existing.as_ref() != Some(&meta) {
+        meta.write(tx, media)?;
+    }
+    tx.set(media, ATTR_INPUT_SOURCE, "user")?;
+    Ok(())
+}
 
 /// Ensure a `color.grade` entity exists for `clip`.
 ///
@@ -60,8 +169,10 @@ pub fn ensure_grade_for_clip(tx: &mut Tx, clip: EntityId) -> Result<EntityId> {
     Ok(id)
 }
 
-/// Copy the [`ColorMeta`] component from `from` to `to` when `to` has none or
-/// its `input_colorspace` differs. Returns whether anything changed.
+/// Carry the [`ColorMeta`] of `from` to `to`: all of it when `to` has none,
+/// otherwise only what describes the source — the input and working
+/// colorspaces — so a grade's CDL, look and display survive a change of input
+/// colorspace. Returns whether anything changed.
 pub fn propagate_color_meta(tx: &mut Tx, from: EntityId, to: EntityId) -> Result<bool> {
     let g = tx.graph();
     g.require(from)?;
@@ -69,14 +180,18 @@ pub fn propagate_color_meta(tx: &mut Tx, from: EntityId, to: EntityId) -> Result
     let Some(src) = ColorMeta::read_from(g, from) else {
         return Ok(false);
     };
-    let needs = match ColorMeta::read_from(g, to) {
-        None => true,
-        Some(existing) => existing.input_colorspace != src.input_colorspace,
+    let next = match ColorMeta::read_from(g, to) {
+        None => src,
+        Some(existing) => ColorMeta {
+            input_colorspace: src.input_colorspace,
+            working_colorspace: src.working_colorspace,
+            ..existing
+        },
     };
-    if !needs {
+    if ColorMeta::read_from(g, to).as_ref() == Some(&next) {
         return Ok(false);
     }
-    src.write(tx, to)?;
+    next.write(tx, to)?;
     Ok(true)
 }
 

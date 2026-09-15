@@ -588,7 +588,8 @@ impl Reactor for CompReactor {
 // Color
 // ---------------------------------------------------------------------------
 
-/// Every clip gets a grade; color metadata flows media → clip → grade so a
+/// Media gets an input colorspace from the project config's file rules; every
+/// clip gets a grade; color metadata flows media → clip → grade so a
 /// re-conformed cut keeps its LUTs and color spaces.
 pub struct ColorReactor;
 
@@ -601,6 +602,27 @@ impl Reactor for ColorReactor {
     }
     fn react(&self, cs: &ChangeSet, g: &Graph) -> Result<Vec<Plan>> {
         let mut plans = Vec::new();
+        let unassigned: Vec<EntityId> = cs
+            .dirty_of_kind(g, kinds::ASSET_MEDIA)
+            .filter(|m| cs.was_created(*m) || cs.attr_changed(*m, attrs::MEDIA_PATH))
+            .collect();
+        let project = g.of_kind(kinds::PROJECT).first().map(|n| n.id);
+        if let (false, Some(project)) = (unassigned.is_empty(), project) {
+            if let Some(config) = cine_color::ucg::project_config(g, project) {
+                let config =
+                    cine_color::ucg::load_config(g, config).map_err(|e| engine_err("color", e))?;
+                plans.push(Plan::new(
+                    "assign input colorspace by file rule",
+                    move |tx| {
+                        for media in &unassigned {
+                            cine_color::ucg::assign_input_colorspace(tx, *media, &config)
+                                .map_err(|e| engine_err("color", e))?;
+                        }
+                        Ok(())
+                    },
+                ));
+            }
+        }
         let mut clips: BTreeSet<EntityId> = BTreeSet::new();
         for clip in cs.dirty_of_kind(g, kinds::NLE_CLIP) {
             if cs.was_created(clip)
