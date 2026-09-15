@@ -51,8 +51,18 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(project: OmniProject, root_dir: std::path::PathBuf) -> Arc<Runtime> {
+        let project = Arc::new(project);
+        // Background work needs the project and its media, so it starts here
+        // rather than in the bare project. Failing to start it is reported, and
+        // the `jobs` capability says so; the project still opens.
+        match crate::jobs::start(&project, &root_dir) {
+            Ok(jobs) => {
+                let _ = project.jobs.set(jobs);
+            }
+            Err(e) => eprintln!("background work unavailable: {e}"),
+        }
         Arc::new(Runtime {
-            project: Arc::new(project),
+            project,
             root_dir,
             clients: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),

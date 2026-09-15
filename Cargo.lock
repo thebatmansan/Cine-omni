@@ -433,6 +433,7 @@ dependencies = [
  "cine-audio",
  "cine-color",
  "cine-comp",
+ "cine-jobs",
  "cine-logistics",
  "cine-media",
  "cine-previs",
@@ -468,6 +469,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "cine-gpu",
+ "cine-jobs",
  "cine-logistics",
  "cine-media",
  "cine-pipeline",

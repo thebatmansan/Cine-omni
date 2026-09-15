@@ -10,6 +10,7 @@ publish.workspace = true
 ucg-core.workspace = true
 ucg-schema.workspace = true
 cine-pipeline.workspace = true
+cine-jobs.workspace = true
 cine-script.workspace = true
 cine-previs.workspace = true
 cine-logistics.workspace = true

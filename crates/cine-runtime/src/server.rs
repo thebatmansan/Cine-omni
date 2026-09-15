@@ -80,6 +80,14 @@ impl Server {
         // Session changes (which sequence is open) go out as they happen. The
         // listener holds the runtime weakly: the runtime owns the session that
         // owns the listener.
+        if let Some(jobs) = runtime.project.jobs.get() {
+            let weak = Arc::downgrade(&runtime);
+            jobs.subscribe(move |record| {
+                if let Some(rt) = weak.upgrade() {
+                    rt.broadcast(&rpc::job_notification(record));
+                }
+            });
+        }
         let weak = Arc::downgrade(&runtime);
         runtime.project.session.subscribe(move |event| {
             if let Some(rt) = weak.upgrade() {
@@ -175,6 +183,7 @@ fn handle_connection(
     };
     match route {
         "/frame" => serve_frame(&mut stream, &runtime, query),
+        "/thumbnail" => serve_thumbnail(&mut stream, &runtime, query),
         "/health" => {
             let body = serde_json::json!({
                 "status": "ok",
@@ -287,6 +296,51 @@ fn serve_websocket(
     runtime.disconnect(client_id);
     let _ = writer_thread.join();
     result
+}
+
+/// A thumbnail from the project's cache, if one has been made.
+///
+/// Never made on request: making one is a job (`media.thumbnail`), so a page of
+/// thumbnails cannot turn into a page of synchronous decodes. A missing one is a
+/// 404 that says how to make it.
+fn serve_thumbnail(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
+    let mut media = None;
+    let mut index = 0usize;
+    for pair in query.split('&') {
+        match pair.split_once('=') {
+            Some(("media", v)) => media = ucg_core::EntityId::parse(v),
+            Some(("index", v)) => index = v.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    let hash = media.and_then(|m| {
+        let g = runtime.project.engine.read();
+        g.node(m)
+            .and_then(|n| n.get_str(cine_media::ucg::HASH_ATTR).map(str::to_string))
+    });
+    let Some(hash) = hash else {
+        respond(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"no media with that id in this project",
+        );
+        return;
+    };
+    let path = crate::jobs::thumbnail_path(
+        &crate::jobs::thumbnail_cache(&runtime.root_dir),
+        &hash,
+        index,
+    );
+    match std::fs::read(&path) {
+        Ok(bytes) => respond(stream, "200 OK", "image/png", &bytes),
+        Err(_) => respond(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"no thumbnail yet: submit a media.thumbnail job",
+        ),
+    }
 }
 
 /// Handle one JSON-RPC line. `None` means the request was a notification.

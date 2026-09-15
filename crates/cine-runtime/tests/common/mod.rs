@@ -138,6 +138,24 @@ impl Client {
         seen
     }
 
+    /// Hand every message that arrives within `window` to `f`.
+    pub fn stream_messages(&mut self, window: Duration, mut f: impl FnMut(&serde_json::Value)) {
+        let deadline = Instant::now() + window;
+        self.stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        while Instant::now() < deadline {
+            if let Ok(Frame::Text(t)) = ws::read_frame(&mut self.reader) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                    f(&v);
+                }
+            }
+        }
+        self.stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+    }
+
     /// Read until a reply with `id` arrives, returning the whole message so a
     /// test can inspect an error as well as a result.
     pub fn read_reply(&mut self, id: u64) -> serde_json::Value {

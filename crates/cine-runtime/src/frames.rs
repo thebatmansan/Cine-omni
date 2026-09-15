@@ -113,6 +113,24 @@ impl FrameService {
 
 /// YUV planes to PNG, through the verified reference conversion.
 fn encode(frame: &VideoFrame) -> Result<(Vec<u8>, u32, u32, String, bool), String> {
+    let (bytes, w, h, colour, assumed) = rgba8(frame)?;
+    Ok((png(&bytes, w, h)?, w, h, colour, assumed))
+}
+
+/// PNG bytes for 8-bit RGBA.
+pub fn png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    {
+        let encoder = image::codecs::png::PngEncoder::new(&mut png);
+        image::ImageEncoder::write_image(encoder, rgba, w, h, image::ExtendedColorType::Rgba8)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(png)
+}
+
+/// 8-bit RGBA through the verified reference conversion, with a description of
+/// the colour interpretation and whether it was assumed.
+pub fn rgba8(frame: &VideoFrame) -> Result<(Vec<u8>, u32, u32, String, bool), String> {
     if frame.format != PixelFormat::Yuv420P8 {
         return Err(format!(
             "this build converts 4:2:0 8-bit for preview; this picture is {:?}",
@@ -165,14 +183,8 @@ fn encode(frame: &VideoFrame) -> Result<(Vec<u8>, u32, u32, String, bool), Strin
         .iter()
         .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
         .collect();
-    let mut png = Vec::new();
-    {
-        let encoder = image::codecs::png::PngEncoder::new(&mut png);
-        image::ImageEncoder::write_image(encoder, &bytes, w, h, image::ExtendedColorType::Rgba8)
-            .map_err(|e| e.to_string())?;
-    }
     Ok((
-        png,
+        bytes,
         w,
         h,
         format!(

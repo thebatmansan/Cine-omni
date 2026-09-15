@@ -251,6 +251,12 @@ pub fn run(opts: StartOptions) -> Result<(), Box<dyn std::error::Error>> {
     shutdown.store(true, Ordering::Relaxed);
     let _ = broadcaster.join();
 
+    // Running work is told to stop; queued work stays in the journal and
+    // resumes next time.
+    if let Some(jobs) = runtime.project.jobs.get() {
+        jobs.shutdown();
+    }
+
     // A project whose runtime is stopping should not lose uncommitted work.
     eprintln!("saving project…");
     match runtime.project.save() {

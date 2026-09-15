@@ -109,6 +109,36 @@ impl ContentHash {
         })
     }
 
+    /// Whole-file SHA-256 for long files: reports `(bytes read, total)` after
+    /// every chunk and stops when `keep_going` returns `false`, returning `None`.
+    /// The same digest as [`ContentHash::full`].
+    pub fn full_with_progress(
+        path: &Path,
+        keep_going: &mut dyn FnMut(u64, u64) -> bool,
+    ) -> Result<Option<ContentHash>> {
+        let f = File::open(path).map_err(|_| Error::NotFound(path.display().to_string()))?;
+        let size = f.metadata()?.len();
+        let mut r = BufReader::new(f);
+        let mut h = Sha256::new();
+        let mut buf = vec![0u8; 4 << 20];
+        let mut read = 0u64;
+        loop {
+            let n = r.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            h.update(&buf[..n]);
+            read += n as u64;
+            if !keep_going(read, size) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(ContentHash::Full {
+            hex: format!("{:x}", h.finalize()),
+            size,
+        }))
+    }
+
     /// Verify that a file's **content** still matches this hash.
     ///
     /// Only a [`ContentHash::Full`] can do this. A `Fast` hash covers the head,

@@ -44,6 +44,7 @@
 pub mod frames;
 pub mod http;
 pub mod impact;
+pub mod jobs;
 pub mod lock;
 pub mod playlist;
 pub mod projection;

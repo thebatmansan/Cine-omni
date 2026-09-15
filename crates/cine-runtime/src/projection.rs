@@ -220,6 +220,7 @@ pub fn media(graph: &Graph) -> J {
                     "path": n.get_str(attrs::MEDIA_PATH),
                     "online": n.get_bool(cine_media::ucg::ONLINE_ATTR),
                     "hash": n.get_str(cine_media::ucg::HASH_ATTR),
+                    "checksum": n.get(crate::jobs::CHECKSUM_ATTR).map(|v| v.to_json()),
                     "container": info.as_ref().map(|i| format!("{:?}", i.container)),
                     "size": info.as_ref().map(|i| i.hash.size()),
                     // Duration from the video stream's own time base, exactly,

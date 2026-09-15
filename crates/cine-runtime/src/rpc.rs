@@ -42,6 +42,16 @@ pub fn error_response(id: &J, code: i64, message: &str) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
 }
 
+/// A job notification: every state change, and progress while running.
+pub fn job_notification(record: &cine_jobs::JobRecord) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "job",
+        "params": crate::jobs::record_json(record),
+    })
+    .to_string()
+}
+
 /// A shared-session notification, as pushed to every connected client.
 pub fn session_notification(event: &cine_pipeline::session::SessionEvent) -> String {
     match event {
@@ -131,6 +141,15 @@ fn capabilities() -> J {
             "state": "verified",
             "detail": "Each edit is one undoable transaction carried to linked material; \
                        tested over the protocol (editorial_protocol.rs)",
+        }),
+        json!({
+            "id": "project.jobs",
+            "name": "Background work: checksum verification, thumbnails",
+            "group": "Project",
+            "state": "verified",
+            "detail": "Prioritised, resource-bounded, cancellable, retried and journalled; \
+                       interrupted work resumes after a restart. Proxies, renders and \
+                       transcodes are not yet kinds of work",
         }),
         json!({
             "id": "project.impact",
@@ -533,6 +552,53 @@ pub fn dispatch_with(
             let mut out = with_impact(p, &group);
             out["clips"] = json!(placed);
             out
+        }
+        "jobs" => {
+            let jobs = p
+                .jobs
+                .get()
+                .ok_or("background work is not running in this process")?;
+            let limit = params.get("limit").and_then(J::as_u64).unwrap_or(100) as usize;
+            J::Array(
+                jobs.list()
+                    .iter()
+                    .take(limit)
+                    .map(crate::jobs::record_json)
+                    .collect(),
+            )
+        }
+        "job_submit" => {
+            let jobs = p
+                .jobs
+                .get()
+                .ok_or("background work is not running in this process")?;
+            let kind = str_param(params, "kind")?;
+            let spec = crate::jobs::spec_for(p, kind, params)?;
+            let id = jobs.submit(spec);
+            crate::jobs::record_json(&jobs.get(id).ok_or("the job vanished")?)
+        }
+        "job_cancel" | "job_retry" => {
+            let jobs = p
+                .jobs
+                .get()
+                .ok_or("background work is not running in this process")?;
+            let id = crate::jobs::job_id(params)?;
+            let done = if method == "job_cancel" {
+                jobs.cancel(id)
+            } else {
+                jobs.retry(id)
+            };
+            if !done {
+                return Err(format!(
+                    "job {id} cannot be {} in its current state",
+                    if method == "job_cancel" {
+                        "cancelled"
+                    } else {
+                        "retried"
+                    }
+                ));
+            }
+            crate::jobs::record_json(&jobs.get(id).ok_or("no such job")?)
         }
         "focus" => {
             // With `timeline`, open that sequence in every surface; `null`

@@ -33,6 +33,9 @@ pub struct OmniProject {
     pub disk: Option<Project>,
     /// What every surface of the open application is looking at. Not saved.
     pub session: crate::session::ProjectSession,
+    /// Background work for this project, once a runtime has started it with
+    /// the runners that need media. Unset in a bare project.
+    pub jobs: std::sync::OnceLock<cine_jobs::JobSystem>,
 }
 
 impl OmniProject {
@@ -46,6 +49,7 @@ impl OmniProject {
             root,
             disk: None,
             session: Default::default(),
+            jobs: Default::default(),
         })
     }
 
@@ -61,6 +65,7 @@ impl OmniProject {
             root,
             disk: Some(disk),
             session: Default::default(),
+            jobs: Default::default(),
         })
     }
 
@@ -82,6 +87,7 @@ impl OmniProject {
             root,
             disk: Some(disk),
             session: Default::default(),
+            jobs: Default::default(),
         })
     }
 
