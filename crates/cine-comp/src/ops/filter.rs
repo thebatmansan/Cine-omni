@@ -38,7 +38,7 @@ pub fn convolve_h(src: &Image, kernel: &[f32]) -> Image {
     let nc = src.nc();
     let w = src.width;
     let r = (kernel.len() / 2) as i64;
-    let mut out = Image::new(src.width, src.height, src.channels.clone());
+    let mut out = src.blank_like(src.channels.clone());
     if src.is_empty() {
         return out;
     }
@@ -65,7 +65,7 @@ pub fn convolve_v(src: &Image, kernel: &[f32]) -> Image {
     let w = src.width;
     let h = src.height;
     let r = (kernel.len() / 2) as i64;
-    let mut out = Image::new(src.width, src.height, src.channels.clone());
+    let mut out = src.blank_like(src.channels.clone());
     if src.is_empty() {
         return out;
     }
@@ -108,11 +108,7 @@ pub fn blur_masked(src: &Image, size: f32, kind: BlurKind, mask: Option<&Image>)
     match mask {
         None => blurred,
         Some(m) => {
-            let m = if m.same_size(src) {
-                m.clone()
-            } else {
-                m.crop(0, 0, src.width, src.height)
-            };
+            let m = m.aligned_to(&src);
             let b = blurred.to_rgba();
             src.map_rgba_xy(|x, y, p| {
                 let t = m.get_alpha(x, y);
@@ -195,7 +191,7 @@ pub fn edge_blur(src: &Image, size: f32, edge_width: usize) -> Image {
     let rgba = src.to_rgba();
     let d = dilate_alpha(&rgba, edge_width.max(1));
     let e = erode_alpha(&rgba, edge_width.max(1));
-    let mut band = Image::new(src.width, src.height, crate::image::ChannelSet::Alpha);
+    let mut band = src.blank_like(crate::image::ChannelSet::Alpha);
     band.data
         .par_iter_mut()
         .zip(d.data.par_chunks_exact(4))

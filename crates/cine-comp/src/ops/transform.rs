@@ -108,7 +108,7 @@ pub fn transform(src: &Image, t: &Transform2D) -> Image {
     let m = t.matrix(src.width, src.height);
     let inv = m.inverse();
     let w = src.width;
-    let mut out = Image::rgba(src.width, src.height);
+    let mut out = src.blank_like(crate::image::ChannelSet::Rgba);
     if src.is_empty() {
         return out;
     }
@@ -132,9 +132,11 @@ pub fn transform(src: &Image, t: &Transform2D) -> Image {
     out
 }
 
-/// Crop to a rectangle (pixels outside the source are transparent black).
+/// Crop the canvas rectangle at `(x, y)` into a new `w × h` format whose
+/// origin is its top-left (pixels outside the source's data window are
+/// transparent black).
 pub fn crop(src: &Image, x: i64, y: i64, w: usize, h: usize) -> Image {
-    src.crop(x, y, w, h)
+    src.crop_canvas(x, y, w, h).placed(0, 0)
 }
 
 /// Resize to a new format.

@@ -130,7 +130,7 @@ impl SyntheticPassProvider {
         ml
     }
 
-    /// Render one pass (pixels outside `roi` stay zero).
+    /// Render one pass; with `roi`, only that region, as a windowed image.
     pub fn render(&self, pass: PassKind, frame: i64, roi: Option<RegionOfInterest>) -> Image {
         let channels = match pass {
             PassKind::Beauty => ChannelSet::Rgba,
@@ -139,10 +139,12 @@ impl SyntheticPassProvider {
             PassKind::Id => ChannelSet::Named(vec!["id".to_string()]),
             PassKind::Motion => ChannelSet::Motion,
         };
-        let mut img = Image::new(self.width, self.height, channels);
         let roi = roi
             .map(|r| r.clipped(self.width, self.height))
             .unwrap_or(RegionOfInterest::new(0, 0, self.width, self.height));
+        // Only the region is allocated, placed where it is on the frame.
+        let mut img =
+            Image::new(roi.width, roi.height, channels).placed(roi.x as i64, roi.y as i64);
         let c = self.sphere_center(frame);
         let r = self.sphere_radius_px();
         let l = {
@@ -164,8 +166,8 @@ impl SyntheticPassProvider {
                             let ndl = (n[0] * l[0] + n[1] * l[1] + n[2] * l[2]).max(0.0);
                             let k = 0.15 + 0.85 * ndl;
                             img.set_pixel(
-                                x,
-                                y,
+                                x - roi.x,
+                                y - roi.y,
                                 &[
                                     self.albedo[0] * k,
                                     self.albedo[1] * k,
@@ -175,24 +177,28 @@ impl SyntheticPassProvider {
                             );
                         }
                         PassKind::Depth => img.set_pixel(
-                            x,
-                            y,
+                            x - roi.x,
+                            y - roi.y,
                             &[self.sphere_distance - nz * self.sphere_world_radius],
                         ),
-                        PassKind::Normal => img.set_pixel(x, y, &n),
-                        PassKind::Id => img.set_pixel(x, y, &[1.0]),
-                        PassKind::Motion => img.set_pixel(x, y, &[self.drift_per_frame, 0.0]),
+                        PassKind::Normal => img.set_pixel(x - roi.x, y - roi.y, &n),
+                        PassKind::Id => img.set_pixel(x - roi.x, y - roi.y, &[1.0]),
+                        PassKind::Motion => {
+                            img.set_pixel(x - roi.x, y - roi.y, &[self.drift_per_frame, 0.0])
+                        }
                     }
                 } else {
                     match pass {
                         PassKind::Beauty => {
                             let cc = self.background[((x / cs) + (y / cs)) % 2];
-                            img.set_pixel(x, y, &[cc[0], cc[1], cc[2], 1.0]);
+                            img.set_pixel(x - roi.x, y - roi.y, &[cc[0], cc[1], cc[2], 1.0]);
                         }
-                        PassKind::Depth => img.set_pixel(x, y, &[self.background_depth]),
-                        PassKind::Normal => img.set_pixel(x, y, &[0.0, 0.0, 1.0]),
-                        PassKind::Id => img.set_pixel(x, y, &[0.0]),
-                        PassKind::Motion => img.set_pixel(x, y, &[0.0, 0.0]),
+                        PassKind::Depth => {
+                            img.set_pixel(x - roi.x, y - roi.y, &[self.background_depth])
+                        }
+                        PassKind::Normal => img.set_pixel(x - roi.x, y - roi.y, &[0.0, 0.0, 1.0]),
+                        PassKind::Id => img.set_pixel(x - roi.x, y - roi.y, &[0.0]),
+                        PassKind::Motion => img.set_pixel(x - roi.x, y - roi.y, &[0.0, 0.0]),
                     }
                 }
             }
@@ -248,10 +254,11 @@ mod tests {
             p.render(PassKind::Id, 0, None),
             p.render(PassKind::Id, 10, None)
         );
-        // roi leaves the rest zero
-        let part = p.render(PassKind::Depth, 0, Some(RegionOfInterest::new(0, 0, 4, 4)));
-        assert_eq!(part.get(0, 0, 0), p.background_depth);
-        assert_eq!(part.get(10, 10, 0), 0.0);
+        // roi allocates only the region, placed on the frame
+        let part = p.render(PassKind::Depth, 0, Some(RegionOfInterest::new(2, 3, 4, 4)));
+        assert_eq!((part.width, part.height, part.x, part.y), (4, 4, 2, 3));
+        assert_eq!(part.canvas_rgba(2, 3)[0], p.background_depth);
+        assert_eq!(part.canvas_rgba(10, 10), [0.0; 4]);
         // scene filter
         let only = SyntheticPassProvider {
             scene: Some(EntityId::new()),

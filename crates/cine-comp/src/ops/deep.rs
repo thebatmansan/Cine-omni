@@ -20,11 +20,7 @@ pub fn deep_to_image(d: &DeepImage) -> Image {
 
 /// Build a deep image from a flat image and a depth pass.
 pub fn deep_from_image(image: &Image, depth: &Image) -> Result<DeepImage> {
-    let depth = if depth.same_size(image) {
-        depth.clone()
-    } else {
-        depth.crop(0, 0, image.width, image.height)
-    };
+    let depth = depth.aligned_to(&image);
     DeepImage::from_image(image, &depth)
         .ok_or_else(|| Error::SizeMismatch("deep_from_image".into()))
 }

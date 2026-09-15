@@ -93,12 +93,33 @@ pub fn srgb_decode(v: f32) -> f32 {
 }
 
 /// A scene-linear float image. Row-major, interleaved channels.
+///
+/// ## The data window
+///
+/// `width × height` is the size of the **buffer**, and `(x, y)` is where that
+/// buffer sits on the canvas. Everything outside it is transparent black. A
+/// full frame has its data window at the origin, which is what every image
+/// had before the window existed, so full-frame work is unchanged.
+///
+/// The window is what lets a region be computed without allocating the frame:
+/// asked for 64×64 of a 2048×2048 comp, a node produces a 64×64 buffer placed at
+/// the region, not a 2048×2048 buffer that is zero almost everywhere.
+///
+/// Pixel accessors (`get`, `pixel`, `get_rgba` …) take **buffer** coordinates.
+/// [`Image::canvas_rgba`] and [`Image::crop_canvas`] take canvas coordinates,
+/// and anything that combines two images must go through those — or through
+/// [`Image::aligned_to`], which puts one image on another's window.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Image {
     pub width: usize,
     pub height: usize,
     pub channels: ChannelSet,
     pub data: Vec<f32>,
+    /// Canvas position of the buffer's first pixel.
+    #[serde(default)]
+    pub x: i64,
+    #[serde(default)]
+    pub y: i64,
 }
 
 impl Default for Image {
@@ -116,6 +137,8 @@ impl Image {
             height,
             channels,
             data: vec![0.0; n],
+            x: 0,
+            y: 0,
         }
     }
 
@@ -139,6 +162,8 @@ impl Image {
             height,
             channels,
             data,
+            x: 0,
+            y: 0,
         })
     }
 
@@ -147,6 +172,27 @@ impl Image {
         let mut img = Image::rgba(width, height);
         for px in img.data.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&color);
+        }
+        img
+    }
+
+    /// A generator's pixels over only `window` of a `width × height` frame,
+    /// placed there. `pixel(x, y)` receives canvas coordinates. Without a
+    /// window, the whole frame.
+    pub fn generate_window(
+        width: usize,
+        height: usize,
+        window: Option<RegionOfInterest>,
+        pixel: impl Fn(usize, usize) -> [f32; 4],
+    ) -> Image {
+        let w = window
+            .map(|r| r.clipped(width, height))
+            .unwrap_or(RegionOfInterest::new(0, 0, width, height));
+        let mut img = Image::rgba(w.width, w.height).placed(w.x as i64, w.y as i64);
+        for y in 0..w.height {
+            for x in 0..w.width {
+                img.set_rgba(x, y, pixel(w.x + x, w.y + y));
+            }
         }
         img
     }
@@ -313,7 +359,7 @@ impl Image {
         if self.channels == ChannelSet::Rgba {
             return self.clone();
         }
-        let mut out = Image::rgba(self.width, self.height);
+        let mut out = Image::rgba(self.width, self.height).placed(self.x, self.y);
         let nc = self.nc();
         out.data
             .par_chunks_exact_mut(4)
@@ -324,7 +370,7 @@ impl Image {
 
     /// Extract the alpha as a single-channel image.
     pub fn alpha_image(&self) -> Image {
-        let mut out = Image::new(self.width, self.height, ChannelSet::Alpha);
+        let mut out = Image::new(self.width, self.height, ChannelSet::Alpha).placed(self.x, self.y);
         for y in 0..self.height {
             for x in 0..self.width {
                 out.set(x, y, 0, self.get_alpha(x, y));
@@ -350,7 +396,7 @@ impl Image {
         F: Fn([f32; 4]) -> [f32; 4] + Sync,
     {
         let src = self.to_rgba();
-        let mut out = Image::rgba(self.width, self.height);
+        let mut out = Image::rgba(self.width, self.height).placed(self.x, self.y);
         out.data
             .par_chunks_exact_mut(4)
             .zip(src.data.par_chunks_exact(4))
@@ -368,7 +414,7 @@ impl Image {
     {
         let src = self.to_rgba();
         let w = self.width;
-        let mut out = Image::rgba(self.width, self.height);
+        let mut out = Image::rgba(self.width, self.height).placed(self.x, self.y);
         out.data
             .par_chunks_exact_mut(4 * w.max(1))
             .zip(src.data.par_chunks_exact(4 * w.max(1)))
@@ -407,6 +453,49 @@ impl Image {
             }
         }
         out
+    }
+
+    /// The same image, placed with its first pixel at canvas `(x, y)`.
+    pub fn placed(mut self, x: i64, y: i64) -> Image {
+        self.x = x;
+        self.y = y;
+        self
+    }
+
+    /// An empty buffer of `channels` on the same data window as `self`.
+    pub fn blank_like(&self, channels: ChannelSet) -> Image {
+        Image::new(self.width, self.height, channels).placed(self.x, self.y)
+    }
+
+    /// The data window as `(x, y, width, height)` on the canvas.
+    pub fn window(&self) -> (i64, i64, usize, usize) {
+        (self.x, self.y, self.width, self.height)
+    }
+
+    /// RGBA at canvas coordinates; transparent black outside the data window.
+    pub fn canvas_rgba(&self, cx: i64, cy: i64) -> [f32; 4] {
+        let (bx, by) = (cx - self.x, cy - self.y);
+        if self.contains(bx, by) {
+            self.get_rgba(bx as usize, by as usize)
+        } else {
+            [0.0; 4]
+        }
+    }
+
+    /// The canvas rectangle `[x, x+w) × [y, y+h)` as a new image placed there;
+    /// pixels outside this image's data window are zero.
+    pub fn crop_canvas(&self, x: i64, y: i64, w: usize, h: usize) -> Image {
+        self.crop(x - self.x, y - self.y, w, h).placed(x, y)
+    }
+
+    /// This image on `other`'s data window: the same canvas pixels, cropped and
+    /// padded with transparent black to match. A clone when already aligned.
+    pub fn aligned_to(&self, other: &Image) -> Image {
+        if self.window() == other.window() {
+            self.clone()
+        } else {
+            self.crop_canvas(other.x, other.y, other.width, other.height)
+        }
     }
 
     /// Bilinear sample of all channels at continuous pixel coordinates

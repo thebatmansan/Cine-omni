@@ -87,11 +87,7 @@ pub fn luma_key(src: &Image, low: f32, high: f32, invert: bool) -> Image {
 
 /// Difference key against a clean plate: alpha = |src - plate| / threshold.
 pub fn difference_key(src: &Image, clean: &Image, threshold: f32, invert: bool) -> Image {
-    let clean = if clean.same_size(src) {
-        clean.to_rgba()
-    } else {
-        clean.to_rgba().crop(0, 0, src.width, src.height)
-    };
+    let clean = clean.to_rgba().aligned_to(&src);
     src.map_rgba_xy(|x, y, p| {
         let c = clean.get_rgba(x, y);
         let d = ((p[0] - c[0]).abs() + (p[1] - c[1]).abs() + (p[2] - c[2]).abs()) / 3.0;

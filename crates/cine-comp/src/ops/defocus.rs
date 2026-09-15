@@ -50,11 +50,7 @@ impl ZDefocus {
 /// read as Z (it is cropped/padded to the source size if needed).
 pub fn z_defocus(src: &Image, depth: &Image, p: &ZDefocus) -> Image {
     let src = src.to_rgba();
-    let depth = if depth.same_size(&src) {
-        depth.clone()
-    } else {
-        depth.crop(0, 0, src.width, src.height)
-    };
+    let depth = depth.aligned_to(&src);
     let slices = p.slices.max(2);
     if p.max_blur <= 0.0 || src.is_empty() {
         return src;
@@ -74,7 +70,7 @@ pub fn z_defocus(src: &Image, depth: &Image, p: &ZDefocus) -> Image {
         .collect();
     let w = src.width;
     let dnc = depth.nc();
-    let mut out = Image::rgba(src.width, src.height);
+    let mut out = src.blank_like(crate::image::ChannelSet::Rgba);
     out.data
         .par_chunks_exact_mut(4 * w)
         .enumerate()

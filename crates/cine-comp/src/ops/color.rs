@@ -77,13 +77,7 @@ pub fn premult_pixel(p: [f32; 4]) -> [f32; 4] {
 
 /// Color-correct a premultiplied image, optionally limited by a mask.
 pub fn color_correct(src: &Image, cc: &ColorCorrect, mask: Option<&Image>) -> Image {
-    let mask = mask.map(|m| {
-        if m.same_size(src) {
-            m.clone()
-        } else {
-            m.crop(0, 0, src.width, src.height)
-        }
-    });
+    let mask = mask.map(|m| m.aligned_to(&src));
     src.map_rgba_xy(|x, y, p| {
         let u = unpremult_pixel(p);
         let c = cc.apply_rgb([u[0], u[1], u[2]]);
@@ -141,11 +135,7 @@ pub fn clamp(src: &Image, min: f32, max: f32, clamp_alpha: bool) -> Image {
 
 /// Copy the selected channels of `b` into `a`.
 pub fn copy_channels(a: &Image, b: &Image, which: CopyChannels) -> Image {
-    let b = if b.same_size(a) {
-        b.to_rgba()
-    } else {
-        b.to_rgba().crop(0, 0, a.width, a.height)
-    };
+    let b = b.to_rgba().aligned_to(&a);
     a.map_rgba_xy(|x, y, p| {
         let q = b.get_rgba(x, y);
         match which {

@@ -230,9 +230,14 @@ fn region_of_interest_only_computes_requested_pixels() {
     let roi = RegionOfInterest::new(8, 8, 16, 16);
     let part = ev.evaluate_roi(&g, r, 0, roi).unwrap();
     let full = ev.evaluate(&g, r, 0).unwrap();
-    assert_eq!(part.get_rgba(10, 10), full.get_rgba(10, 10));
     assert_eq!(
-        part.get_rgba(40, 40),
+        part.window(),
+        (8, 8, 16, 16),
+        "only the region was allocated"
+    );
+    assert_eq!(part.canvas_rgba(10, 10), full.get_rgba(10, 10));
+    assert_eq!(
+        part.canvas_rgba(40, 40),
         [0.0; 4],
         "outside the region nothing was rendered"
     );
@@ -261,4 +266,164 @@ fn write_records_output_and_graph_json_round_trips() {
     // cached -> no second write record
     ev.evaluate(&back, w, 12).unwrap();
     assert!(ev.writes().is_empty());
+}
+
+/// The data window's contract: a region of a chain of real operations — a
+/// generator, a blur that needs a margin, a grade, a merge onto a previs pass —
+/// is the full frame's pixels in that region, and is a buffer the size of the
+/// region.
+#[test]
+fn a_region_of_a_chain_is_the_full_frames_pixels_in_a_buffer_the_size_of_the_region() {
+    use cine_comp::graph_model::GeneratorKind;
+    let provider = SyntheticPassProvider::new(256, 256);
+    let scene = EntityId::new();
+    let mut g = CompGraph::new();
+    let checker = g
+        .add(CompNode::read_generator(
+            "checker",
+            GeneratorKind::Checkerboard,
+            256,
+            256,
+        ))
+        .unwrap();
+    let blur = g
+        .add(CompNode::blur("blur", 6.0, BlurKind::Gaussian))
+        .unwrap();
+    g.connect(checker, 0, blur, 0).unwrap();
+    // A transform asks for the full frame upstream; its result must still
+    // come back as the region.
+    let xf = g
+        .add(CompNode::transform("xf", [3.0, -2.0], 7.0, [1.1, 1.1]))
+        .unwrap();
+    g.connect(blur, 0, xf, 0).unwrap();
+    let grade = g
+        .add(CompNode::new("grade", NodeKind::ColorCorrect).with_param("saturation", 0.4f64))
+        .unwrap();
+    g.connect(xf, 0, grade, 0).unwrap();
+    let beauty = g
+        .add(CompNode::read_previs(
+            "beauty",
+            scene,
+            PassKind::Beauty,
+            EntityId::nil(),
+        ))
+        .unwrap();
+    let merge = g.add(CompNode::merge("over", MergeOp::Over)).unwrap();
+    g.connect(grade, 0, merge, 0).unwrap();
+    g.connect(beauty, 0, merge, 1).unwrap();
+
+    let ev = Evaluator::new(Box::new(provider));
+    let full = ev.evaluate(&g, merge, 0).unwrap();
+    for roi in [
+        RegionOfInterest::new(40, 40, 64, 64),
+        RegionOfInterest::new(0, 0, 10, 10),
+        RegionOfInterest::new(230, 240, 64, 64),
+    ] {
+        let part = ev.evaluate_roi(&g, merge, 0, roi).unwrap();
+        let clipped = roi.clipped(256, 256);
+        assert_eq!(
+            part.window(),
+            (
+                clipped.x as i64,
+                clipped.y as i64,
+                clipped.width,
+                clipped.height
+            ),
+            "the result is exactly the region, clipped to the frame"
+        );
+        let mut worst = 0.0f32;
+        for y in clipped.y..clipped.y_end() {
+            for x in clipped.x..clipped.x_end() {
+                let a = part.canvas_rgba(x as i64, y as i64);
+                let b = full.get_rgba(x, y);
+                for c in 0..4 {
+                    worst = worst.max((a[c] - b[c]).abs());
+                }
+            }
+        }
+        assert!(
+            worst < 1e-5,
+            "region {roi:?} differs from the full frame by {worst}"
+        );
+    }
+}
+
+/// The blur's margin, exercised: no transform in the chain, so the blur itself
+/// receives the widened region, and the answer inside the region must still be
+/// the full frame's, at the frame's edges too.
+#[test]
+fn a_blurred_region_uses_its_margin_and_matches_the_full_frame() {
+    use cine_comp::graph_model::GeneratorKind;
+    let mut g = CompGraph::new();
+    let checker = g
+        .add(CompNode::read_generator(
+            "checker",
+            GeneratorKind::Checkerboard,
+            200,
+            120,
+        ))
+        .unwrap();
+    let blur = g
+        .add(CompNode::blur("blur", 5.0, BlurKind::Gaussian))
+        .unwrap();
+    g.connect(checker, 0, blur, 0).unwrap();
+    let ev = Evaluator::default();
+    let full = ev.evaluate(&g, blur, 0).unwrap();
+    for roi in [
+        RegionOfInterest::new(50, 30, 32, 32),
+        RegionOfInterest::new(0, 0, 20, 20),
+        RegionOfInterest::new(180, 100, 40, 40),
+    ] {
+        let part = ev.evaluate_roi(&g, blur, 0, roi).unwrap();
+        let c = roi.clipped(200, 120);
+        assert_eq!(part.window(), (c.x as i64, c.y as i64, c.width, c.height));
+        for y in c.y..c.y_end() {
+            for x in c.x..c.x_end() {
+                let (a, b) = (part.canvas_rgba(x as i64, y as i64), full.get_rgba(x, y));
+                assert!(
+                    a.iter().zip(b).all(|(p, q)| (p - q).abs() < 1e-5),
+                    "{roi:?} at ({x},{y}): {a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn measured_a_small_region_of_a_large_blurred_frame() {
+    use cine_comp::graph_model::GeneratorKind;
+    let mut g = CompGraph::new();
+    let checker = g
+        .add(CompNode::read_generator(
+            "checker",
+            GeneratorKind::Checkerboard,
+            2048,
+            2048,
+        ))
+        .unwrap();
+    let blur = g
+        .add(CompNode::blur("blur", 8.0, BlurKind::Gaussian))
+        .unwrap();
+    g.connect(checker, 0, blur, 0).unwrap();
+    let roi = RegionOfInterest::new(1000, 1000, 64, 64);
+    let ev = Evaluator::default();
+    let t = std::time::Instant::now();
+    let part = ev.evaluate_roi(&g, blur, 0, roi).unwrap();
+    let region = t.elapsed();
+    let ev = Evaluator::default();
+    let t = std::time::Instant::now();
+    let full = ev.evaluate(&g, blur, 0).unwrap();
+    let frame = t.elapsed();
+    println!(
+        "MEASURED 2048² checker → blur 8: region 64² in {:?} ({} floats), full frame in {:?} ({} floats)",
+        region,
+        part.data.len(),
+        frame,
+        full.data.len()
+    );
+    assert_eq!(
+        part.data.len(),
+        64 * 64 * 4,
+        "the region allocates the region"
+    );
 }

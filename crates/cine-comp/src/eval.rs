@@ -18,9 +18,12 @@
 //!   it through unchanged; `Transform`, `Reformat`, `Roto` and deep nodes
 //!   request the full frame.
 //!
-//! Buffers are always allocated at full format size (there is no data-window
-//! support); pixels outside the region are undefined (zero) and the region is
-//! part of the cache key.
+//! Results carry a data window ([`Image`]): a node evaluated for a region
+//! answers with a buffer the size of that region, placed on the canvas, and
+//! generators and previs passes allocate only the region. Nodes that request
+//! the full frame from upstream still compute it, and their result is cropped
+//! to the region before it is cached or passed on. The region is part of the
+//! cache key.
 
 use crate::error::{Error, Result};
 use crate::graph_model::{
@@ -279,6 +282,33 @@ impl Evaluator {
         } else {
             self.execute(node, &inputs, ctx.frame, roi)?
         };
+        // A node asked for a region answers with that region. Inputs may have
+        // been widened (a blur's kernel margin) and some nodes still compute
+        // the full frame; neither leaks out past the region, into the cache or
+        // downstream.
+        let out = match (out, roi) {
+            (Output::Image(img), Some(r)) => {
+                let (x, y, w, h) = img.window();
+                let (rx, ry) = (r.x as i64, r.y as i64);
+                // Intersect with what exists: a region past the edge of the
+                // frame is not invented.
+                let x0 = rx.max(x);
+                let y0 = ry.max(y);
+                let x1 = (rx + r.width as i64).min(x + w as i64).max(x0);
+                let y1 = (ry + r.height as i64).min(y + h as i64).max(y0);
+                if (x0, y0, x1 - x0, y1 - y0) == (x, y, w as i64, h as i64) {
+                    Output::Image(img)
+                } else {
+                    Output::Image(Arc::new(img.crop_canvas(
+                        x0,
+                        y0,
+                        (x1 - x0) as usize,
+                        (y1 - y0) as usize,
+                    )))
+                }
+            }
+            (other, _) => other,
+        };
         {
             let mut s = self.stats.lock().unwrap_or_else(|e| e.into_inner());
             s.nodes_evaluated += 1;
@@ -353,13 +383,32 @@ impl Evaluator {
                     color,
                 } => {
                     use crate::graph_model::GeneratorKind::*;
+                    // Generated over the region only: a generator is a function
+                    // of the pixel, so nothing outside the region is computed or
+                    // allocated. Same values, pixel for pixel, as the full frame.
+                    let black = [0.0, 0.0, 0.0, 1.0];
                     let img = match generator {
-                        Checkerboard => {
-                            Image::checkerboard(width, height, 16, color, [0.0, 0.0, 0.0, 1.0])
-                        }
-                        Ramp => Image::ramp(width, height, true, [0.0, 0.0, 0.0, 1.0], color),
-                        Solid => Image::solid(width, height, color),
-                        Black => Image::solid(width, height, [0.0, 0.0, 0.0, 0.0]),
+                        Checkerboard => Image::generate_window(width, height, roi, |x, y| {
+                            if ((x / 16) + (y / 16)).is_multiple_of(2) {
+                                color
+                            } else {
+                                black
+                            }
+                        }),
+                        Ramp => Image::generate_window(width, height, roi, |x, _| {
+                            let t = if width > 1 {
+                                x as f32 / (width - 1) as f32
+                            } else {
+                                0.0
+                            };
+                            let mut c = [0.0; 4];
+                            for (i, v) in c.iter_mut().enumerate() {
+                                *v = black[i] + (color[i] - black[i]) * t;
+                            }
+                            c
+                        }),
+                        Solid => Image::generate_window(width, height, roi, |_, _| color),
+                        Black => Image::generate_window(width, height, roi, |_, _| [0.0; 4]),
                     };
                     flat(img)
                 }

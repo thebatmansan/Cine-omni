@@ -92,7 +92,10 @@ fn browser_playback_is_unavailable_and_sound_says_where_it_plays() {
     let monitoring = find("audio.monitoring");
     assert_eq!(monitoring["state"], "degraded");
     let detail = monitoring["detail"].as_str().unwrap();
-    assert!(detail.contains("native window") && detail.contains("Not in the browser"), "{detail}");
+    assert!(
+        detail.contains("native window") && detail.contains("Not in the browser"),
+        "{detail}"
+    );
     // And the honest thing the browser *can* do is not oversold either.
     assert_eq!(find("media.preview")["state"], "degraded");
     assert!(find("media.preview")["detail"]
