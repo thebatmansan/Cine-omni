@@ -16,6 +16,7 @@ cine-previs.workspace = true
 cine-logistics.workspace = true
 cine-timeline.workspace = true
 cine-media.workspace = true
+cine-audio-io.workspace = true
 # The CPU colour conversion the GPU path is verified against. Without the
 # `wgpu` feature this is a small, dependency-light crate; the point is to have
 # one definition of "what colour is this picture", not two.

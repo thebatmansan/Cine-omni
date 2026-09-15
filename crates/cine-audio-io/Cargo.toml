@@ -1,0 +1,15 @@
+[package]
+name = "cine-audio-io"
+description = "Audio devices for CINE-OMNI: a sink that reaches hardware, loaded from the system at runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cine-media.workspace = true
+ucg-core.workspace = true
+# ISC. Loads the system's own libasound at runtime: nothing of ALSA (LGPL-2.1)
+# is compiled in, linked at build time or redistributed, and a machine without
+# it reports the device as unavailable instead of failing to start.
+libloading = "0.8"

@@ -318,6 +318,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cine-audio-io"
+version = "0.1.0"
+dependencies = [
+ "cine-media",
+ "libloading",
+ "ucg-core",
+]
+
+[[package]]
 name = "cine-cli"
 version = "0.1.0"
 dependencies = [
@@ -468,6 +477,7 @@ name = "cine-runtime"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cine-audio-io",
  "cine-gpu",
  "cine-jobs",
  "cine-logistics",
