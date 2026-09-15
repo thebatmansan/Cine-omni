@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Capability,
   ChangeNotification,
+  HistoryView,
+  ImpactView,
   MediaView,
   ProjectView,
   RpcClient,
+  ScriptView,
   StructureView,
   TimelineSummary,
   TimelineView,
@@ -32,11 +35,19 @@ export interface Session {
   timeline: TimelineView | null;
   media: MediaView[];
   structure: StructureView | null;
+  script: ScriptView | null;
+  history: HistoryView | null;
+  /** What the most recent change did — from this client or any other. */
+  impact: ImpactView | null;
   /** Most recent commits, newest first — the shared history, not a local log. */
   changes: ChangeNotification[];
+  /** The last refused request, in the runtime's words. */
+  refusal: string | null;
   client: RpcClient;
   selectTimeline(id: string): void;
   setTrackState(track: string, key: TrackStateKey, value: boolean): Promise<void>;
+  /** Run a mutating call; a refusal is shown, not thrown. */
+  run<T>(label: string, call: () => Promise<T>): Promise<T | null>;
   undo(): Promise<void>;
   redo(): Promise<void>;
   save(): Promise<void>;
@@ -54,6 +65,13 @@ export function runtimeUrl(): string {
   return "ws://127.0.0.1:7331/ws";
 }
 
+/**
+ * One user action produces a burst of commits — the edit, then each reactor's
+ * transaction. Refetching per commit redraws the application once per reactor.
+ * Waiting this long after the last notification of a burst refetches once.
+ */
+export const SETTLE_MS = 24;
+
 export function useSession(url: string = runtimeUrl()): Session {
   const client = useMemo(() => new RpcClient(url), [url]);
   const [connected, setConnected] = useState(false);
@@ -64,22 +82,31 @@ export function useSession(url: string = runtimeUrl()): Session {
   const [timeline, setTimeline] = useState<TimelineView | null>(null);
   const [media, setMedia] = useState<MediaView[]>([]);
   const [structure, setStructure] = useState<StructureView | null>(null);
+  const [script, setScript] = useState<ScriptView | null>(null);
+  const [history, setHistory] = useState<HistoryView | null>(null);
+  const [impact, setImpact] = useState<ImpactView | null>(null);
   const [changes, setChanges] = useState<ChangeNotification[]>([]);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const selected = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [p, list, m, s] = await Promise.all([
+      const [p, list, m, s, sc, h] = await Promise.all([
         client.project(),
         client.timelines(),
         client.media(),
         client.structure(),
+        client.script(),
+        client.history(),
       ]);
       setProject(p);
       setTimelines(list);
       setMedia(m);
       setStructure(s);
-      const want = selected.current ?? list[0]?.id ?? null;
+      setScript(sc);
+      setHistory(h);
+      const known = list.some((t) => t.id === selected.current);
+      const want = known ? selected.current : (list[0]?.id ?? null);
       selected.current = want;
       setTimeline(want ? await client.timeline(want) : null);
       setError(null);
@@ -90,6 +117,8 @@ export function useSession(url: string = runtimeUrl()): Session {
 
   useEffect(() => {
     let live = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let latest = 0;
     client.onState((open) => {
       if (!live) return;
       setConnected(open);
@@ -99,7 +128,16 @@ export function useSession(url: string = runtimeUrl()): Session {
     client.onChange((n) => {
       if (!live) return;
       setChanges((c) => [n, ...c].slice(0, 200));
-      void refresh();
+      latest = Math.max(latest, n.revision);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void refresh();
+        void client
+          .impact(latest)
+          .then((i) => live && i && setImpact(i))
+          .catch(() => {});
+      }, SETTLE_MS);
     });
     client
       .connect()
@@ -107,12 +145,15 @@ export function useSession(url: string = runtimeUrl()): Session {
         if (!live) return;
         setCapabilities(await client.capabilities());
         await refresh();
+        const last = await client.impact();
+        if (live && last) setImpact(last);
       })
       .catch((e: Error) => {
         if (live) setError(e.message);
       });
     return () => {
       live = false;
+      if (timer) clearTimeout(timer);
     };
   }, [client, refresh]);
 
@@ -124,14 +165,25 @@ export function useSession(url: string = runtimeUrl()): Session {
     [client],
   );
 
+  const run = useCallback(async <T,>(label: string, call: () => Promise<T>) => {
+    try {
+      const out = await call();
+      setRefusal(null);
+      return out;
+    } catch (e) {
+      setRefusal(`${label}: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  }, []);
+
   const setTrackState = useCallback(
     async (track: string, key: TrackStateKey, value: boolean) => {
       // No local write: the refresh that follows the broadcast is what changes
       // what is on screen, so this window learns the same way every other one
       // does.
-      await client.trackState(track, key, value);
+      await run(`track ${key}`, () => client.trackState(track, key, value));
     },
-    [client],
+    [client, run],
   );
 
   return {
@@ -143,13 +195,18 @@ export function useSession(url: string = runtimeUrl()): Session {
     timeline,
     media,
     structure,
+    script,
+    history,
+    impact,
     changes,
+    refusal,
     client,
     selectTimeline,
     setTrackState,
-    undo: async () => void (await client.undo()),
-    redo: async () => void (await client.redo()),
-    save: async () => void (await client.save()),
+    run,
+    undo: async () => void (await run("undo", () => client.undo())),
+    redo: async () => void (await run("redo", () => client.redo())),
+    save: async () => void (await run("save", () => client.save())),
     refresh,
   };
 }

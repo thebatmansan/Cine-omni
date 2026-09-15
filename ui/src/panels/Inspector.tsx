@@ -1,25 +1,43 @@
 import { Fragment } from "react";
-import { MediaView, TimelineItem, TimelineTrack, TimelineView } from "../rpc/client";
+import { useState } from "react";
+import { MediaView, ScriptView, TimelineItem, TimelineTrack, TimelineView } from "../rpc/client";
 
 /** Whatever is selected, in detail. Values come from the projection unchanged. */
 export function Inspector({
   timeline,
   selection,
   media,
+  script,
+  onConformDone,
+  onBind,
+  onUnbind,
 }: {
   timeline: TimelineView | null;
   selection: { item: TimelineItem; track: TimelineTrack } | null;
   media: MediaView | null;
+  script?: ScriptView | null;
+  onConformDone?(clip: string): void;
+  onBind?(clip: string, scene: string): void;
+  onUnbind?(clip: string, scene: string): void;
 }) {
   return (
-    <div className="panel inspector">
-      <div className="panel-head">
-        <span>Inspector</span>
-        <span className="spacer" />
-        <span className="count">{selection ? selection.item.kind : media ? "media" : "—"}</span>
-      </div>
+    <div className="inspector">
       <div className="panel-body pad">
-        {selection && <ClipDetail item={selection.item} track={selection.track} />}
+        {selection && (
+          <>
+            <ClipDetail item={selection.item} track={selection.track} />
+            {selection.item.kind === "clip" && selection.item.id && (
+              <Context
+                item={selection.item}
+                clip={selection.item.id}
+                script={script ?? null}
+                onConformDone={onConformDone}
+                onBind={onBind}
+                onUnbind={onUnbind}
+              />
+            )}
+          </>
+        )}
         {!selection && media && <MediaDetail media={media} />}
         {!selection && !media && (
           <div className="empty">Select a clip or a media item.</div>
@@ -39,6 +57,74 @@ export function Inspector({
         )}
       </div>
     </div>
+  );
+}
+
+/** Where a clip stands in the production: conform state and scene bindings. */
+function Context({
+  item,
+  clip,
+  script,
+  onConformDone,
+  onBind,
+  onUnbind,
+}: {
+  item: TimelineItem;
+  clip: string;
+  script: ScriptView | null;
+  onConformDone?(clip: string): void;
+  onBind?(clip: string, scene: string): void;
+  onUnbind?(clip: string, scene: string): void;
+}) {
+  const scenes = script?.documents.flatMap((d) => d.scenes) ?? [];
+  const [pick, setPick] = useState("");
+  const bound = scenes.filter((s) => item.scenes.includes(s.id));
+  const unbound = scenes.filter((s) => !item.scenes.includes(s.id));
+  return (
+    <>
+      <div className="section-title">Conform</div>
+      {item.needs_conform ? (
+        <div className="notice">
+          <strong>Needs conforming</strong>
+          {item.conform_reason ?? "Its source changed."}
+          <div style={{ marginTop: 6 }}>
+            <button onClick={() => onConformDone?.(clip)}>Mark conformed</button>
+          </div>
+        </div>
+      ) : (
+        <div className="hint">Up to date with everything it is bound to.</div>
+      )}
+      <div className="section-title">Scenes</div>
+      {bound.length === 0 && <div className="hint">Not bound to any scene; script changes will not reach it.</div>}
+      {bound.map((s) => (
+        <div key={s.id} className="binding">
+          <span className="label">{s.heading}</span>
+          <button onClick={() => onUnbind?.(clip, s.id)}>Unbind</button>
+        </div>
+      ))}
+      {unbound.length > 0 && (
+        <div className="binding">
+          <select value={pick} onChange={(e) => setPick(e.target.value)} aria-label="scene to bind">
+            <option value="">Bind to scene…</option>
+            {unbound.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.number ? `${s.number}. ` : ""}
+                {s.heading}
+              </option>
+            ))}
+          </select>
+          <button
+            disabled={!pick}
+            onClick={() => {
+              onBind?.(clip, pick);
+              setPick("");
+            }}
+          >
+            Bind
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

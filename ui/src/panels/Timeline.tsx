@@ -1,38 +1,66 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TimelineItem, TimelineTrack, TimelineView, TrackStateKey } from "../rpc/client";
+import type { EditOp, TimelineItem, TimelineTrack, TimelineView, TrackStateKey } from "../rpc/client";
+import {
+  TOOLS,
+  Tool,
+  editFor,
+  frameLabel,
+  framesIn,
+  sequenceRate,
+  snap,
+  snapTargets,
+} from "../editing/edit";
 import { tickPositions } from "./geometry";
 
 /**
- * The cut, as the runtime composed it.
+ * The cut, as the runtime composed it, and the tools that change it.
  *
  * Every position on screen comes from `item.at`, which the runtime computed
  * from exact rational time. Nothing here adds durations together: doing that in
- * the browser would be a second implementation of composition, in a language
- * with one number type, and it would eventually disagree with the engine.
+ * the browser would be a second implementation of composition.
  *
- * `seconds` is used only to turn a time into an x coordinate, which is the one
- * place a float cannot cause a wrong cut.
+ * A drag shows a guide and the frame count it means while the hand is moving —
+ * that is gesture feedback, not project state. On release the gesture becomes
+ * one edit, the runtime applies it (clamped to real media, carried to linked
+ * material) and the redraw that follows is the runtime's answer.
  */
 export function Timeline({
   timeline,
   selected,
   onSelect,
-  playhead,
+  playheadSeconds,
   onScrub,
   onTrackState,
+  onEdit,
+  tool,
+  onTool,
+  snapping,
+  onSnapping,
+  linked,
+  onLinked,
+  lastApplied,
 }: {
   timeline: TimelineView | null;
   selected: string | null;
   onSelect(item: TimelineItem, track: TimelineTrack): void;
-  playhead: number;
+  playheadSeconds: number;
   onScrub(seconds: number): void;
   onTrackState(track: string, key: TrackStateKey, value: boolean): void;
+  onEdit(track: TimelineTrack, op: EditOp): void;
+  tool: Tool;
+  onTool(t: Tool): void;
+  snapping: boolean;
+  onSnapping(on: boolean): void;
+  linked: boolean;
+  onLinked(on: boolean): void;
+  lastApplied: string | null;
 }) {
   const [pxPerSecond, setPxPerSecond] = useState(90);
+  const [drag, setDrag] = useState<Drag | null>(null);
   const lanes = useRef<HTMLDivElement>(null);
 
   const duration = timeline?.duration.seconds ?? 0;
-  const width = Math.max(600, duration * pxPerSecond + 40);
+  const width = Math.max(600, duration * pxPerSecond + 200);
 
   // Ctrl/⌘ + wheel zooms, as it does in every timeline a cutter has used.
   useEffect(() => {
@@ -56,30 +84,99 @@ export function Timeline({
   );
 
   const ticks = useMemo(() => tickPositions(duration, pxPerSecond), [duration, pxPerSecond]);
+  const targets = useMemo(
+    () => (timeline ? snapTargets(timeline, playheadSeconds) : []),
+    [timeline, playheadSeconds],
+  );
+
+  // The drag lives on the window so it survives leaving the clip.
+  useEffect(() => {
+    if (!drag || !timeline) return;
+    const rate = sequenceRate(timeline);
+    const move = (e: MouseEvent) => {
+      const raw = (e.clientX - drag.startX) / pxPerSecond;
+      const origin = drag.origin;
+      let dx = raw;
+      if (snapping && drag.gesture !== "slip") {
+        const s = snap(origin + raw, targets, pxPerSecond, 8, origin);
+        dx = s.position - origin;
+        setDrag((d) => d && { ...d, dx, snapped: s.snapped });
+        return;
+      }
+      setDrag((d) => d && { ...d, dx, snapped: false });
+    };
+    const up = () => {
+      const gesture =
+        drag.gesture === "head" || drag.gesture === "tail"
+          ? { kind: "edge" as const, edge: drag.gesture, dxSeconds: drag.dx }
+          : { kind: "body" as const, dxSeconds: drag.dx };
+      const op = editFor(tool, gesture, drag.item, drag.track, rate);
+      setDrag(null);
+      if (op) onEdit(drag.track, op);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  }, [drag, timeline, pxPerSecond, snapping, targets, tool, onEdit]);
 
   if (!timeline) {
     return (
       <div className="panel timeline">
         <div className="panel-head">Timeline</div>
         <div className="empty">
-          No sequence in this project.
-          <br />
-          Import one with <code>cine import</code>, or open a project that has a cut.
+          No sequence in this project. Create one from <strong>Project → New sequence</strong>,
+          or import a cut.
         </div>
       </div>
     );
   }
 
+  const rate = sequenceRate(timeline);
+  const dragFrames = drag ? framesIn(drag.dx, rate) : 0;
+
   return (
     <div className="panel timeline">
-      <div className="panel-head">
+      <div className="panel-head timeline-head">
         <span>Timeline</span>
         <span className="count">{timeline.name}</span>
-        <span className="count">{timeline.duration.timecode}</span>
+        <div className="toolbar" role="toolbar" aria-label="editing tools">
+          {TOOLS.map((t) => (
+            <button
+              key={t.id}
+              aria-pressed={tool === t.id}
+              title={`${t.help} (${t.key.toUpperCase()})`}
+              onClick={() => onTool(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+          <span className="sep" />
+          <button aria-pressed={snapping} title="Snap to cuts and the playhead (S)" onClick={() => onSnapping(!snapping)}>
+            Snap
+          </button>
+          <button
+            aria-pressed={linked}
+            title="Edits carry to linked picture and sound (⇧L)"
+            onClick={() => onLinked(!linked)}
+          >
+            Linked
+          </button>
+        </div>
         <span className="spacer" />
-        <span className="count">{Math.round(pxPerSecond)} px/s · ⌘-scroll to zoom</span>
+        {drag && (
+          <span className={`count drag-readout${drag.snapped ? " snapped" : ""}`}>
+            {frameLabel(dragFrames)}
+            {drag.snapped ? " · snapped" : ""}
+          </span>
+        )}
+        {!drag && lastApplied && <span className="count">{lastApplied}</span>}
+        <span className="count">{timeline.duration.timecode}</span>
+        <span className="count">{Math.round(pxPerSecond)} px/s</span>
       </div>
-      <div className="timeline-body" ref={lanes}>
+      <div className={`timeline-body tool-${tool}`} ref={lanes}>
         <div className="timeline-grid" style={{ gridTemplateColumns: `150px ${width}px` }}>
           <div className="ruler-corner" />
           <div className="ruler">
@@ -92,21 +189,35 @@ export function Timeline({
                   </div>
                 </div>
               ))}
-              <div className="playhead" style={{ left: playhead * pxPerSecond }} />
+              <div className="playhead" style={{ left: playheadSeconds * pxPerSecond }} />
             </div>
           </div>
 
           {timeline.tracks.map((track) => (
             <TrackRow
-              key={track.index}
+              key={track.id ?? track.index}
               track={track}
               width={width}
               pxPerSecond={pxPerSecond}
-              playhead={playhead}
+              playheadSeconds={playheadSeconds}
               selected={selected}
+              tool={tool}
+              drag={drag}
               onSelect={onSelect}
               onScrub={scrubTo}
               onTrackState={onTrackState}
+              onBeginDrag={(item, gesture, e) => {
+                const origin =
+                  gesture === "tail" ? item.at.end.seconds : item.at.start.seconds;
+                setDrag({ item, track, gesture, startX: e.clientX, origin, dx: 0, snapped: false });
+              }}
+              onRazor={(item, e) => {
+                const box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                let at = (e.clientX - box.left) / pxPerSecond;
+                if (snapping) at = snap(at, targets, pxPerSecond).position;
+                const op = editFor("razor", { kind: "click", atSeconds: at }, item, track, rate);
+                if (op) onEdit(track, op);
+              }}
             />
           ))}
         </div>
@@ -115,24 +226,43 @@ export function Timeline({
   );
 }
 
+interface Drag {
+  item: TimelineItem;
+  track: TimelineTrack;
+  gesture: "head" | "tail" | "slip" | "slide";
+  startX: number;
+  /** Where the dragged edge (or the clip's head) started, in seconds. */
+  origin: number;
+  dx: number;
+  snapped: boolean;
+}
+
 function TrackRow({
   track,
   width,
   pxPerSecond,
-  playhead,
+  playheadSeconds,
   selected,
+  tool,
+  drag,
   onSelect,
   onScrub,
   onTrackState,
+  onBeginDrag,
+  onRazor,
 }: {
   track: TimelineTrack;
   width: number;
   pxPerSecond: number;
-  playhead: number;
+  playheadSeconds: number;
   selected: string | null;
+  tool: Tool;
+  drag: Drag | null;
   onSelect(item: TimelineItem, track: TimelineTrack): void;
   onScrub(e: React.MouseEvent<HTMLDivElement>): void;
   onTrackState(track: string, key: TrackStateKey, value: boolean): void;
+  onBeginDrag(item: TimelineItem, gesture: Drag["gesture"], e: React.MouseEvent): void;
+  onRazor(item: TimelineItem, e: React.MouseEvent<HTMLDivElement>): void;
 }) {
   const flag = (key: TrackStateKey, label: string, on: boolean, title: string) => (
     <button
@@ -146,6 +276,13 @@ function TrackRow({
       {label}
     </button>
   );
+
+  const guide =
+    drag && drag.track.id === track.id
+      ? (drag.gesture === "tail" || drag.gesture === "head" || drag.gesture === "slide"
+          ? drag.origin + drag.dx
+          : null)
+      : null;
 
   return (
     <>
@@ -168,15 +305,20 @@ function TrackRow({
       >
         {track.items.map((item) => (
           <Clip
-            key={`${item.index}-${item.name}`}
+            key={item.id ?? `${item.index}-${item.name}`}
             item={item}
             track={track}
             pxPerSecond={pxPerSecond}
             selected={selected === itemKey(item, track)}
+            tool={tool}
+            dragging={drag?.item.id === item.id && drag?.track.id === track.id}
             onSelect={onSelect}
+            onBeginDrag={onBeginDrag}
+            onRazor={onRazor}
           />
         ))}
-        <div className="playhead" style={{ left: playhead * pxPerSecond }} />
+        {guide != null && <div className="edit-guide" style={{ left: guide * pxPerSecond }} />}
+        <div className="playhead" style={{ left: playheadSeconds * pxPerSecond }} />
       </div>
     </>
   );
@@ -187,30 +329,78 @@ function Clip({
   track,
   pxPerSecond,
   selected,
+  tool,
+  dragging,
   onSelect,
+  onBeginDrag,
+  onRazor,
 }: {
   item: TimelineItem;
   track: TimelineTrack;
   pxPerSecond: number;
   selected: boolean;
+  tool: Tool;
+  dragging: boolean;
   onSelect(item: TimelineItem, track: TimelineTrack): void;
+  onBeginDrag(item: TimelineItem, gesture: Drag["gesture"], e: React.MouseEvent): void;
+  onRazor(item: TimelineItem, e: React.MouseEvent<HTMLDivElement>): void;
 }) {
   const left = item.at.start.seconds * pxPerSecond;
   const width = Math.max(2, item.at.duration.seconds * pxPerSecond);
   const kindClass =
     item.kind === "clip" ? track.kind : item.kind === "gap" ? "gap" : "transition";
+  const editable = item.kind !== "transition" && !track.locked;
+  const edges = editable && width > 10 && (tool === "select" || tool === "ripple" || tool === "roll");
+  const title = [
+    `${item.name} · ${item.at.start.timecode} → ${item.at.end.timecode}`,
+    item.needs_conform ? `Needs conform: ${item.conform_reason ?? "source changed"}` : null,
+    item.link ? `Linked: ${item.link}` : null,
+    item.scenes.length ? `Bound to ${item.scenes.length} scene(s)` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return (
     <div
-      className={`clip ${kindClass}${item.enabled ? "" : " disabled"}`}
+      className={`clip ${kindClass}${item.enabled ? "" : " disabled"}${item.needs_conform ? " conform" : ""}${dragging ? " dragging" : ""}`}
       style={{ left, width }}
       aria-selected={selected}
-      title={`${item.name} · ${item.at.start.timecode} → ${item.at.end.timecode}`}
+      title={title}
       onMouseDown={(e) => {
         e.stopPropagation();
         onSelect(item, track);
+        if (!editable) return;
+        if (tool === "razor") onRazor(item, e);
+        else if (tool === "slip" || tool === "slide") onBeginDrag(item, tool, e);
       }}
     >
-      {width > 26 && <div className="clip-name">{item.name}</div>}
+      {edges && (
+        <div
+          className="clip-edge head"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onSelect(item, track);
+            onBeginDrag(item, "head", e);
+          }}
+        />
+      )}
+      {width > 26 && (
+        <div className="clip-name">
+          {item.needs_conform && <span className="glyph conform-glyph">!</span>}
+          {item.link && <span className="glyph">∞</span>}
+          {item.scenes.length > 0 && <span className="glyph">SC</span>}
+          {item.name}
+        </div>
+      )}
+      {edges && (
+        <div
+          className="clip-edge tail"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onSelect(item, track);
+            onBeginDrag(item, "tail", e);
+          }}
+        />
+      )}
     </div>
   );
 }

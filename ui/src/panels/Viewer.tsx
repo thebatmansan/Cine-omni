@@ -18,11 +18,22 @@ export function Viewer({
   capabilities,
   index,
   onIndex,
+  title = "Viewer",
+  marks,
+  onMark,
+  active,
+  onActivate,
 }: {
   media: MediaView | null;
   capabilities: Capability[];
   index: number;
   onIndex(next: number): void;
+  title?: string;
+  /** In and out pictures marked on this media, when this is a source monitor. */
+  marks?: { in: number | null; out: number | null };
+  onMark?(which: "in" | "out" | "clear"): void;
+  active?: boolean;
+  onActivate?(): void;
 }) {
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -84,9 +95,9 @@ export function Viewer({
   const step = (by: number) => onIndex(Math.max(0, Math.min(frames - 1, index + by)));
 
   return (
-    <div className="panel viewer">
+    <div className={`panel viewer${active ? " active" : ""}`} onMouseDown={onActivate}>
       <div className="panel-head">
-        <span>Viewer</span>
+        <span>{title}</span>
         {media && <span className="count">{media.name}</span>}
         <span className="spacer" />
         {decodeMs !== null && <span className="count">decode {decodeMs.toFixed(0)} ms</span>}
@@ -136,6 +147,16 @@ export function Viewer({
           onChange={(e) => onIndex(Number(e.target.value))}
           aria-label="picture"
         />
+        {onMark && (
+          <>
+            <button onClick={() => onMark("in")} disabled={!decodable} title="Mark in (I)">
+              In{marks?.in != null ? ` #${marks.in}` : ""}
+            </button>
+            <button onClick={() => onMark("out")} disabled={!decodable} title="Mark out (O)">
+              Out{marks?.out != null ? ` #${marks.out}` : ""}
+            </button>
+          </>
+        )}
         <span className="spacer" />
         {loading && <span className="of">decoding…</span>}
         {/* The play control that does not exist says why, rather than being a
@@ -149,7 +170,7 @@ export function Viewer({
         </span>
       </div>
 
-      {preview && (
+      {preview && !onMark && (
         <div className="notice">
           <strong>Frame-accurate preview, not playback</strong>
           {preview.detail}

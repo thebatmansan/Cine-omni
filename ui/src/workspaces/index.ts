@@ -20,13 +20,7 @@ export interface WorkspaceDef {
 export const WORKSPACES: WorkspaceDef[] = [
   { id: "editorial", name: "Editorial", gate: "editorial.timeline" },
   { id: "media", name: "Media", gate: "media.preview" },
-  {
-    id: "script",
-    name: "Script",
-    pending:
-      "Scenes, dialogue and breakdown are in the project and visible in the browser; " +
-      "a screenplay editor is not built.",
-  },
+  { id: "script", name: "Script", gate: "script.lines" },
   { id: "storyboard", name: "Storyboard", pending: "Board frames exist in the schema; nothing is built." },
   { id: "previs", name: "Shot / Previs", pending: "Previs cameras and stages are in the graph; no viewport exists." },
   { id: "animation", name: "3D / Animation", pending: "Not started. No 3D workspace exists." },

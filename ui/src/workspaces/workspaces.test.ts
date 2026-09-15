@@ -29,6 +29,16 @@ describe("workspace gating", () => {
     }
   });
 
+  it("opens the script workspace only when the runtime reports script lines", () => {
+    const def = WORKSPACES.find((w) => w.id === "script")!;
+    expect(canOpen(def, caps)).toBe(false);
+    const withScript: Capability[] = [
+      ...caps,
+      { id: "script.lines", name: "Script", group: "Script", state: "degraded", detail: "lines only" },
+    ];
+    expect(canOpen(def, withScript)).toBe(true);
+  });
+
   it("gives a reason for everything it will not open", () => {
     for (const def of WORKSPACES) {
       if (canOpen(def, caps)) continue;

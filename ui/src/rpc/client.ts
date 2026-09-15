@@ -12,6 +12,142 @@ export interface ChangeNotification {
 export interface CascadeResult {
   label: string;
   deltas: { revision: number; label: string; depth: number; ops: number }[];
+  /** Present on every method that changes the project. */
+  impact?: ImpactView;
+}
+
+/** An exact time as the wire carries it. Extra display fields are ignored. */
+export interface ExactTime {
+  ticks: number;
+  rate_num: number;
+  rate_den: number;
+}
+
+export interface ExactRange {
+  start_time: ExactTime;
+  duration: ExactTime;
+}
+
+export type Edge = "head" | "tail";
+
+/** New material: a range of an asset the project already holds. */
+export interface ClipSpec {
+  media: string;
+  source_range: ExactRange;
+  name?: string;
+}
+
+/** An edit, exactly as `cine_timeline::EditOp` deserializes it. */
+export type EditOp =
+  | { op: "ripple_trim"; index: number; edge: Edge; delta: ExactTime }
+  | { op: "roll"; cut: number; delta: ExactTime }
+  | { op: "slip"; index: number; delta: ExactTime }
+  | { op: "slide"; index: number; delta: ExactTime }
+  | { op: "split_at"; time: ExactTime }
+  | { op: "extract"; range: ExactRange }
+  | { op: "lift"; range: ExactRange }
+  | { op: "insert"; time: ExactTime; clip: ClipSpec }
+  | { op: "overwrite"; time: ExactTime; clip: ClipSpec }
+  | { op: "replace"; index: number; clip: ClipSpec }
+  | { op: "join"; index: number };
+
+export interface EditResult {
+  outcome: {
+    label: string;
+    requested: Time | null;
+    applied: Time | null;
+    clamped: boolean;
+    item: string | null;
+    changed_tracks: string[];
+    linked_clips: number;
+  };
+  cascade: CascadeResult;
+  impact: ImpactView;
+}
+
+export interface ImpactEntity {
+  id: string;
+  kind: string;
+  name: string | null;
+  change: "created" | "deleted" | "changed";
+  attrs: string[];
+  edges: number;
+  reason: string | null;
+}
+
+export interface ImpactView {
+  label: string;
+  revisions: number[];
+  steps: {
+    revision: number;
+    depth: number;
+    cause: number | null;
+    by: string;
+    action: string;
+    ops: number;
+    actor: string;
+  }[];
+  departments: { department: string; count: number; entities: ImpactEntity[] }[];
+  conform: { clip: string; name: string | null; reason: string | null }[];
+  entities: number;
+}
+
+export interface HistoryEntry {
+  label: string;
+  first: number | null;
+  last: number | null;
+  deltas: number;
+  cascade: number;
+  actor: string | null;
+}
+
+export interface HistoryView {
+  undo: HistoryEntry[];
+  redo: HistoryEntry[];
+  undo_depth: number;
+  redo_depth: number;
+}
+
+export interface ScriptElement {
+  id: string;
+  kind: string;
+  text: string | null;
+  character: string | null;
+}
+
+export interface ScriptScene {
+  id: string;
+  heading: string | null;
+  number: string | null;
+  words: number | null;
+  eighths: number | null;
+  est_duration_s: number | null;
+  characters: string[] | null;
+  elements: ScriptElement[];
+  clips: {
+    id: string;
+    name: string;
+    timeline: string | null;
+    track: string | null;
+    needs_conform: boolean;
+    reason: string | null;
+  }[];
+}
+
+export interface ScriptView {
+  documents: { id: string; name: string; source_key: string | null; scenes: ScriptScene[] }[];
+}
+
+export interface PictureAt {
+  black: boolean;
+  track?: string | null;
+  track_name?: string;
+  clip?: string | null;
+  name?: string;
+  asset?: string | null;
+  online?: boolean | null;
+  source?: Time;
+  index?: number | null;
 }
 
 export interface SceneSummary {
@@ -92,6 +228,12 @@ export interface TimelineItem {
   available_range: Span | null;
   handles: { head: Time; tail: Time } | null;
   link: string | null;
+  needs_conform: boolean;
+  conform_reason: string | null;
+  /** Scenes (or shots) this clip is bound to. */
+  scenes: string[];
+  /** The asset entity the clip plays. */
+  asset: string | null;
 }
 
 export interface TimelineTrack {
@@ -257,4 +399,22 @@ export class RpcClient {
   importOtio(text: string, key?: string) { return this.call<{ id: string }>("import_otio", { text, key }); }
   structure() { return this.call<StructureView>("structure"); }
   exportAs(what: string, scene?: number) { return this.call<string>("export", { what, scene }); }
+  edit(track: string, op: EditOp, linked = true) {
+    return this.call<EditResult>("edit", { track, op, linked });
+  }
+  place(tracks: string[], time: ExactTime, clip: ClipSpec, mode: "insert" | "overwrite") {
+    return this.call<CascadeResult & { clips: string[] }>("place", { tracks, time, clip, mode });
+  }
+  newTimeline(name: string, rate_num: number, rate_den: number) {
+    return this.call<CascadeResult & { id: string }>("new_timeline", { name, rate_num, rate_den });
+  }
+  link(clips: string[], group: string | null) { return this.call<CascadeResult>("link", { clips, group }); }
+  bindClip(clip: string, scene: string) { return this.call<CascadeResult>("bind_clip", { clip, scene }); }
+  unbindClip(clip: string, scene: string) { return this.call<CascadeResult>("unbind_clip", { clip, scene }); }
+  conformDone(clip: string) { return this.call<CascadeResult>("conform_done", { clip }); }
+  script() { return this.call<ScriptView>("script"); }
+  impact(revision?: number) { return this.call<ImpactView | null>("impact", revision == null ? {} : { revision }); }
+  history(limit = 100) { return this.call<HistoryView>("history", { limit }); }
+  pictureAt(timeline: string, time: ExactTime) { return this.call<PictureAt>("picture_at", { timeline, time }); }
+  importFountain(text: string, key?: string) { return this.call<unknown>("import_fountain", { text, key }); }
 }
