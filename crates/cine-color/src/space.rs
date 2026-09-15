@@ -371,6 +371,28 @@ pub fn bradford_adaptation(src: [f64; 2], dst: [f64; 2]) -> Mat3 {
     inv.mul(&scale).mul(&BRADFORD)
 }
 
+/// The CAT02 cone response matrix (CIECAM02).
+pub const CAT02: Mat3 = Mat3([
+    [0.7328, 0.4296, -0.1624],
+    [-0.7036, 1.6975, 0.0061],
+    [0.0030, 0.0136, 0.9834],
+]);
+
+/// RGB (src primaries) → RGB (dst primaries) with CAT02 adaptation between the
+/// white points — what Canon's ACES transforms use, where Bradford is off by
+/// 5e-3 in the matrix.
+pub fn rgb_to_rgb_matrix_cat02(src: &Primaries, dst: &Primaries) -> Mat3 {
+    let ws = CAT02.apply(xy_to_xyz(src.w));
+    let wd = CAT02.apply(xy_to_xyz(dst.w));
+    let scale = Mat3::diag([wd[0] / ws[0], wd[1] / ws[1], wd[2] / ws[2]]);
+    let cat = CAT02
+        .inverse()
+        .unwrap_or(Mat3::IDENTITY)
+        .mul(&scale)
+        .mul(&CAT02);
+    dst.xyz_to_rgb().mul(&cat).mul(&src.rgb_to_xyz())
+}
+
 /// RGB (src primaries) → RGB (dst primaries) including Bradford adaptation
 /// between the two white points.
 pub fn rgb_to_rgb_matrix(src: &Primaries, dst: &Primaries) -> Mat3 {

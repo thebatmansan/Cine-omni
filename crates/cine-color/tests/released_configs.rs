@@ -150,3 +150,89 @@ fn measured_view_coverage_of_the_released_configs() {
         failures.join("\n")
     );
 }
+
+/// Every colorspace of the released configs, converted from ACES2065-1 and
+/// back, against OpenColorIO converting the same file
+/// (`tests/data/config-colorspaces.tsv`, from `generate_config_colorspaces.py`).
+#[test]
+fn every_colorspace_converts_as_opencolorio_does() {
+    use std::collections::BTreeMap;
+    let text = include_str!("data/config-colorspaces.tsv");
+    let mut configs: BTreeMap<String, Config> = BTreeMap::new();
+    let mut compiled: BTreeMap<
+        (String, String, String),
+        Result<cine_color::processor::Processor, String>,
+    > = BTreeMap::new();
+    let (mut worst, mut samples, mut adjudicated) = (0.0f64, 0, 0);
+    let mut failures = Vec::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')).skip(1) {
+        let f: Vec<&str> = line.split('\t').collect();
+        let key = (f[0].to_string(), f[1].to_string(), f[2].to_string());
+        let v: Vec<f64> = f[3..].iter().map(|s| s.parse().unwrap()).collect();
+        let config = configs.entry(key.0.clone()).or_insert_with(|| load(&key.0));
+        let p = compiled
+            .entry(key.clone())
+            .or_insert_with(|| config.processor(&key.1, &key.2).map_err(|e| e.to_string()));
+        let p = match p {
+            Ok(p) => p,
+            // Adjudicated: the Academy defines ADX → ACES only (see `ocio::adx`).
+            Err(e) if key.1 == "ACES2065-1" && key.2.starts_with("ADX") => {
+                assert!(e.contains("inverse"), "{e}");
+                adjudicated += 1;
+                continue;
+            }
+            Err(e) => {
+                failures.push(format!("{key:?}: refused: {e}"));
+                continue;
+            }
+        };
+        let got = p.apply_f64([v[0], v[1], v[2]]);
+        // Adjudicated: for linear AP1 ≤ 0 the Academy's `lin_to_ACEScc` returns
+        // (log2(2^-16) + 9.72) / 17.52 = -0.3584474886; OpenColorIO returns
+        // -0.36, the end of its LUT's range. The reference is exact; it wins.
+        if key.2 == "ACEScc" {
+            for c in 0..3 {
+                if (v[3 + c] + 0.36).abs() < 1e-6 {
+                    assert!((got[c] + 0.358_447_488_6).abs() < 1e-9, "{got:?}");
+                    adjudicated += 1;
+                }
+            }
+            if (0..3).any(|c| (v[3 + c] + 0.36).abs() < 1e-6) {
+                continue;
+            }
+        }
+        // Relative above 1e-2, absolute below; float32 in OpenColorIO, and the
+        // same near-zero allowance as the views for curves with unbounded slope.
+        let err = (0..3)
+            .map(|c| {
+                let d = (got[c] - v[3 + c]).abs();
+                if got[c].abs().max(v[3 + c].abs()) < 1e-3 {
+                    d * 2e-5 / 1e-3
+                } else {
+                    d / v[3 + c].abs().max(1e-2)
+                }
+            })
+            .fold(0.0, f64::max);
+        worst = worst.max(err);
+        samples += 1;
+        if err > 1e-4 || !p.approximations().is_empty() {
+            failures.push(format!(
+                "{key:?} {:?}: {got:?} vs OCIO {:?} ({err:.2e})",
+                &v[..3],
+                &v[3..]
+            ));
+        }
+    }
+    println!(
+        "MEASURED {} conversions, {samples} samples compared: {} compile, worst error {worst:.1e}; \
+         {adjudicated} samples where the Academy reference and OpenColorIO differ (adjudicated)",
+        compiled.len(),
+        compiled.values().filter(|r| r.is_ok()).count()
+    );
+    assert!(
+        failures.is_empty(),
+        "{} disagree:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

@@ -28,6 +28,26 @@ notice_file = "none upstream"
 obligations = "Apache-2.0 §4: ship the license text; keep the attribution header in aces2.rs; state changes."
 
 [[entry]]
+project = "aces-input-and-colorspaces (Academy colour space conversions)"
+url = "https://github.com/aces-aswf/aces-input-and-colorspaces"
+version = "commit 29b722bccd529460696a8382394504cae2e88419"
+license = "Apache-2.0"
+copyright = "Contributors to the ACES Project"
+integration = "port"
+used_by = ["crates/cine-color/src/ocio.rs (apple_log, adx)"]
+source_files = [
+  "apple/CSC.Apple.AppleLog_to_ACES.ctl",
+  "apple/CSC.Apple.ACES_to_AppleLog.ctl",
+  "ADX/CSC.Academy.ADX10_to_ACES.ctl",
+  "ADX/CSC.Academy.ADX16_to_ACES.ctl",
+  "ACEScc/CSC.Academy.ACES_to_ACEScc.ctl (consulted to adjudicate ACEScc below zero)",
+]
+modifications = "Translated from CTL to Rust. ADX is forward-only, as the reference defines it."
+license_text = "licenses/aces-input-and-colorspaces-Apache-2.0.txt"
+notice_file = "none upstream"
+obligations = "Apache-2.0 §4: ship the license text; keep the attribution comments; state changes."
+
+[[entry]]
 project = "OpenColorIO-Config-ACES (released configs as shipped in OpenColorIO 2.5.2)"
 url = "https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES"
 version = "cg-config-v4.0.0_aces-v2.0_ocio-v2.5, studio-config-v4.0.0_aces-v2.0_ocio-v2.5"
@@ -50,6 +70,7 @@ used_by = [
   "crates/cine-color/tests/data/generate_display_styles.py",
   "crates/cine-color/tests/data/generate_aces2.py",
   "crates/cine-color/tests/data/generate_config_views.py",
+  "crates/cine-color/tests/data/generate_config_colorspaces.py",
 ]
 modifications = "none; not linked, not shipped. Its outputs are committed as reference values (*.tsv)."
 obligations = "none for the application: compatibility is established by comparing outputs, and nothing from it is compiled in."

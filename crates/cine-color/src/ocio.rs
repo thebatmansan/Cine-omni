@@ -9,9 +9,10 @@
 
 use crate::error::{Error, Result};
 use crate::lut::{parse_cube, Interpolation, Lut};
-use crate::processor::{Direction, LogParams, Op, Processor};
+use crate::processor::{Direction, LogParams, NegativeStyle, Op, Processor};
 use crate::space::{
-    bradford_adaptation, rgb_to_rgb_matrix, Mat3, Primaries, WHITE_ACES, WHITE_D65,
+    bradford_adaptation, rgb_to_rgb_matrix, rgb_to_rgb_matrix_cat02, Mat3, Primaries, WHITE_ACES,
+    WHITE_D65,
 };
 use crate::transfer::Transfer;
 use crate::yaml::{self, Yaml};
@@ -37,6 +38,7 @@ pub enum TransformDef {
     Exponent {
         value: [f64; 4],
         direction: Direction,
+        negative: NegativeStyle,
     },
     ExponentWithLinear {
         gamma: [f64; 4],
@@ -328,6 +330,16 @@ fn parse_transform(y: &Yaml) -> Result<TransformDef> {
         "ExponentTransform" => TransformDef::Exponent {
             value: floats_n(y.get("value"), [1.0; 4], "value")?,
             direction: dir,
+            negative: match y.get("style").and_then(Yaml::as_str) {
+                None | Some("linear") => NegativeStyle::Clamp,
+                Some("mirror") => NegativeStyle::Mirror,
+                Some("pass_thru") => NegativeStyle::PassThru,
+                Some(other) => {
+                    return Err(Error::Unsupported(format!(
+                        "ExponentTransform style `{other}`"
+                    )))
+                }
+            },
         },
         "ExponentWithLinearTransform" => TransformDef::ExponentWithLinear {
             gamma: floats_n(y.get("gamma"), [1.0; 4], "gamma")?,
@@ -824,9 +836,11 @@ impl Config {
             TransformDef::Exponent {
                 value,
                 direction: d,
+                negative,
             } => vec![Op::Exponent {
                 value: three(*value),
                 direction: combine(*d),
+                negative: *negative,
             }],
             TransformDef::ExponentWithLinear {
                 gamma,
@@ -1717,9 +1731,18 @@ fn write_transform(t: &TransformDef, indent: usize) -> String {
                 dir_str(*direction)
             )
         }
-        TransformDef::Exponent { value, direction } => format!(
-            "!<ExponentTransform> {{value: {}{}}}",
+        TransformDef::Exponent {
+            value,
+            direction,
+            negative,
+        } => format!(
+            "!<ExponentTransform> {{value: {}{}{}}}",
             nums(value),
+            match negative {
+                NegativeStyle::Clamp => "",
+                NegativeStyle::Mirror => ", style: mirror",
+                NegativeStyle::PassThru => ", style: pass_thru",
+            },
             dir_str(*direction)
         ),
         TransformDef::ExponentWithLinear {
@@ -1873,6 +1896,113 @@ fn write_colorspace(s: &mut String, c: &ColorSpaceDef, display: bool) {
 // Builtin transforms
 // ---------------------------------------------------------------------------
 
+/// Apple Log decode (code → Rec.2020 linear), from the Academy's
+/// `CSC.Apple.AppleLog_to_ACES` / `ACES_to_AppleLog` (aces-input-and-colorspaces,
+/// Apache-2.0, commit 29b722bc). Below the curve's floor both directions clamp,
+/// as the reference does.
+fn apple_log() -> Op {
+    const R_0: f64 = -0.05641088;
+    const R_T: f64 = 0.01;
+    const C: f64 = 47.28711236;
+    const B: f64 = 0.00964052;
+    const G: f64 = 0.08550479;
+    const D: f64 = 0.69336945;
+    let p_t = C * (R_T - R_0).powi(2);
+    Op::custom_invertible(
+        "Apple Log decode",
+        move |c| {
+            c.map(|x| {
+                if x >= p_t {
+                    2f64.powf((x - D) / G) - B
+                } else if x >= 0.0 {
+                    (x / C).sqrt() + R_0
+                } else {
+                    R_0
+                }
+            })
+        },
+        |c| {
+            c.map(|r| {
+                if r >= R_T {
+                    G * (r + B).log2() + D
+                } else if r >= R_0 {
+                    C * (r - R_0).powi(2)
+                } else {
+                    0.0
+                }
+            })
+        },
+    )
+}
+
+/// ADX (Academy Density Exchange) to ACES2065-1, from the Academy's
+/// `CSC.Academy.ADX10_to_ACES` / `ADX16_to_ACES` (aces-input-and-colorspaces,
+/// Apache-2.0, commit 29b722bc): code to channel-dependent density, to
+/// channel-independent density, to log exposure through the reference's
+/// 11-point table (clamped at its ends, as CTL's `interpolate1D` is) or its
+/// linear extension above 0.6, to exposure, to ACES.
+///
+/// There is no inverse. The Academy defines only ADX → ACES; below the table
+/// the curve is flat and saturated colour has negative exposure, so any
+/// ACES → ADX outside ADX's domain would be invented. OpenColorIO answers one
+/// by inverting its LUT approximation, 0.5–0.75 away from what retracing the
+/// reference gives; this build refuses instead.
+fn adx(max_code: f64, offset: f64, scale: f64) -> Op {
+    // Row-vector matrices, as the CTL writes them.
+    const CDD_TO_CID: [[f64; 3]; 3] = [
+        [0.75573, 0.05901, 0.16134],
+        [0.22197, 0.96928, 0.07406],
+        [0.02230, -0.02829, 0.76460],
+    ];
+    const EXP_TO_ACES: [[f64; 3]; 3] = [
+        [0.72286, 0.11923, 0.01427],
+        [0.12630, 0.76418, 0.08213],
+        [0.15084, 0.11659, 0.90359],
+    ];
+    const LUT: [[f64; 2]; 11] = [
+        [-0.19, -6.0],
+        [0.01, -2.721718645],
+        [0.028, -2.521718645],
+        [0.054, -2.321718645],
+        [0.095, -2.121718645],
+        [0.145, -1.921718645],
+        [0.22, -1.721718645],
+        [0.3, -1.521718645],
+        [0.4, -1.321718645],
+        [0.5, -1.121718645],
+        [0.6, -0.926545676714876],
+    ];
+    let ref_pt = (7120.0 - 1520.0) / 8000.0 * (100.0 / 55.0) - 0.18f64.log10();
+    // CTL `mult_f3_f33(v, M)` is v·M; `Mat3` is column-vector, so transpose.
+    let transpose = |m: [[f64; 3]; 3]| Mat3([0, 1, 2].map(|i| [0, 1, 2].map(|j| m[j][i])));
+    let cdd_to_cid = transpose(CDD_TO_CID);
+    let exp_to_aces = transpose(EXP_TO_ACES);
+    let interpolate = |x: f64| {
+        if x <= LUT[0][0] {
+            return LUT[0][1];
+        }
+        for w in LUT.windows(2) {
+            if x <= w[1][0] {
+                let t = (x - w[0][0]) / (w[1][0] - w[0][0]);
+                return w[0][1] + t * (w[1][1] - w[0][1]);
+            }
+        }
+        LUT[10][1]
+    };
+    Op::custom("ADX to ACES2065-1", move |c| {
+        let cdd = c.map(|v| (v * max_code - offset) / scale);
+        let cid = cdd_to_cid.apply(cdd);
+        let log_e = cid.map(|d| {
+            if d <= 0.6 {
+                interpolate(d)
+            } else {
+                (100.0 / 55.0) * d - ref_pt
+            }
+        });
+        exp_to_aces.apply(log_e.map(|l| 10f64.powf(l)))
+    })
+}
+
 /// Rec.2100 HLG for a 1000-nit display, as OpenColorIO 2.5 builds it: the
 /// inverse OOTF (system gamma 1.2) followed by the OETF with negatives
 /// mirrored and nothing clamped. In range this is BT.2100's inverse EOTF
@@ -1990,12 +2120,22 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
         "SONY_SLOG3_SGAMUT3_to_ACES2065-1" => camera(Transfer::SLog3, Primaries::S_GAMUT3),
         "RED_LOG3G10_RWG_to_ACES2065-1" => camera(Transfer::Log3G10, Primaries::RED_WIDE_GAMUT),
         "PANASONIC_VLOG-VGAMUT_to_ACES2065-1" => camera(Transfer::VLog, Primaries::V_GAMUT),
-        "CANON_CLOG2-CGAMUT_to_ACES2065-1" => {
-            camera(Transfer::CanonLog2, Primaries::CANON_CINEMA_GAMUT)
-        }
-        "CANON_CLOG3-CGAMUT_to_ACES2065-1" => {
-            camera(Transfer::CanonLog3, Primaries::CANON_CINEMA_GAMUT)
-        }
+        // Canon's transforms adapt the white with CAT02, not Bradford
+        // (OpenColorIO's matrix reproduced to 2e-16).
+        "CANON_CLOG2-CGAMUT_to_ACES2065-1" => vec![
+            Op::decode(Transfer::CanonLog2),
+            Op::matrix(rgb_to_rgb_matrix_cat02(&Primaries::CANON_CINEMA_GAMUT, &Primaries::ACES_AP0)),
+        ],
+        "CANON_CLOG3-CGAMUT_to_ACES2065-1" => vec![
+            Op::decode(Transfer::CanonLog3),
+            Op::matrix(rgb_to_rgb_matrix_cat02(&Primaries::CANON_CINEMA_GAMUT, &Primaries::ACES_AP0)),
+        ],
+        "APPLE_LOG_to_ACES2065-1" => vec![
+            apple_log(),
+            Op::matrix(rgb_to_rgb_matrix(&Primaries::REC2020, &Primaries::ACES_AP0)),
+        ],
+        "ADX10_to_ACES2065-1" => vec![adx(1023.0, 95.0, 500.0)],
+        "ADX16_to_ACES2065-1" => vec![adx(65535.0, 1520.0, 8000.0)],
         "DISPLAY - CIE-XYZ-D65_to_sRGB" => display(Primaries::REC709, Op::encode(Transfer::SRgb)),
         // The OCIO 2.5 display styles of the released ACES configs. "MIRROR
         // NEGS" applies the curve to |v| and restores the sign, rather than

@@ -116,6 +116,19 @@ impl LogParams {
     }
 }
 
+/// What a power function does with negative input, as OpenColorIO's
+/// `ExponentTransform` `style` names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NegativeStyle {
+    /// Negatives become 0 (OCIO `linear`, the default).
+    #[default]
+    Clamp,
+    /// The power of `|v|`, with the sign restored (OCIO `mirror`).
+    Mirror,
+    /// Negatives are left unchanged (OCIO `pass_thru`).
+    PassThru,
+}
+
 /// One per-pixel operation.
 #[derive(Clone)]
 pub enum Op {
@@ -137,10 +150,12 @@ pub enum Op {
         max_out: Option<f64>,
         clamp: bool,
     },
-    /// Per-channel power (`out = in^value`; negatives clamp to 0).
+    /// Per-channel power (`out = in^value`); `negative` says what happens
+    /// below zero.
     Exponent {
         value: [f64; 3],
         direction: Direction,
+        negative: NegativeStyle,
     },
     /// Parametric log/lin curve; forward = linear → log.
     Log {
@@ -188,7 +203,11 @@ impl fmt::Debug for Op {
                     "Range({min_in:?},{max_in:?} -> {min_out:?},{max_out:?}, clamp={clamp})"
                 )
             }
-            Op::Exponent { value, direction } => write!(f, "Exponent({value:?}, {direction:?})"),
+            Op::Exponent {
+                value,
+                direction,
+                negative,
+            } => write!(f, "Exponent({value:?}, {direction:?}, {negative:?})"),
             Op::Log { params, direction } => write!(f, "Log({params:?}, {direction:?})"),
             Op::Saturation(s) => write!(f, "Saturation({s})"),
             Op::MonCurve {
@@ -342,9 +361,14 @@ impl Op {
                     clamp: *clamp,
                 }
             }
-            Op::Exponent { value, direction } => Op::Exponent {
+            Op::Exponent {
+                value,
+                direction,
+                negative,
+            } => Op::Exponent {
                 value: *value,
                 direction: direction.flipped(),
+                negative: *negative,
             },
             Op::Log { params, direction } => Op::Log {
                 params: params.clone(),
@@ -435,14 +459,23 @@ impl Op {
                 }
                 out
             }
-            Op::Exponent { value, direction } => {
+            Op::Exponent {
+                value,
+                direction,
+                negative,
+            } => {
                 let mut out = [0.0; 3];
                 for i in 0..3 {
                     let p = match direction {
                         Direction::Forward => value[i],
                         Direction::Inverse => 1.0 / value[i],
                     };
-                    out[i] = c[i].max(0.0).powf(p);
+                    out[i] = match negative {
+                        NegativeStyle::Clamp => c[i].max(0.0).powf(p),
+                        NegativeStyle::Mirror => c[i].signum() * c[i].abs().powf(p),
+                        NegativeStyle::PassThru if c[i] < 0.0 => c[i],
+                        NegativeStyle::PassThru => c[i].powf(p),
+                    };
                 }
                 out
             }
@@ -834,6 +867,7 @@ mod tests {
             Op::Exponent {
                 value: [2.2; 3],
                 direction: Direction::Forward,
+                negative: NegativeStyle::Clamp,
             },
             Op::Saturation(0.8),
         ]);
