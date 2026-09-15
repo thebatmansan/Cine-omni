@@ -62,8 +62,11 @@ no number on screen has a second source.
   interpretation printed over it and marked when it had to be **assumed**.
 * **Timeline** — a zoomable ruler, per-track headers with working **L/M/S/T**
   toggles bound to the editorial session state, clips drawn from the OTIO model,
-  a playhead, and click-to-seek. **No timeline is wired to it yet**, so it
-  currently says "no timeline loaded".
+  a playhead, and click-to-seek. `--timeline <file.otio>` loads a cut into it;
+  the toggles change the track's state where `cine-timeline` reads it, so a
+  lock set here is the same lock an edit is refused by. A file that will not
+  load is reported, never replaced with an empty cut that looks like an empty
+  edit.
 * **Project** — the open media, its picture count, its keyframes and longest GOP.
 * **Inspector** — transport, position, presented, dropped, late, stalls, decode
   mean.
@@ -112,15 +115,54 @@ repaint delay instead of "does it want a repaint" — was correct in itself and
 changed nothing, because it was not the cause. Both are kept: the repaint delay
 is the right way to wake for an animation, and it is now also not a spin.
 
+## Two defects the timeline pane found
+
+**An unbounded rectangle hung the application.** `ui.available_rect_before_wrap()`
+can be infinite, and the ruler walks ticks until it passes the right edge — with
+an infinite edge, forever. It only appeared once a timeline was loaded, because
+the empty case returned before reaching the ruler. The pane is now clipped to
+something finite *and* the tick loop is capped: a drawing loop should fail to
+draw rather than fail to return.
+
+**Rebuilding the panels every frame cost the picture.** With a four-track
+timeline drawn, running the interface once per picture measured ~9.7 ms a frame
+and pushed decode from 50 ms to 94 ms on two cores — 66 of 144 pictures
+presented, 62 dropped, reproducibly, against 144/144 without the pane.
+
+egui's tessellated output can be re-rendered without re-running the interface,
+so the panels are now rebuilt on input, on a transport change, and otherwise
+about five times a second; in between, the cached interface is drawn over the
+new picture. The counters stay live and the picture stops paying for them.
+
+### And a caution about the numbers
+
+After that fix, interleaved runs show **no systematic difference** between
+drawing the timeline and not:
+
+```
+            no timeline      with timeline
+  run 1     140 / 4 dropped  144 / 0
+  run 2     144 / 0          144 / 0
+```
+
+Consecutive runs of *either* configuration ranged from 60/144 to 144/144
+depending on how hot the machine was. The honest reading is that on this
+hardware the run-to-run spread is dominated by machine state, and only a
+difference that survives interleaving — as the pre-caching one did, and the
+post-caching one does not — is a difference in the code.
+
 ## What is not implemented, and is not claimed
 
-* **No timeline is loaded.** The pane draws whatever OTIO `Timeline` it is
-  handed and is currently handed `None`. Wiring it to the project graph through
-  the runtime is the next step.
-* **No editing from the interface.** The L/M/S/T toggles emit commands that the
-  shell does not yet apply, because applying them needs a timeline to apply them
-  to. They are wired end to end in the model and tested there — see
-  `session_state.rs` — but not from a click.
+* **The timeline comes from a file, not the project.** `--timeline <file.otio>`
+  reads a cut from disk. Reading it from the project graph through the runtime,
+  so the workspace and `cine start` show the same edit, is not done.
+* **Nothing can be cut from the interface.** Track state can be changed; no
+  ripple, roll, slip, slide, trim, insert or overwrite is reachable from a
+  click, though all of them exist and are tested in `cine-timeline`.
+* **The timeline's time is not the media's time.** The pane draws the cut on its
+  own timebase and the playhead from the media clock. For a cut that references
+  the open media they coincide; in general they do not, and conforming them is
+  real work that has not been done.
 * **No source viewer, bins, search, metadata or scopes.** The docking layout has
   room for them; nothing behind them exists yet.
 * **No audio.** No device, no meters, no waveforms. See `AV-SYNC.md`.

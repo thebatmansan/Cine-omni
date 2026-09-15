@@ -503,7 +503,15 @@ impl PaneBehavior<'_> {
     }
 
     fn timeline_pane(&mut self, ui: &mut Ui) {
-        let full = ui.available_rect_before_wrap();
+        // Clipped to something finite on purpose. `available_rect_before_wrap`
+        // can be unbounded, and the ruler walks ticks until it passes the right
+        // edge — with an infinite edge that loop never ends. It hung the whole
+        // application, and only once a timeline was loaded, because the empty
+        // case returned before reaching the ruler.
+        let full = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        if !full.width().is_finite() || !full.height().is_finite() || full.width() < 1.0 {
+            return;
+        }
         ui.painter().rect_filled(full, 0.0, PANEL);
         let Some(timeline) = self.timeline else {
             ui.painter().text(
@@ -588,10 +596,18 @@ impl PaneBehavior<'_> {
             [rect.left_bottom(), rect.right_bottom()],
             Stroke::new(1.0, LINE),
         );
-        // A tick every second, labelled where there is room.
-        let step = tick_seconds(*self.zoom);
+        // A tick every second, labelled where there is room. The iteration cap
+        // is not decoration: a non-finite width here once hung the application,
+        // and a drawing loop should fail to draw rather than fail to return.
+        let step = tick_seconds(*self.zoom).max(f32::MIN_POSITIVE);
+        let width = track_area.width();
+        if !width.is_finite() {
+            return;
+        }
+        let mut ticks = 0;
         let mut second = (*self.scroll / step).floor() * step;
-        while second * *self.zoom - *self.scroll * *self.zoom < track_area.width() {
+        while (second - *self.scroll) * *self.zoom < width && ticks < 4096 {
+            ticks += 1;
             let x = track_area.min.x + (second - *self.scroll) * *self.zoom;
             if x >= track_area.min.x {
                 painter.line_segment(

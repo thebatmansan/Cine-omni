@@ -14,6 +14,17 @@ pub struct EguiLayer {
     ctx: egui::Context,
     state: egui_winit::State,
     renderer: Renderer,
+    /// The last tessellated interface, kept so a new *picture* can be shown
+    /// without rebuilding the *panels*.
+    ///
+    /// Running the interface costs real time — measured at ~9.7 ms a frame with
+    /// a timeline drawn — and on two cores that competes directly with the
+    /// decoder. The picture changes 24 times a second; the panels do not need
+    /// rebuilding that often merely because it did.
+    last: Option<Vec<egui::ClippedPrimitive>>,
+    /// The screen the cached interface was built for. `ScreenDescriptor` is not
+    /// `Clone`, and it is two plain numbers, so they are kept directly.
+    last_screen: ([u32; 2], f32),
 }
 
 impl EguiLayer {
@@ -40,6 +51,8 @@ impl EguiLayer {
             ctx,
             state,
             renderer,
+            last: None,
+            last_screen: ([0, 0], 1.0),
         }
     }
 
@@ -95,6 +108,8 @@ impl EguiLayer {
         let buffers = self
             .renderer
             .update_buffers(device, queue, encoder, &jobs, &descriptor);
+        self.last = Some(jobs.clone());
+        self.last_screen = (size_in_pixels, pixels_per_point);
         if !buffers.is_empty() {
             queue.submit(buffers);
         }
@@ -127,5 +142,50 @@ impl EguiLayer {
             .get(&egui::ViewportId::ROOT)
             .map(|v| v.repaint_delay)
             .unwrap_or(std::time::Duration::MAX)
+    }
+
+    /// Draw the interface exactly as it was last built, without running it.
+    ///
+    /// Used when only the picture changed. Returns whether there was anything
+    /// to draw.
+    pub fn redraw_last(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) -> bool {
+        let Some(jobs) = self.last.clone() else {
+            return false;
+        };
+        let descriptor = ScreenDescriptor {
+            size_in_pixels: self.last_screen.0,
+            pixels_per_point: self.last_screen.1,
+        };
+        let buffers = self
+            .renderer
+            .update_buffers(device, queue, encoder, &jobs, &descriptor);
+        if !buffers.is_empty() {
+            queue.submit(buffers);
+        }
+        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui (cached)"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.renderer
+            .render(&mut pass.forget_lifetime(), &jobs, &descriptor);
+        true
     }
 }

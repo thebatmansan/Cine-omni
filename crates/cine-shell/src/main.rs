@@ -45,6 +45,7 @@ use cine_shell::present::Presenter;
 use cine_shell::viewer::FrameUploader;
 use cine_shell::workspace::{Command, ViewerStatus, Workspace};
 use cine_shell::ShellCapabilities;
+use cine_timeline::session::TrackState;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -106,6 +107,8 @@ struct Args {
     with_ui: bool,
     /// Write the exact image the viewer presented, for inspection.
     dump: Option<PathBuf>,
+    /// An OTIO file to show in the timeline pane.
+    timeline: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -115,6 +118,7 @@ fn parse_args() -> Args {
     let mut ui_frames = None;
     let mut with_ui = false;
     let mut dump = None;
+    let mut timeline = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -123,6 +127,7 @@ fn parse_args() -> Args {
             "--ui-smoke" => ui_frames = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(30)),
             "--with-ui" => with_ui = true,
             "--dump" => dump = it.next().map(PathBuf::from),
+            "--timeline" => timeline = it.next().map(PathBuf::from),
             other if !other.starts_with("--") => media = Some(PathBuf::from(other)),
             other => eprintln!("ignoring unknown flag {other}"),
         }
@@ -134,6 +139,7 @@ fn parse_args() -> Args {
         ui_frames,
         with_ui,
         dump,
+        timeline,
     }
 }
 
@@ -222,6 +228,14 @@ struct App {
     ui_drawn: u32,
     /// When egui next needs painting. `MAX` means "not until something happens".
     egui_repaint_in: Duration,
+    /// The cut shown in the timeline pane.
+    timeline: Option<cine_timeline::Timeline>,
+    /// The panels need rebuilding: input arrived, or something they show
+    /// changed. Otherwise the cached interface is re-rendered over the new
+    /// picture, which costs a fraction of running it again.
+    ui_dirty: bool,
+    /// When the panels were last rebuilt, so they still refresh while playing.
+    ui_built: Option<Instant>,
     stages: Stages,
     preroll: Option<Preroll>,
     preroll_took: Option<(usize, Duration)>,
@@ -254,6 +268,9 @@ impl App {
             pending_commands: Vec::new(),
             ui_drawn: 0,
             egui_repaint_in: Duration::MAX,
+            timeline: None,
+            ui_dirty: true,
+            ui_built: None,
             stages: Stages::default(),
             preroll: None,
             preroll_took: None,
@@ -469,12 +486,33 @@ impl App {
                     }
                 }
             }
-            // Track state belongs to a timeline, and none is loaded yet.
-            Command::ToggleLock(_)
-            | Command::ToggleMute(_)
-            | Command::ToggleSolo(_)
-            | Command::ToggleTarget(_) => {}
+            Command::ToggleLock(track) => self.toggle_track(track, |s| s.locked = !s.locked),
+            Command::ToggleMute(track) => self.toggle_track(track, |s| s.muted = !s.muted),
+            Command::ToggleSolo(track) => self.toggle_track(track, |s| s.solo = !s.solo),
+            Command::ToggleTarget(track) => self.toggle_track(track, |s| s.targeted = !s.targeted),
         }
+    }
+
+    /// Change one track's editorial state.
+    ///
+    /// The state lives on the track, in OTIO metadata, so this is the same
+    /// state `cine-timeline` reads and the same state that survives a save.
+    fn toggle_track(&mut self, index: usize, change: impl FnOnce(&mut TrackState)) {
+        let Some(timeline) = self.timeline.as_mut() else {
+            return;
+        };
+        let Some(track) = timeline
+            .tracks
+            .children
+            .iter_mut()
+            .filter_map(cine_timeline::Composable::as_track_mut)
+            .nth(index)
+        else {
+            return;
+        };
+        let mut state = TrackState::of(track);
+        change(&mut state);
+        state.apply(track);
     }
 
     /// Print exactly what the scheduler counted. No adjectives.
@@ -697,32 +735,46 @@ impl App {
 
         if let (Some(egui), Some(window)) = (self.egui.as_mut(), self.window.as_ref()) {
             let size = [surface.config.width, surface.config.height];
-            let workspace = &mut self.workspace;
-            let mut asked = Vec::new();
             let mut encoder =
                 surface
                     .device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("workspace"),
                     });
-            let repaint_in = egui.draw(
-                window,
-                &surface.device,
-                &surface.queue,
-                &mut encoder,
-                &view,
-                size,
-                |ui| asked.extend(workspace.ui(ui, &status, None)),
-            );
-            self.egui_repaint_in = repaint_in;
+            // The panels are rebuilt on input, on a transport change, and at
+            // least a few times a second so the counters stay live. Otherwise
+            // the cached interface is re-rendered over the new picture: the
+            // timecode is redrawn as part of that rebuild cadence rather than
+            // costing a full interface run per picture.
+            let stale = self
+                .ui_built
+                .is_none_or(|at| at.elapsed() >= Duration::from_millis(200));
+            if self.ui_dirty || stale {
+                let workspace = &mut self.workspace;
+                let timeline = self.timeline.as_ref();
+                let mut asked = Vec::new();
+                let repaint_in = egui.draw(
+                    window,
+                    &surface.device,
+                    &surface.queue,
+                    &mut encoder,
+                    &view,
+                    size,
+                    |ui| asked.extend(workspace.ui(ui, &status, timeline)),
+                );
+                self.egui_repaint_in = repaint_in;
+                self.pending_commands = asked;
+                self.ui_dirty = false;
+                self.ui_built = Some(Instant::now());
+                let ppp = egui.context().pixels_per_point();
+                self.picture_rect = workspace
+                    .program_rect()
+                    .map(|r| letterbox(r, ppp, picture_size));
+            } else {
+                egui.redraw_last(&surface.device, &surface.queue, &mut encoder, &view);
+            }
             surface.queue.submit(Some(encoder.finish()));
-            self.pending_commands = asked;
             self.ui_drawn += 1;
-            // Where the picture goes next frame, letterboxed into the pane.
-            let ppp = egui.context().pixels_per_point();
-            self.picture_rect = workspace
-                .program_rect()
-                .map(|r| letterbox(r, ppp, picture_size));
         }
 
         // Presentation moved to the queue in wgpu 30.
@@ -859,6 +911,22 @@ impl ApplicationHandler<Wake> for App {
             }
         }
 
+        if let Some(path) = self.args.timeline.clone() {
+            match std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|text| cine_timeline::read_otio(&text).map_err(|e| e.to_string()))
+            {
+                Ok(timeline) => {
+                    let tracks = timeline.tracks.children.len();
+                    println!("timeline: {} ({tracks} tracks)", path.display());
+                    self.timeline = Some(timeline);
+                }
+                // A timeline that will not load is reported, not silently
+                // replaced with an empty one that looks like an empty cut.
+                Err(e) => eprintln!("cannot read {}: {e}", path.display()),
+            }
+        }
+
         if let Some(path) = self.args.media.clone() {
             self.open(&path);
         }
@@ -941,12 +1009,23 @@ impl ApplicationHandler<Wake> for App {
         }
 
         // Wake for whichever comes first: the next picture, or the next thing
-        // the interface needs to animate. Waking for "the interface wants *a*
-        // repaint" instead of "the interface wants one *then*" turned this into
-        // a spin that redrew 74 times a second and cost playback 38% of its
-        // pictures.
+        // the interface needs to animate.
+        //
+        // **While the transport is advancing, the picture has priority.** egui
+        // asks for a repaint continuously while anything is animating — a
+        // hovered tab, a resize handle — and honouring that during playback
+        // redrew 44 times a second at ~17 ms each, starved the decoder on two
+        // cores, and dropped 46% of the pictures. The interface is redrawn with
+        // the picture instead, which is 24 times a second here and is also
+        // exactly often enough: the timecode changes once per frame. Paused,
+        // egui's own timing is honoured in full, so hovering stays smooth.
+        let advancing = self
+            .playback
+            .as_ref()
+            .is_some_and(|p| p.state().is_advancing());
         let next = self.playback.as_ref().and_then(|p| p.next_deadline());
         let wake = match (next, self.egui_repaint_in) {
+            (Some(d), _) if advancing => Some(d),
             (Some(d), r) => Some(d.min(r)),
             (None, r) if r < Duration::MAX => Some(r),
             // Paused with a still interface: nothing to wake for. Starved: the
@@ -974,16 +1053,19 @@ impl ApplicationHandler<Wake> for App {
         // unconditional spin. It drew 76 times a second, competed with the
         // decode worker for two cores, and cost playback 38% of its pictures —
         // all of it invisible except in the counters.
+        let mut dirty = false;
         let consumed = match (self.egui.as_mut(), self.window.as_ref()) {
             (Some(egui), Some(window)) => {
                 let consumed = egui.on_window_event(window, &event);
                 if !matches!(event, WindowEvent::RedrawRequested) {
                     window.request_redraw();
+                    dirty = true;
                 }
                 consumed
             }
             _ => false,
         };
+        self.ui_dirty |= dirty;
         if consumed && !matches!(event, WindowEvent::CloseRequested | WindowEvent::Resized(_)) {
             return;
         }
