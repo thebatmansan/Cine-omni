@@ -132,8 +132,9 @@ pub struct Presented {
     pub index: usize,
     /// Presentation time of this picture in the source's own time base.
     pub pts: RationalTime,
-    /// Pictures skipped since the last presented one because the playhead had
-    /// already passed them. Zero on a healthy poll.
+    /// Pictures the playhead passed unseen since the last presented picture.
+    /// Zero on a healthy poll. They are counted as the playhead passes them,
+    /// which may be several polls earlier than this one.
     pub dropped: u32,
     /// How far past this picture's display window the playhead already was when
     /// it reached the screen. `None` means it made its window.
@@ -189,6 +190,19 @@ pub struct Scheduler<S: TimeSource, F: FrameSource> {
     source: F,
     /// Display index currently on screen, once anything has been shown.
     on_screen: Option<usize>,
+    /// The furthest picture, in the direction of travel, whose fate is already
+    /// counted — presented or dropped.
+    ///
+    /// Accounting hangs off this rather than off `on_screen` so that every
+    /// picture is counted exactly once, as the playhead passes it, whether or
+    /// not another picture is ever presented. Counting only at the next
+    /// presentation reported a run that showed 42 pictures of 240 as "3
+    /// dropped", because the rest were passed during a stall that never ended.
+    accounted: Option<usize>,
+    /// Pictures counted as dropped since the last presented one. Carried so the
+    /// picture that does arrive can say how many were missed on the way, even
+    /// though they were counted on the polls that noticed them.
+    dropped_since_present: u32,
     /// The index the last poll wanted, whether or not it got it.
     wanted: Option<usize>,
     /// The due picture was not ready on the last poll.
@@ -212,6 +226,8 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
             clock,
             source,
             on_screen: None,
+            accounted: None,
+            dropped_since_present: 0,
             wanted: None,
             starved: false,
             discontinuity: false,
@@ -270,6 +286,17 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         let position = self.clock.position();
 
         if advancing && self.reached_the_end(position) {
+            // Pictures the playhead ran past without any of them reaching the
+            // screen are dropped, whether or not another one ever arrives to
+            // notice it. Counting only at the next presentation reported a
+            // clean run for playback that stalled and then hit the end —
+            // measured once as 45 pictures shown out of 240 and "0 dropped".
+            let missed = self.missed_to_the_end();
+            self.accounted = None;
+            for _ in 0..missed {
+                self.clock.dropped();
+            }
+            self.stats.dropped += u64::from(missed);
             self.clock.pause();
             self.stats.end_of_media += 1;
             return Presentation::EndOfMedia;
@@ -288,20 +315,34 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
             self.discontinuity = true;
         }
 
+        // A seek moves the playhead deliberately: what it skipped was never
+        // going to be seen, so it is not dropped. Re-base the accounting there.
+        if self.discontinuity {
+            self.accounted = Some(target);
+            self.dropped_since_present = 0;
+        }
+
         if self.on_screen == Some(target) {
             self.stats.held += 1;
             self.starved = false;
             return Presentation::Hold;
         }
 
-        // Pictures the playhead passed without any of them being shown. Only
-        // meaningful while advancing, and only when the playhead got there by
-        // running rather than by being moved.
-        let dropped = if advancing && !self.discontinuity {
-            self.skipped_between(self.on_screen, target)
+        // Pictures the playhead has already gone past can never be shown now,
+        // so account for them here rather than waiting for a presentation that
+        // may never come. `target` itself is still reachable and is left alone.
+        let passed = if advancing {
+            self.account_upto(target)
         } else {
             0
         };
+        if passed > 0 {
+            for _ in 0..passed {
+                self.clock.dropped();
+            }
+            self.stats.dropped += u64::from(passed);
+            self.dropped_since_present = self.dropped_since_present.saturating_add(passed);
+        }
 
         let started = std::time::Instant::now();
         let decoded = self.source.decode_index(target);
@@ -310,7 +351,11 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         self.stats.decode_worst_nanos = self.stats.decode_worst_nanos.max(decode_took.as_nanos());
 
         let frame = match decoded {
-            Ok(Some(f)) => f,
+            Ok(Some(f)) => {
+                // Reaching it means it was not missed.
+                self.accounted = Some(target);
+                f
+            }
             Ok(None) => {
                 // No picture for this position yet. Report it, do not
                 // substitute — and tell the clock once per stretch, so the stall
@@ -336,10 +381,6 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         let window_end = self.window_end(target);
         let late_by = window_end.and_then(|end| self.overshoot(end));
 
-        for _ in 0..dropped {
-            self.clock.dropped();
-        }
-        self.stats.dropped += u64::from(dropped);
         if let Some(end) = window_end {
             self.clock.presented(end);
         } else {
@@ -348,9 +389,10 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         self.stats.presented += 1;
         self.starved = false;
         self.discontinuity = false;
+        let missed = std::mem::take(&mut self.dropped_since_present);
         if late_by.is_some() {
             self.stats.late += 1;
-        } else if dropped == 0 {
+        } else if missed == 0 {
             self.clock.recovered();
         }
         self.on_screen = Some(target);
@@ -359,7 +401,7 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
             frame,
             index: target,
             pts,
-            dropped,
+            dropped: missed,
             late_by,
             decode_took,
         })
@@ -498,20 +540,50 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         (nanos > 0).then(|| Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64))
     }
 
-    /// Pictures between the last shown and the new target that were never shown.
-    fn skipped_between(&self, from: Option<usize>, to: usize) -> u32 {
-        let Some(from) = from else { return 0 };
-        let gap = if self.reverse() {
-            from.checked_sub(to)
-        } else {
-            to.checked_sub(from)
+    /// Count every picture strictly between the last accounted one and
+    /// `target` as passed unseen, and move the accounting up to the one before
+    /// `target`. `target` itself is still reachable, so it is not counted here.
+    fn account_upto(&mut self, target: usize) -> u32 {
+        let Some(accounted) = self.accounted else {
+            // Nothing accounted yet: playback simply starts at `target`.
+            self.accounted = if self.reverse() {
+                Some(target.saturating_add(1))
+            } else {
+                Some(target.saturating_sub(1))
+            };
+            return 0;
         };
-        match gap {
-            // A gap of 1 is normal progress; anything beyond it was skipped.
-            Some(n) if n > 1 => u32::try_from(n - 1).unwrap_or(u32::MAX),
-            // Moving against the direction of travel is a seek, not a drop.
-            _ => 0,
+        let gap = if self.reverse() {
+            accounted.saturating_sub(target).saturating_sub(1)
+        } else {
+            target.saturating_sub(accounted).saturating_sub(1)
+        };
+        if gap > 0 {
+            self.accounted = Some(if self.reverse() {
+                target.saturating_add(1)
+            } else {
+                target.saturating_sub(1)
+            });
         }
+        u32::try_from(gap).unwrap_or(u32::MAX)
+    }
+
+    /// Pictures between the last accounted one and the end of travel that were
+    /// never presented.
+    fn missed_to_the_end(&self) -> u32 {
+        let Some(accounted) = self.accounted else {
+            return 0;
+        };
+        let count = self.source.frame_count();
+        if count == 0 {
+            return 0;
+        }
+        let gap = if self.reverse() {
+            accounted
+        } else {
+            count - 1 - accounted.min(count - 1)
+        };
+        u32::try_from(gap).unwrap_or(u32::MAX)
     }
 
     /// Whether the playhead has run off the end it is travelling towards.

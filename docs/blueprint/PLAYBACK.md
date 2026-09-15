@@ -4,12 +4,13 @@
 `clock → scheduler → decode-ahead → decode → frame selection → presentation`
 exists end to end and is driven by the exact playback clock.
 
-**Headless, it now plays the reference clip perfectly**: 240 of 240 pictures,
-zero dropped, after a one-second pre-roll — and 720 of 720 over three
-consecutive passes. **On screen it does not**, because with decoding moved off
-the presentation thread the bottleneck moved to the colour-conversion round
-trip, measured at 69.4 ms per picture against a 41.7 ms budget. Both numbers are
-below, and neither is claimed to be the other.
+**It plays the reference clip in full, on screen, at rate.** Three consecutive
+`--play 6` runs each presented 144 of 144 pictures with zero dropped — exactly
+24 fps — and headless it presents 240 of 240, or 720 of 720 over three passes.
+That holds on **one asset, on one machine, with a decode margin near zero**; the
+same binary dropped 149 of 240 in a run immediately after a 95-second benchmark
+suite, with mean decode at 96.6 ms instead of 41.7 ms. Read the measurements
+below before generalising from them.
 
 It has **no audio and therefore no A/V sync**. Decode-ahead does **not** make the decoder faster, and the measurements show
 exactly that: with no pre-roll it performs no better than synchronous decoding.
@@ -268,7 +269,58 @@ keyframe — 110 decodes — and nothing here avoids that. Inside the buffer a s
 costs a lookup. The third figure is the cancellation path: the abandoned work is
 one decode, counted.
 
-### Presentation: the real window, the real GPU, with decode-ahead
+### Presentation: converting in the fragment shader
+
+The read-back path below was the bottleneck once decode moved off-thread. It is
+replaced for playback by uploading the decoded planes as three 8-bit textures and
+converting in the fragment shader, where the pixels already are.
+
+```
+                          read-back path        planar path
+  planes to GPU           —                     1.02–1.09 ms
+  colour conversion       69.36 ms              in the draw
+  texture upload          2.86 ms               —
+  draw                    10.25 ms              2.44–3.51 ms
+  ---------------------------------------------------------
+  per picture             ~82.5 ms              ~3.5 ms
+  against a budget of     41.67 ms              41.67 ms
+```
+
+Roughly **24 times less time per picture**, and presentation went from about
+198% of the frame budget to about 8%. The saving is not cleverness; it is not
+moving 30 MB across the bus per picture to deliver 1.4 MB of planes.
+
+Three consecutive runs on the window, quiet machine:
+
+```
+run 1: transport Playing — presented 144, dropped 0, late 0, held 496 over 641 polls
+run 2: transport Playing — presented 144, dropped 0, late 0, held 500 over 645 polls
+run 3: transport Playing — presented 144, dropped 0, late 0, held 506 over 651 polls
+       decode-ahead mean 39.8 / 42.5 / 48.5 ms, peak 34–48 MiB
+```
+
+144 pictures in six seconds is 24.0 fps exactly.
+
+**The same arithmetic, verified.** A faster path that changes the picture is not
+the same path, so `cine-shell/tests/planar_present.rs` renders through the real
+pipeline on real hardware at 1:1 and compares every pixel against
+`cine_gpu::yuv::yuv_to_rgb_cpu` — the reference the compute kernel is checked
+against. Worst difference **1 of 255** across BT.709, BT.601 and BT.2020, both
+signal ranges, an assumed matrix, and padded plane strides.
+
+### And what it costs when the machine is not quiet
+
+```
+--play 11 immediately after a 95 s benchmark suite:
+transport Paused — presented 91, dropped 149; decode mean 96.590437ms (worst 932ms)
+```
+
+Decode mean more than doubled and the clip dropped 62% of its pictures. This is
+a two-core laptop i3; the decoder sits close enough to the 24 fps line that
+thermal state decides which side it lands on. The transport said `Degraded`
+throughout and the drop counter was live, which is the whole point.
+
+### Presentation before the planar path: the real window, the real GPU
 
 `cine-shell --play 8`, Intel UHD Graphics (CML GT2) over Vulkan, Bgra8Unorm at
 1280x720, quiet machine:
@@ -443,12 +495,15 @@ demonstrably runs. `ShellCapabilities::PLAYBACK` is now `Degraded`, naming the
 
 * **No audio, and therefore no A/V sync.** Audio is a second consumer of the
   same clock. Nothing about it is implemented.
-* **The presentation path is now the bottleneck, and is unfixed.** 69.4 ms of
-  colour conversion per picture against a 41.7 ms budget, because the result is
-  read back to the CPU and re-uploaded as a float texture. Headless playback is
-  perfect; on screen it is not. This is the next thing to fix.
-* **Not real time on screen**, and only marginally so headless: mean decode sits
-  within 0.1 ms of the frame interval, and varies run to run.
+* **The margin is thin and the machine decides.** Mean decode measured between
+  39.8 ms and 96.6 ms across runs on one machine against a 41.7 ms budget. Three
+  consecutive quiet runs held 24 fps exactly; a hot one dropped 62%.
+* **The image is stretched to the window.** The blit fills the viewport without
+  preserving aspect ratio, and scaling is nearest-neighbour. Unchanged by this
+  work, and wrong for a reference viewer.
+* **`--smoke` exited non-zero twice during one session** and then passed eight
+  consecutive runs under the same load. Cause unidentified. It should not be
+  treated as a reliable gate until it is.
 * **A cushion postpones a deficit, it does not remove one.** Media whose decode
   is durably slower than real time will still drop, later.
 * **Reverse crosses a GOP boundary badly**: one chunk of up to 189 decodes,

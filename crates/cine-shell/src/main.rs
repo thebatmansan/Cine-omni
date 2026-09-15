@@ -72,12 +72,11 @@ const PREROLL_LIMIT: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct Stages {
     pictures: u32,
-    /// CPU plane normalisation, GPU YUV→RGB dispatch and read-back.
-    convert: Duration,
-    convert_worst: Duration,
-    /// Re-uploading the converted image as a texture.
-    upload: Duration,
-    /// Surface draws: blit and queue present.
+    /// Getting the decoded planes onto the GPU. The conversion itself now
+    /// happens in the fragment shader, so it is part of the draw.
+    to_gpu: Duration,
+    to_gpu_worst: Duration,
+    /// Surface draws: blit, convert and queue present.
     draws: u32,
     draw: Duration,
 }
@@ -153,6 +152,8 @@ struct App {
     compute: Option<GpuContext>,
     playback: Option<Playback>,
     uploader: FrameUploader,
+    /// How the picture is being interpreted, and whether that was assumed.
+    colour: Option<(String, bool)>,
     /// Surface presentations, which is not the same as pictures presented: the
     /// window may redraw the same picture several times.
     presented: u32,
@@ -165,6 +166,8 @@ struct App {
     stages: Stages,
     preroll: Option<Preroll>,
     preroll_took: Option<(usize, Duration)>,
+    /// Evidence mode reached the end of the media; stop at the next chance.
+    finished: bool,
 }
 
 impl App {
@@ -177,6 +180,7 @@ impl App {
             compute: None,
             playback: None,
             uploader: FrameUploader::new(),
+            colour: None,
             presented: 0,
             skipped: 0,
             play_until: None,
@@ -186,41 +190,67 @@ impl App {
             stages: Stages::default(),
             preroll: None,
             preroll_took: None,
+            finished: false,
         }
     }
 
-    /// Convert one decoded picture and hand it to the presenter.
+    /// Put one decoded picture on the GPU as its planes.
+    ///
+    /// The conversion happens in the fragment shader at draw time. `--dump`
+    /// additionally runs `cine-gpu`'s compute kernel, because that is the path
+    /// verified against a CPU reference and the dumped PNG should be what *it*
+    /// produced.
     fn upload(&mut self, frame: &VideoFrame) {
-        let (Some(compute), Some(surface), Some(presenter)) = (
-            self.compute.as_mut(),
-            self.surface.as_ref(),
-            self.presenter.as_mut(),
-        ) else {
+        let (Some(surface), Some(presenter)) = (self.surface.as_ref(), self.presenter.as_mut())
+        else {
             return;
         };
-        let (w, h) = (frame.width, frame.height);
-        let converting = Instant::now();
-        let converted = self.uploader.upload(compute, frame);
-        let convert = converting.elapsed();
-        self.stages.pictures += 1;
-        self.stages.convert += convert;
-        self.stages.convert_worst = self.stages.convert_worst.max(convert);
-        match converted {
-            Ok(rgba) => {
-                if let Some(path) = self.args.dump.clone() {
-                    if let Err(e) = write_png(&path, rgba, w, h) {
-                        self.failure = Some(format!("dump failed: {e}"));
-                    } else {
-                        println!("wrote {} ({w}x{h})", path.display());
-                    }
-                }
-                let uploading = Instant::now();
-                if let Err(e) = presenter.set_image(&surface.device, &surface.queue, rgba, w, h) {
-                    self.failure = Some(format!("upload failed: {e}"));
-                }
-                self.stages.upload += uploading.elapsed();
+        let conversion = match cine_shell::viewer::conversion_for(frame) {
+            Ok(c) => c,
+            Err(e) => {
+                self.failure = Some(format!("cannot interpret this picture: {e}"));
+                return;
             }
-            Err(e) => self.failure = Some(format!("colour conversion failed: {e}")),
+        };
+        if self.colour.is_none() {
+            self.colour = Some((
+                format!(
+                    "{} · {}",
+                    conversion.choice.describe(),
+                    match conversion.range {
+                        cine_gpu::yuv::Range::Limited => "limited range",
+                        cine_gpu::yuv::Range::Full => "full range",
+                    }
+                ),
+                conversion.choice.is_assumed(),
+            ));
+        }
+        let (Some(y), Some(u), Some(v)) = (frame.plane(0), frame.plane(1), frame.plane(2)) else {
+            self.failure = Some("decoded picture is missing a plane".into());
+            return;
+        };
+        let moving = Instant::now();
+        let sent = presenter.set_planes(&surface.device, &surface.queue, &conversion, [y, u, v]);
+        let took = moving.elapsed();
+        self.stages.pictures += 1;
+        self.stages.to_gpu += took;
+        self.stages.to_gpu_worst = self.stages.to_gpu_worst.max(took);
+        if let Err(e) = sent {
+            self.failure = Some(format!("uploading planes failed: {e}"));
+            return;
+        }
+        if let Some(path) = self.args.dump.clone() {
+            let (w, h) = (frame.width, frame.height);
+            let Some(compute) = self.compute.as_mut() else {
+                return;
+            };
+            match self.uploader.upload(compute, frame) {
+                Ok(rgba) => match write_png(&path, rgba, w, h) {
+                    Ok(()) => println!("wrote {} ({w}x{h})", path.display()),
+                    Err(e) => self.failure = Some(format!("dump failed: {e}")),
+                },
+                Err(e) => self.failure = Some(format!("colour conversion failed: {e}")),
+            }
         }
     }
 
@@ -234,6 +264,7 @@ impl App {
         };
         match outcome {
             Presentation::Present(p) => {
+                let first = self.colour.is_none();
                 if p.dropped > 0 || p.late_by.is_some() {
                     self.last_report = Some(format!(
                         "frame {} — {} dropped, {}decode {:?}",
@@ -247,12 +278,26 @@ impl App {
                     ));
                 }
                 self.upload(&p.frame);
+                if first {
+                    if let Some((note, assumed)) = &self.colour {
+                        println!("colour: {note}");
+                        if *assumed {
+                            println!("        ^ assumed, not declared by the file");
+                        }
+                    }
+                }
                 true
             }
             Presentation::Hold => false,
             Presentation::EndOfMedia => {
                 println!("end of media");
-                self.report();
+                // In evidence mode the run is over: reporting here and again
+                // when the clock runs out printed everything twice.
+                if self.args.play_secs.is_some() {
+                    self.finished = true;
+                } else {
+                    self.report();
+                }
                 false
             }
             Presentation::BeforeStart => false,
@@ -318,11 +363,10 @@ impl App {
         let st = &self.stages;
         if st.pictures > 0 {
             println!(
-                "stages per picture: convert {:?} (worst {:?}), texture upload {:?}; \
-                 per draw: {:?} over {} draws",
-                st.convert / st.pictures,
-                st.convert_worst,
-                st.upload / st.pictures,
+                "stages: planes to GPU {:?} per picture (worst {:?}); \
+                 draw, including conversion, {:?} over {} draws",
+                st.to_gpu / st.pictures,
+                st.to_gpu_worst,
                 st.draw.checked_div(st.draws).unwrap_or_default(),
                 st.draws
             );
@@ -538,12 +582,6 @@ impl App {
                 // transport on it says nothing about whether decode works.
                 playback.poll();
                 self.playback = Some(playback);
-                if let Some(note) = self.uploader.colour_note() {
-                    println!("colour: {note}");
-                    if self.uploader.colour_is_assumed() {
-                        println!("        ^ assumed, not declared by the file");
-                    }
-                }
             }
             Err(e) => {
                 // A file we cannot decode is reported, not faked. The window
@@ -644,18 +682,11 @@ impl ApplicationHandler<Wake> for App {
     /// Where playback actually happens: the loop is woken by the scheduler's
     /// deadline, not by a timer.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(until) = self.play_until {
-            if Instant::now() >= until {
-                self.report();
-                event_loop.exit();
-                return;
-            }
-        }
-        if self.args.smoke_frames.is_some() {
-            event_loop.set_control_flow(ControlFlow::Poll);
+        if self.finished || self.play_until.is_some_and(|until| Instant::now() >= until) {
+            self.report();
+            event_loop.exit();
             return;
         }
-
         if self.advance_preroll() {
             // Still pre-rolling: the worker's notification wakes us.
             event_loop.set_control_flow(ControlFlow::Wait);
@@ -671,6 +702,13 @@ impl ApplicationHandler<Wake> for App {
             }
         }
 
+        // Smoke mode drives surface frames as fast as it can, but only after
+        // pumping: with decode-ahead the first picture arrives from the worker,
+        // and returning early here meant `--dump` silently wrote nothing.
+        if self.args.smoke_frames.is_some() {
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
         let Some(p) = self.playback.as_ref() else {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;

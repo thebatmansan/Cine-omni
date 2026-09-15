@@ -98,7 +98,9 @@ argument for the evidence discipline, not against it.
 | Playback scheduler | Yes | 🟢 VERIFIED | `clock → scheduler → decode → selection → presentation`, 39 tests; exact frame selection at every one of 240 boundaries of the real asset |
 | Decode-ahead / buffering | Yes | 🟢 VERIFIED | Worker thread, bounded by bytes, generation-invalidated, keyframe-aware reverse; 23 step-by-step tests |
 | Real-time playback, headless | Yes | 🟢 VERIFIED (this asset, this machine) | 240/240 pictures, **0 dropped**, after a 1.03 s pre-roll; 720/720 over three passes. Margin is ~0.1 ms per picture — see `PLAYBACK.md` before generalising |
-| Real-time playback, on screen | Yes | 🟡 DEGRADED | 35 of 154 presented. Bottleneck measured as the presentation path, not decode: 69.4 ms colour conversion per picture against 41.7 ms |
+| Real-time playback, on screen | Yes | 🟡 PARTIAL | **144/144 at exactly 24 fps, 0 dropped, three runs running** — on one asset, one machine, with the decode margin near zero. A hot run dropped 62%. Presentation costs ~3.5 ms of the 41.7 ms budget after moving conversion into the fragment shader (was ~82.5 ms) |
+| Planar presentation path | Yes | 🟢 VERIFIED | Matches the CPU reference within **1 of 255** across BT.709/601/2020, both ranges, assumed matrices and padded strides, on real hardware |
+| Drop accounting | Yes | 🟢 VERIFIED | Counted as the playhead passes each picture: exactly once, independent of poll rate, and including pictures missed by a stall that never ends |
 | Reverse playback | Yes | 🟡 DEGRADED | 8.47 s → **71.9 ms per picture** with keyframe-aligned chunks, 118x. Still 28.9% dropped crossing a GOP boundary |
 | Seek | Yes | 🟡 PARTIAL | 2.6 µs warm; 4.82 s cold into a 189-picture GOP — the keyframe walk, unavoidable in this design |
 | Short-GOP media | Yes | ⚪ UNVERIFIED | Both assets here are long-GOP; one is a single 240-picture GOP. No encoder to make one |
@@ -290,8 +292,8 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * "Real-time" for audio in general — 48 stereo tracks hold a 512-frame
   deadline with 3x margin and may be claimed; 128 x 7.1.4 does not and 128
   stereo is marginal, so neither may be
-* "Real-time playback" **on screen** — 77% drops through the real window, with
-  the colour-conversion round trip measured as the cause
+* "Real-time playback" **in general** — it holds on this asset on this machine
+  when quiet, and fails when hot. One asset is not a claim about a system
 * "Real-time playback" **in general** — headless playback of the reference clip
   is drop-free, but on a margin of ~0.1 ms per picture, on one asset, on one
   machine. That is a measurement, not a property of the system

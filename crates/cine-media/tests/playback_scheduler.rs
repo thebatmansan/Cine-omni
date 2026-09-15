@@ -39,6 +39,8 @@ struct TableSource {
     fail_at: Option<usize>,
     /// Index that resolves but yields no picture.
     empty_at: Option<usize>,
+    /// While set, no picture is ready at all — a starved decode-ahead buffer.
+    starved: bool,
     reverse_ok: bool,
     /// Every index this source was actually asked to decode, in order.
     decoded: Vec<usize>,
@@ -55,6 +57,7 @@ impl TableSource {
             decode_cost: None,
             fail_at: None,
             empty_at: None,
+            starved: false,
             reverse_ok: true,
             decoded: Vec::new(),
         }
@@ -93,6 +96,9 @@ impl FrameSource for TableSource {
         Some((first, last.checked_add(&self.last_duration)))
     }
     fn decode_index(&mut self, index: usize) -> cine_media::Result<Option<VideoFrame>> {
+        if self.starved {
+            return Ok(None);
+        }
         self.decoded.push(index);
         if let Some((clock, cost)) = &self.decode_cost {
             clock.advance(*cost);
@@ -937,4 +943,162 @@ fn a_synchronous_source_is_never_waited_on() {
     assert!(s.wait_for_source(Duration::ZERO));
     assert!(!s.is_starved());
     assert_eq!(s.stats().underrun_episodes, 0);
+}
+
+/// Pictures the playhead passes during a stall are dropped, and must be counted
+/// as dropped. They are exactly as unseen as pictures skipped by a slow decode;
+/// counting only the latter reports a clean run through a stall that showed the
+/// viewer nothing.
+#[test]
+fn pictures_missed_during_a_stall_are_counted_as_dropped() {
+    let (mut s, t) = rig(240, Rate::F24);
+    s.clock_mut().play().unwrap();
+    assert_eq!(presented(s.poll()).0, 0);
+
+    // The source has nothing for a hundred frames' worth of wall time.
+    s.source_mut().starved = true;
+    for _ in 0..4 {
+        t.advance(Duration::from_nanos(25 * 41_666_667));
+        assert!(matches!(s.poll(), Presentation::Underrun));
+    }
+    assert_eq!(s.stats().underrun_episodes, 1);
+
+    // The picture that finally arrives is the one under the playhead, and the
+    // ninety-nine between it and the last presented picture were never shown.
+    s.source_mut().starved = false;
+    let (index, dropped, _) = presented(s.poll());
+    assert_eq!(index, 100);
+    assert_eq!(
+        dropped, 99,
+        "a stall that skipped 99 pictures must report 99 dropped"
+    );
+    assert_eq!(s.stats().dropped, 99);
+    assert_eq!(s.clock().telemetry().frames_dropped, 99);
+    assert_eq!(s.state(), TransportState::Degraded);
+}
+
+/// A stall that lasts until the end of the media must still report the pictures
+/// it skipped. Counting drops only when the *next* picture is presented meant a
+/// run that showed one picture and then starved to the end reported zero
+/// dropped — measured on screen as 45 of 240 shown, "0 dropped".
+#[test]
+fn a_stall_that_runs_to_the_end_of_media_still_reports_its_drops() {
+    let (mut s, t) = rig(10, Rate::F24);
+    s.clock_mut().play().unwrap();
+    assert_eq!(presented(s.poll()).0, 0);
+
+    s.source_mut().starved = true;
+    t.advance(Duration::from_nanos(4 * 41_666_667));
+    assert!(matches!(s.poll(), Presentation::Underrun));
+
+    // Run off the end while still starved.
+    t.advance(Duration::from_secs(5));
+    assert!(matches!(s.poll(), Presentation::EndOfMedia));
+    assert_eq!(
+        s.stats().dropped,
+        9,
+        "pictures 1..=9 were never shown and must be counted"
+    );
+    assert_eq!(s.clock().telemetry().frames_dropped, 9);
+    assert_eq!(s.stats().presented, 1);
+}
+
+/// Playing cleanly to the end reports no drops: the accounting above must not
+/// invent them for a run that showed everything.
+#[test]
+fn playing_cleanly_to_the_end_reports_no_drops() {
+    let (mut s, t) = rig(5, Rate::F24);
+    s.clock_mut().play().unwrap();
+    for _ in 0..5 {
+        s.poll();
+        t.advance(Duration::from_nanos(41_666_667));
+    }
+    assert!(matches!(s.poll(), Presentation::EndOfMedia));
+    assert_eq!(s.stats().presented, 5);
+    assert_eq!(s.stats().dropped, 0, "a complete run must not report drops");
+}
+
+/// Reverse counts the pictures below the playhead that it never showed.
+#[test]
+fn a_reverse_stall_to_the_start_reports_its_drops() {
+    let (mut s, t) = rig(20, Rate::F24);
+    s.seek(Timestamp::exact(10, Rate::F24));
+    s.clock_mut()
+        .set_rate(PlaybackRate::new(-1, 1).unwrap())
+        .unwrap();
+    s.clock_mut().play().unwrap();
+    assert_eq!(presented(s.poll()).0, 10);
+
+    s.source_mut().starved = true;
+    t.advance(Duration::from_secs(5));
+    assert!(matches!(s.poll(), Presentation::EndOfMedia));
+    assert_eq!(
+        s.stats().dropped,
+        10,
+        "pictures 9..=0 were never shown and must be counted"
+    );
+}
+
+/// Drop accounting must not depend on how often the loop polls. Counting only
+/// at a presentation made it depend on both the poll rate and on whether another
+/// picture ever arrived; counting as the playhead passes each picture does not.
+#[test]
+fn the_drop_count_is_the_same_however_often_it_is_polled() {
+    let jump = {
+        let (mut s, t) = rig(240, Rate::F24);
+        s.clock_mut().play().unwrap();
+        presented(s.poll());
+        s.source_mut().starved = true;
+        t.advance(Duration::from_nanos(100 * 41_666_667));
+        assert!(matches!(s.poll(), Presentation::Underrun));
+        s.stats().dropped
+    };
+    let creeping = {
+        let (mut s, t) = rig(240, Rate::F24);
+        s.clock_mut().play().unwrap();
+        presented(s.poll());
+        s.source_mut().starved = true;
+        for _ in 0..50 {
+            t.advance(Duration::from_nanos(2 * 41_666_667));
+            assert!(matches!(s.poll(), Presentation::Underrun));
+        }
+        s.stats().dropped
+    };
+    assert_eq!(jump, 99, "one poll across a hundred frames");
+    assert_eq!(creeping, jump, "fifty polls across the same hundred frames");
+}
+
+/// A picture is counted once, as dropped or as presented, and never twice.
+#[test]
+fn every_picture_is_accounted_exactly_once() {
+    let (mut s, t) = rig(60, Rate::F24);
+    s.clock_mut().play().unwrap();
+    presented(s.poll());
+
+    // Show some, stall through some, show some more, then run to the end.
+    for _ in 0..4 {
+        t.advance(Duration::from_nanos(41_666_667));
+        s.poll();
+    }
+    s.source_mut().starved = true;
+    for _ in 0..5 {
+        t.advance(Duration::from_nanos(4 * 41_666_667));
+        s.poll();
+    }
+    s.source_mut().starved = false;
+    for _ in 0..3 {
+        t.advance(Duration::from_nanos(41_666_667));
+        s.poll();
+    }
+    t.advance(Duration::from_secs(10));
+    assert!(matches!(s.poll(), Presentation::EndOfMedia));
+
+    let stats = s.stats();
+    assert_eq!(
+        stats.presented + stats.dropped,
+        60,
+        "presented {} + dropped {} must be every picture exactly once",
+        stats.presented,
+        stats.dropped
+    );
 }

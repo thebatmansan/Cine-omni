@@ -404,7 +404,12 @@ impl<S: TimeSource> PlaybackClock<S> {
     /// A frame was skipped to hold sync.
     pub fn dropped(&mut self) {
         self.telemetry.frames_dropped += 1;
-        if self.state == TransportState::Playing {
+        // From any advancing state, not only `Playing`. Coming out of a stall
+        // the state is `Buffering`, and degrading only from `Playing` meant the
+        // next presented picture lifted `Buffering` straight back to `Playing` —
+        // reporting a healthy transport immediately after dropping ninety-nine
+        // pictures. See `a_stall_that_skips_pictures_does_not_report_playing`.
+        if self.state.is_advancing() {
             self.state = TransportState::Degraded;
         }
     }
@@ -503,6 +508,32 @@ mod tests {
         c.underrun();
         assert_eq!(c.state(), TransportState::Buffering);
         assert_eq!(c.telemetry().underruns, 1);
+    }
+
+    /// Dropping while stalled must degrade. It once did not: `dropped` degraded
+    /// only from `Playing`, so a stall's drops left the state at `Buffering` and
+    /// the next presented picture lifted it to `Playing`.
+    #[test]
+    fn a_stall_that_skips_pictures_does_not_report_playing() {
+        let (mut c, t) = clock(60);
+        c.play().unwrap();
+        t.advance_secs(1.0);
+        c.underrun();
+        assert_eq!(c.state(), TransportState::Buffering);
+        c.dropped();
+        assert_eq!(
+            c.state(),
+            TransportState::Degraded,
+            "dropping while stalled must degrade, not stay merely buffering"
+        );
+        c.presented(RationalTime::exact(48, Rate::F24));
+        assert_eq!(
+            c.state(),
+            TransportState::Degraded,
+            "a presented picture does not undo the drops before it"
+        );
+        c.recovered();
+        assert_eq!(c.state(), TransportState::Playing);
     }
 
     /// Reporting an underrun must not move the playhead. It once did: because
