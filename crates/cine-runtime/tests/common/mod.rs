@@ -9,10 +9,14 @@
 // declares it, so a helper only one of them uses looks dead to the others.
 #![allow(dead_code)]
 
+use cine_pipeline::{OmniProject, ProjectSetup};
 use cine_runtime::ws::{self, Frame};
+use cine_runtime::{Runtime, ServeConfig, Server};
 use serde_json::json;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 /// A client speaking JSON-RPC over a real WebSocket.
@@ -148,4 +152,109 @@ impl Client {
         }
         panic!("no reply with id {id}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// A running server over a project built the way a user's would be
+// ---------------------------------------------------------------------------
+
+pub const SCREENPLAY: &str = "Title: Protocol Test\n\nINT. HARBOUR OFFICE - NIGHT #1#\n\n\
+    MAREN crosses the room.\n\nMAREN\nWe ride at dawn.\n\n\
+    EXT. QUAY - DAWN #2#\n\nThe boats are gone.\n\n";
+
+pub const TIMELINE: &str = include_str!("../../../../tests/fixtures/sample.otio");
+
+/// The verified media asset, when this machine has it.
+pub fn media_path() -> Option<PathBuf> {
+    ["/home/finstein-emp/Downloads/Super_cinematic_image_to_vid.mp4"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists())
+}
+
+pub struct Harness {
+    pub addr: std::net::SocketAddr,
+    pub runtime: std::sync::Arc<Runtime>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Harness {
+    pub fn start() -> Harness {
+        let project = OmniProject::new(ProjectSetup::default()).expect("project");
+        project
+            .import_fountain(SCREENPLAY, "test.fountain")
+            .expect("screenplay");
+        project
+            .import_otio(TIMELINE, "test.otio")
+            .expect("timeline");
+        let runtime = Runtime::new(project, std::env::temp_dir());
+        let server = Server::bind(
+            runtime.clone(),
+            ServeConfig {
+                port: 0,
+                ui_dir: None,
+                ..Default::default()
+            },
+        )
+        .expect("bind");
+        let addr = server.local_addr().expect("addr");
+        let shutdown = server.shutdown_flag();
+        server.spawn_change_broadcaster();
+        std::thread::spawn(move || {
+            let _ = server.run();
+        });
+        Harness {
+            addr,
+            runtime,
+            shutdown,
+        }
+    }
+
+    pub fn client(&self) -> Client {
+        Client::connect(self.addr)
+    }
+
+    /// A raw HTTP GET, returning (status line, headers, body).
+    pub fn get(&self, path: &str) -> (String, Vec<String>, Vec<u8>) {
+        let mut stream = TcpStream::connect(self.addr).expect("connect");
+        write!(
+            stream,
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        )
+        .expect("request");
+        stream.flush().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut status = String::new();
+        reader.read_line(&mut status).expect("status");
+        let mut headers = Vec::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("header");
+            if line.trim().is_empty() {
+                break;
+            }
+            headers.push(line.trim().to_string());
+        }
+        let mut body = Vec::new();
+        reader.read_to_end(&mut body).expect("body");
+        (status.trim().to_string(), headers, body)
+    }
+}
+
+impl Drop for Harness {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(self.addr);
+    }
+}
+
+pub fn header<'a>(headers: &'a [String], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|h| {
+            h.to_ascii_lowercase()
+                .starts_with(&name.to_ascii_lowercase())
+        })
+        .and_then(|h| h.split_once(':'))
+        .map(|(_, v)| v.trim())
 }

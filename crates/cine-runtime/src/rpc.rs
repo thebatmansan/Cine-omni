@@ -279,6 +279,50 @@ pub fn cascade_json(group: &UndoGroup) -> J {
     })
 }
 
+/// A cascade result with its impact, for every method that changes the project.
+fn with_impact(p: &OmniProject, group: &UndoGroup) -> J {
+    let mut out = cascade_json(group);
+    let g = p.engine.read();
+    out["impact"] = crate::impact::of_group(&g, group);
+    out
+}
+
+/// A delta that is not in the undo history — an undo or redo commit — and the
+/// cascade it caused, rebuilt from the session log.
+fn group_from_log(p: &OmniProject, revision: u64) -> Option<UndoGroup> {
+    let log = p.engine.log();
+    let root = log.iter().find(|d| d.revision == revision)?.clone();
+    let mut revisions = vec![root.revision];
+    let mut deltas = vec![root.clone()];
+    for d in log.iter().filter(|d| d.revision > root.revision) {
+        if d.cause.is_some_and(|c| revisions.contains(&c)) {
+            revisions.push(d.revision);
+            deltas.push(d.clone());
+        }
+    }
+    Some(UndoGroup {
+        label: root.label.clone(),
+        deltas,
+    })
+}
+
+fn op_label(op: &cine_timeline::EditOp) -> &'static str {
+    use cine_timeline::EditOp as E;
+    match op {
+        E::RippleTrim { .. } => "ripple trim",
+        E::Roll { .. } => "roll",
+        E::Slip { .. } => "slip",
+        E::Slide { .. } => "slide",
+        E::SplitAt { .. } => "split",
+        E::Extract { .. } => "extract",
+        E::Lift { .. } => "lift",
+        E::Insert { .. } => "insert",
+        E::Overwrite { .. } => "overwrite",
+        E::Replace { .. } => "replace",
+        E::Join { .. } => "join",
+    }
+}
+
 /// Dispatch one call against the shared project.
 ///
 /// Read guards are scoped inside each arm: the engine's lock is not reentrant,
@@ -356,6 +400,131 @@ pub fn dispatch_with(
                 .unwrap_or("timeline.otio");
             let id = p.import_otio(text, key).map_err(|x| x.to_string())?;
             json!({ "id": id })
+        }
+
+        "edit" => {
+            let track = entity(params, "track")?;
+            let op: cine_timeline::EditOp =
+                serde_json::from_value(params.get("op").cloned().ok_or("missing param `op`")?)
+                    .map_err(|e| format!("invalid edit op: {e}"))?;
+            let linked = params.get("linked").and_then(J::as_bool).unwrap_or(true);
+            let mut outcome = None;
+            let label = format!("edit: {}", op_label(&op));
+            let group = p
+                .engine
+                .transact(&label, |tx| {
+                    outcome = Some(
+                        cine_timeline::perform_edit(tx, track, op, linked)
+                            .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?,
+                    );
+                    Ok(())
+                })
+                .map_err(|x| x.to_string())?;
+            let o = outcome.ok_or("the edit did not run")?;
+            let g = p.engine.read();
+            json!({
+                "outcome": {
+                    "label": o.label,
+                    "requested": o.requested.map(crate::projection::time),
+                    "applied": o.applied.map(crate::projection::time),
+                    "clamped": o.requested != o.applied,
+                    "item": o.item,
+                    "changed_tracks": o.changed_tracks,
+                    "linked_clips": o.linked_clips,
+                },
+                "cascade": cascade_json(&group),
+                "impact": crate::impact::of_group(&g, &group),
+            })
+        }
+        "link" => {
+            let clips: Vec<EntityId> = params
+                .get("clips")
+                .and_then(J::as_array)
+                .ok_or("missing param `clips`")?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .and_then(EntityId::parse)
+                        .ok_or("`clips` must be entity ids")
+                })
+                .collect::<std::result::Result<_, _>>()?;
+            let group_name = params.get("group").and_then(J::as_str).map(str::to_string);
+            let group = p
+                .engine
+                .transact(
+                    if group_name.is_some() {
+                        "link clips"
+                    } else {
+                        "unlink clips"
+                    },
+                    |tx| {
+                        for c in &clips {
+                            cine_timeline::graph::set_clip_link(tx, *c, group_name.as_deref())
+                                .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                        }
+                        Ok(())
+                    },
+                )
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
+        "bind_clip" | "unbind_clip" => {
+            let clip = entity(params, "clip")?;
+            let scene = entity(params, "scene")?;
+            let bind = method == "bind_clip";
+            let group = p
+                .engine
+                .transact(
+                    if bind {
+                        "bind clip to scene"
+                    } else {
+                        "unbind clip from scene"
+                    },
+                    |tx| {
+                        let r = if bind {
+                            cine_timeline::bind_clip_to_scene(tx, clip, scene)
+                        } else {
+                            cine_timeline::graph::unbind_clip_from_scene(tx, clip, scene)
+                        };
+                        r.map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                    },
+                )
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
+        "conform_done" => {
+            let clip = entity(params, "clip")?;
+            let group = p
+                .engine
+                .transact("mark conformed", |tx| {
+                    cine_timeline::clear_conform(tx, clip)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                })
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
+        "script" => {
+            let g = p.engine.read();
+            crate::projection::script(&g)
+        }
+        "impact" => {
+            let history = p.engine.history();
+            let g = p.engine.read();
+            let revision = params.get("revision").and_then(J::as_u64);
+            let group = match revision {
+                Some(r) => crate::impact::find_group(&history, r)
+                    .cloned()
+                    .or_else(|| group_from_log(p, r)),
+                None => history.undo.last().cloned(),
+            };
+            match group {
+                Some(group) => crate::impact::of_group(&g, &group),
+                None => J::Null,
+            }
+        }
+        "history" => {
+            let limit = params.get("limit").and_then(J::as_u64).unwrap_or(50) as usize;
+            crate::impact::history(&p.engine.history(), limit)
         }
 
         // -- media ----------------------------------------------------------
@@ -449,12 +618,12 @@ pub fn dispatch_with(
                 .engine
                 .transact(&format!("set {key}"), |tx| tx.set(id, &key, value))
                 .map_err(|x| x.to_string())?;
-            cascade_json(&group)
+            with_impact(p, &group)
         }
         "edit_dialogue" => {
             let line = entity(params, "line")?;
             let text = str_param(params, "text")?;
-            cascade_json(&p.edit_dialogue(line, text).map_err(|x| x.to_string())?)
+            with_impact(p, &p.edit_dialogue(line, text).map_err(|x| x.to_string())?)
         }
         "import_fountain" => {
             let text = str_param(params, "text")?;
@@ -465,8 +634,8 @@ pub fn dispatch_with(
             serde_json::to_value(p.import_fountain(text, key).map_err(|x| x.to_string())?)
                 .map_err(|x| x.to_string())?
         }
-        "undo" => cascade_json(&p.engine.undo().map_err(|x| x.to_string())?),
-        "redo" => cascade_json(&p.engine.redo().map_err(|x| x.to_string())?),
+        "undo" => with_impact(p, &p.engine.undo().map_err(|x| x.to_string())?),
+        "redo" => with_impact(p, &p.engine.redo().map_err(|x| x.to_string())?),
         "save" => {
             p.save().map_err(|x| x.to_string())?;
             J::Bool(true)

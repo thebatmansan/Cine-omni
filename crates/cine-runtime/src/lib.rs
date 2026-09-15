@@ -43,6 +43,7 @@
 
 pub mod frames;
 pub mod http;
+pub mod impact;
 pub mod lock;
 pub mod projection;
 pub mod rpc;

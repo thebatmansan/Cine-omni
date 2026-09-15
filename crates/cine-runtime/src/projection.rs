@@ -124,6 +124,14 @@ pub fn timeline(graph: &Graph, id: EntityId) -> Result<J, String> {
                     .and_then(cine_timeline::session::handles)
                     .map(|(head, tail)| json!({ "head": time(head), "tail": time(tail) })),
                 "link": clip.and_then(cine_timeline::session::link_of),
+                "needs_conform": item.ucg_id().and_then(|c| graph.node(c))
+                    .and_then(|n| n.get_bool(attrs::NEEDS_CONFORM)).unwrap_or(false),
+                "conform_reason": item.ucg_id().and_then(|c| graph.node(c))
+                    .and_then(|n| n.get_str(attrs::DIRTY_REASON)).map(str::to_string),
+                "scenes": item.ucg_id().filter(|_| clip.is_some())
+                    .map(|c| tl::scenes_of_clip(graph, c)).unwrap_or_default(),
+                "asset": item.ucg_id().filter(|_| clip.is_some())
+                    .and_then(|c| tl::media_of_clip(graph, c)),
             }));
         }
         tracks.push(json!({
@@ -280,6 +288,85 @@ pub fn structure(graph: &Graph) -> J {
         })
         .collect();
     json!({ "scenes": scenes })
+}
+
+/// Children of `parent` of `kind`, in their stored order.
+fn ordered_children(graph: &Graph, parent: EntityId, kind: Option<&str>) -> Vec<EntityId> {
+    let mut out: Vec<(i64, EntityId)> = graph
+        .children(parent)
+        .into_iter()
+        .filter_map(|c| {
+            let n = graph.node(c)?;
+            if kind.is_some_and(|k| n.kind.as_str() != k) {
+                return None;
+            }
+            Some((n.get_int(attrs::ORDER).unwrap_or(i64::MAX), c))
+        })
+        .collect();
+    out.sort();
+    out.into_iter().map(|(_, c)| c).collect()
+}
+
+/// The screenplay as the script workspace reads it: every document, its scenes
+/// in order, each scene's elements, and the cut material bound to the scene.
+pub fn script(graph: &Graph) -> J {
+    let documents: Vec<J> = graph
+        .of_kind(kinds::SCRIPT_DOCUMENT)
+        .iter()
+        .map(|doc| {
+            let scenes: Vec<J> = ordered_children(graph, doc.id, Some(kinds::SCRIPT_SCENE))
+                .into_iter()
+                .filter_map(|scene| {
+                    let n = graph.node(scene)?;
+                    let elements: Vec<J> = ordered_children(graph, scene, None)
+                        .into_iter()
+                        .filter_map(|e| {
+                            let en = graph.node(e)?;
+                            let kind = en.kind.as_str().strip_prefix("script.")?;
+                            Some(json!({
+                                "id": e,
+                                "kind": kind,
+                                "text": en.get_str(attrs::TEXT),
+                                "character": en.get_str(attrs::CHARACTER),
+                            }))
+                        })
+                        .collect();
+                    let clips: Vec<J> = tl::clips_synced_to(graph, scene)
+                        .into_iter()
+                        .filter_map(|c| {
+                            let cn = graph.node(c)?;
+                            Some(json!({
+                                "id": c,
+                                "name": cn.name(),
+                                "timeline": tl::timeline_of(graph, c),
+                                "track": tl::track_of_item(graph, c),
+                                "needs_conform": cn.get_bool(attrs::NEEDS_CONFORM).unwrap_or(false),
+                                "reason": cn.get_str(attrs::DIRTY_REASON),
+                            }))
+                        })
+                        .collect();
+                    Some(json!({
+                        "id": scene,
+                        "heading": n.get_str(attrs::HEADING),
+                        "number": n.get_str(attrs::SCENE_NUMBER),
+                        "words": n.get_int(attrs::WORDS),
+                        "eighths": n.get_int(attrs::PAGE_EIGHTHS),
+                        "est_duration_s": n.get_float(attrs::EST_DURATION_S),
+                        "characters": n.get(attrs::CHARACTERS).map(|v| v.to_json()),
+                        "elements": elements,
+                        "clips": clips,
+                    }))
+                })
+                .collect();
+            json!({
+                "id": doc.id,
+                "name": doc.name(),
+                "source_key": doc.get_str(attrs::SOURCE_KEY),
+                "scenes": scenes,
+            })
+        })
+        .collect();
+    json!({ "documents": documents })
 }
 
 /// Whether `node` is derived from or contained by `ancestor`, directly.
