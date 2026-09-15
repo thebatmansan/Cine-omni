@@ -156,6 +156,10 @@ pub enum Op {
         offset: [f64; 3],
         direction: Direction,
     },
+    /// Does nothing to pixels. Records that the op chain around it is an
+    /// **approximation** of what its source asked for, so a processor built
+    /// from it can say so. The optimizer keeps it; applying skips it.
+    Approximation(Approximation),
     /// Arbitrary closure (not serializable; invertible only when `inv` is given).
     Custom {
         name: String,
@@ -195,6 +199,7 @@ impl fmt::Debug for Op {
             Op::Custom { name, inv, .. } => {
                 write!(f, "Custom({name}, invertible={})", inv.is_some())
             }
+            Op::Approximation(a) => write!(f, "Approximation({} — {})", a.of, a.reason),
         }
     }
 }
@@ -368,6 +373,8 @@ impl Op {
                     inv: Some(f.clone()),
                 }
             }
+            // Inverting an approximation is still an approximation.
+            Op::Approximation(a) => Op::Approximation(a.clone()),
             Op::Lut1D(_) | Op::Lut3D(_) => return None,
         })
     }
@@ -375,6 +382,7 @@ impl Op {
     /// Apply to one pixel (f64 precision).
     pub fn apply(&self, c: [f64; 3]) -> [f64; 3] {
         match self {
+            Op::Approximation(_) => c,
             Op::Matrix { m, offset } => {
                 let v = m.apply(c);
                 [v[0] + offset[0], v[1] + offset[1], v[2] + offset[2]]
@@ -544,6 +552,15 @@ impl Transform {
     }
 }
 
+/// Where a transform does not deliver what its name promises, and why.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Approximation {
+    /// What was asked for, e.g. the OCIO builtin style.
+    pub of: String,
+    /// What is delivered instead and how far off it has been measured.
+    pub reason: String,
+}
+
 /// An optimized chain of ops ready to apply to pixels and images.
 #[derive(Clone, Debug, Default)]
 pub struct Processor {
@@ -564,6 +581,18 @@ impl Processor {
     /// Optimized ops (for inspection / GPU mirroring).
     pub fn ops(&self) -> &[Op] {
         &self.ops
+    }
+
+    /// Every approximation in the chain. A consumer showing this processor's
+    /// output must show these; an empty list means the chain is what it says.
+    pub fn approximations(&self) -> Vec<&Approximation> {
+        self.ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Approximation(a) => Some(a),
+                _ => None,
+            })
+            .collect()
     }
 
     /// True when nothing would change: the (optimized) chain is empty or
@@ -643,7 +672,22 @@ impl Processor {
 
 /// Concatenate adjacent matrices, drop identities and cancel transfer pairs.
 fn optimize(ops: Vec<Op>) -> Vec<Op> {
-    let mut out: Vec<Op> = Vec::with_capacity(ops.len());
+    // Approximation notes do nothing to pixels, so they must not change how
+    // the chain is optimized either: left in place they would separate two
+    // matrices that should merge, and the result would differ in the last
+    // bits. They are lifted to the front, de-duplicated, and kept.
+    let (notes, ops): (Vec<Op>, Vec<Op>) = ops
+        .into_iter()
+        .partition(|op| matches!(op, Op::Approximation(_)));
+    let mut out: Vec<Op> = Vec::with_capacity(ops.len() + notes.len());
+    for note in notes {
+        if !out.iter().any(|o| match (o, &note) {
+            (Op::Approximation(a), Op::Approximation(b)) => a == b,
+            _ => false,
+        }) {
+            out.push(note);
+        }
+    }
     for op in ops {
         if op.is_identity() {
             continue;

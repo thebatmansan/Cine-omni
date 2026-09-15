@@ -1740,6 +1740,22 @@ fn write_colorspace(s: &mut String, c: &ColorSpaceDef, display: bool) {
 // Builtin transforms
 // ---------------------------------------------------------------------------
 
+/// The ACES output styles this build answers with its own output transform.
+///
+/// It has the ACES 2.0 tonescale — exact on the neutral axis against
+/// OpenColorIO — but not ACES 2.0's chroma compression or gamut mapping, so
+/// saturated colour differs by up to 0.30 of full scale (research 13 §0,
+/// `tests/ocio_conformance.rs`). That is useful as a preview and wrong as a
+/// claim, so every processor built from these styles carries the fact.
+fn aces2_approximation(style: &str) -> Op {
+    Op::Approximation(crate::processor::Approximation {
+        of: style.to_string(),
+        reason: "ACES 2.0 tonescale applied per channel without chroma compression or gamut \
+                 mapping; neutrals match OpenColorIO, saturated colour differs by up to 0.30"
+            .into(),
+    })
+}
+
 /// Ops for a `BuiltinTransform` style in the given direction.
 pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
     let camera = |t: Transfer, p: Primaries| -> Vec<Op> {
@@ -1842,6 +1858,7 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
                 Display::Rec709
             });
             vec![
+                aces2_approximation(st),
                 Op::matrix(rgb_to_rgb_matrix(
                     &Primaries::ACES_AP0,
                     &Primaries::ACES_AP1,
@@ -1864,6 +1881,7 @@ pub fn builtin_ops(style: &str, direction: Direction) -> Result<Vec<Op>> {
         "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-VIDEO-1000nit-15nit-REC2020lim_1.1" => {
             let ot = OutputTransform::for_display(Display::Rec2020Pq1000);
             vec![
+                aces2_approximation(st),
                 Op::matrix(rgb_to_rgb_matrix(
                     &Primaries::ACES_AP0,
                     &Primaries::ACES_AP1,
@@ -2178,6 +2196,41 @@ mod aces_version_tests {
             Err(e) => panic!("expected Unsupported, got {e}"),
             Ok(_) => panic!("ACES 1.0 is not implemented; answering it with ACES 2.0 is wrong"),
         }
+    }
+
+    /// The substitution research 13 found: a view named for ACES 2.0 delivering
+    /// something measurably different, with nothing on the processor to say so.
+    #[test]
+    fn a_view_named_for_aces_2_says_it_is_an_approximation() {
+        let c = Config::aces_default();
+        let view = c
+            .views("sRGB")
+            .unwrap()
+            .iter()
+            .find(|v| v.name.contains("ACES 2.0"))
+            .unwrap()
+            .name
+            .clone();
+        let p = c.display_processor("ACEScg", "sRGB", &view).unwrap();
+        let notes = p.approximations();
+        assert_eq!(notes.len(), 1, "{:?}", p.ops());
+        assert!(notes[0].reason.contains("gamut"), "{}", notes[0].reason);
+        // A chain that is what it says carries nothing.
+        assert!(c
+            .processor("ACEScg", "ACES2065-1")
+            .unwrap()
+            .approximations()
+            .is_empty());
+        // The note does not change a pixel.
+        let without: Vec<Op> = p
+            .ops()
+            .iter()
+            .filter(|o| !matches!(o, Op::Approximation(_)))
+            .cloned()
+            .collect();
+        let q = Processor::new(without);
+        let x = [0.4, 0.2, 0.05];
+        assert_eq!(p.apply_f64(x), q.apply_f64(x));
     }
 
     /// What this build does implement must still work, under its real name.
