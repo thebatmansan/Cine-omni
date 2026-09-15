@@ -387,6 +387,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cine-jobs"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cine-logistics"
 version = "0.1.0"
 dependencies = [

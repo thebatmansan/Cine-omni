@@ -12,6 +12,7 @@ members = [
     "crates/cine-color",
     "crates/cine-audio",
     "crates/cine-gpu",
+    "crates/cine-jobs",
     "crates/cine-pipeline",
     "crates/cine-runtime",
     "crates/cine-shell",
@@ -71,6 +72,7 @@ cine-shell = { path = "crates/cine-shell" }
 cine-color = { path = "crates/cine-color" }
 cine-audio = { path = "crates/cine-audio" }
 cine-gpu = { path = "crates/cine-gpu" }
+cine-jobs = { path = "crates/cine-jobs" }
 cine-pipeline = { path = "crates/cine-pipeline" }
 cine-runtime = { path = "crates/cine-runtime" }
 

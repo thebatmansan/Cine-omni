@@ -1,0 +1,12 @@
+[package]
+name = "cine-jobs"
+description = "Background work for CINE-OMNI: prioritised, resource-bounded, cancellable, retried, persisted and observable jobs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
