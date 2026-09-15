@@ -122,7 +122,7 @@ argument for the evidence discipline, not against it.
 | HDR surfaces | Yes | 🔵 PLANNED | egui composites in gamma space; needs a dedicated surface |
 | ACES output transform | Yes | 🟡 PARTIAL | Measured against OpenColorIO 2.5.2 over 1441 samples and 38 transforms, committed as a permanent harness. ACES 2.0 SDR: **neutral axis exact to 5e-6**, worst saturated sample **0.556** — the missing chroma/gamut compression. Colorimetry and log curves are right; the camera-gamut→AP0 matrices differ (ARRI LogC4 worst at 0.664) |
 | Colour conformance harness | Yes | 🟢 VERIFIED | 1441 reference samples from OCIO 2.5.2 committed with their generator, so the gap is measured on every change rather than once |
-| OpenColorIO config loading | Yes | 🔴 NOT IMPLEMENTED | Cannot load **any** released OCIO ACES config — `shared_views` and `!<Views>` unimplemented |
+| OpenColorIO config loading | Yes | 🟡 PARTIAL | The cg and studio ACES 2.0 configs OCIO 2.5.2 ships now load; 34/37 and 37/51 display/view pairs compile, ACES outputs marked as approximations; unimplemented keys listed on the config (2026-09-16) |
 
 ### Editorial, production, audio
 
