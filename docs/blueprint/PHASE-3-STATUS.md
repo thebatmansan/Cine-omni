@@ -104,7 +104,9 @@ argument for the evidence discipline, not against it.
 | Reverse playback | Yes | 🟡 DEGRADED | 8.47 s → **71.9 ms per picture** with keyframe-aligned chunks, 118x. Still 28.9% dropped crossing a GOP boundary |
 | Seek | Yes | 🟡 PARTIAL | 2.6 µs warm; 4.82 s cold into a 189-picture GOP — the keyframe walk, unavoidable in this design |
 | Short-GOP media | Yes | ⚪ UNVERIFIED | Both assets here are long-GOP; one is a single 240-picture GOP. No encoder to make one |
-| A/V sync | Yes | 🔴 NOT IMPLEMENTED | No audio consumer of the clock exists. Not simulated |
+| A/V sync architecture | Yes | 🟢 VERIFIED | Audio-mastered clock: 23.976 fps picture paced by a 48 kHz clock lands on the exact sample, checked at all 240 pictures, and never one sample early. 14 tests |
+| A/V sync, end to end | Yes | 🔴 UNSUPPORTED | **No audio device on this build.** No ALSA/PipeWire headers and no pkg-config, so `cpal` cannot build. Runtime-loading `libasound` is researched, not built. Nothing claims sound plays |
+| Audio device latency | Yes | ⚪ UNVERIFIED | Modelled and tested; never measured against hardware |
 | Edit list (`elst`) handling | Yes | 🔴 NOT IMPLEMENTED | The reference asset presents from 1024/12288, not 0, and nothing compensates |
 | Proxies, thumbnails, waveforms | Yes | 🔵 PLANNED | |
 
@@ -297,7 +299,8 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * "Real-time playback" **in general** — headless playback of the reference clip
   is drop-free, but on a margin of ~0.1 ms per picture, on one asset, on one
   machine. That is a measurement, not a property of the system
-* "A/V sync" — no audio consumer of the playback clock exists
+* "A/V sync" — the architecture is verified but no audio device exists on this
+  build, so no sound has ever accompanied a picture here
 * "Smooth" or "production" playback of long-GOP media — reverse still drops
   28.9% crossing a GOP boundary and a cold seek into a GOP costs 4.8 s
 * "Short-GOP" anything — unverified, no asset

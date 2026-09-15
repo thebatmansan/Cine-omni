@@ -15,6 +15,7 @@
 //!    cannot decode returns [`Error::NoDecoder`]; it does not return a blank
 //!    frame.
 
+pub mod av;
 pub mod cache;
 pub mod capability;
 pub mod clock;
@@ -30,6 +31,7 @@ pub mod time;
 pub mod ucg;
 pub mod video;
 
+pub use av::{AudioScheduler, AudioSink, AudioSource, AudioTimeSource, AvStats, AvStatus};
 pub use cache::{CacheStats, FrameCache, FrameKey};
 pub use capability::{BackendKind, Capability, Chroma, Verification};
 pub use clock::{PlaybackClock, PlaybackRate, PlaybackTelemetry, TransportState};

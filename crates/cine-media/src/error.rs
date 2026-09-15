@@ -73,6 +73,13 @@ pub enum Error {
         end: String,
     },
 
+    // ---- playback ---------------------------------------------------------
+    /// A configuration this build cannot play. Distinct from `NoDecoder`: the
+    /// codec may be fine and the arrangement not — a source and sink at
+    /// different sample rates with no resampler between them, for instance.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+
     // ---- graph ------------------------------------------------------------
     #[error("graph: {0}")]
     Ucg(#[from] ucg_core::UcgError),

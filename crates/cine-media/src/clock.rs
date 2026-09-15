@@ -37,6 +37,21 @@ use ucg_core::{Rate, RationalTime, Rounding};
 pub trait TimeSource: Send + Sync {
     /// Monotonically non-decreasing time since some fixed origin.
     fn elapsed(&self) -> Duration;
+
+    /// The same reading, exactly, for a source that has an exact one.
+    ///
+    /// `Duration` is a whole number of nanoseconds and **1/48000 s is not one**:
+    /// it is 20833.33… ns. An audio clock reporting only `Duration` therefore
+    /// lands just *below* every picture boundary it should land on, and a
+    /// 23.976 fps picture paced by it changes one poll late at every single
+    /// frame. Sources with an exact reading — an audio device counting frames —
+    /// return it here, and the playhead is then exact.
+    ///
+    /// The operating system's clock has no exact reading to give and returns
+    /// `None`.
+    fn elapsed_exact(&self) -> Option<RationalTime> {
+        None
+    }
 }
 
 /// The operating system's monotonic clock.
@@ -198,6 +213,8 @@ pub struct PlaybackClock<S: TimeSource> {
     anchor_media: RationalTime,
     /// Wall time when the current state began.
     anchor_wall: Duration,
+    /// The same instant exactly, when the source has an exact reading.
+    anchor_exact: Option<RationalTime>,
     /// The playable extent. The playhead never leaves it.
     range: (RationalTime, RationalTime),
     telemetry: PlaybackTelemetry,
@@ -207,12 +224,14 @@ impl<S: TimeSource> PlaybackClock<S> {
     /// A clock over `[start, end)`, stopped at `start`.
     pub fn new(source: S, start: RationalTime, end: RationalTime) -> Self {
         let anchor_wall = source.elapsed();
+        let anchor_exact = source.elapsed_exact();
         PlaybackClock {
             source,
             state: TransportState::Stopped,
             rate: PlaybackRate::FORWARD,
             anchor_media: start,
             anchor_wall,
+            anchor_exact,
             range: (start, end),
             telemetry: PlaybackTelemetry::default(),
         }
@@ -250,9 +269,35 @@ impl<S: TimeSource> PlaybackClock<S> {
         if !self.state.is_advancing() {
             return self.anchor_media;
         }
-        let wall = self.source.elapsed().saturating_sub(self.anchor_wall);
-        let advanced = self.media_delta(wall);
+        let advanced = match (self.source.elapsed_exact(), self.anchor_exact) {
+            (Some(now), Some(anchor)) => self.exact_delta(now, anchor),
+            _ => None,
+        }
+        .unwrap_or_else(|| {
+            let wall = self.source.elapsed().saturating_sub(self.anchor_wall);
+            self.media_delta(wall)
+        });
         self.clamp(self.anchor_media.checked_add(&advanced))
+    }
+
+    /// Elapsed source time scaled by the playback rate, without rounding.
+    ///
+    /// `ticks` at `num/den`, scaled by `pnum/pden`, is `ticks * pnum` at
+    /// `(num * pden)/den` — an exact rational, not a division.
+    /// `None` when the scaled rate will not fit, so the caller falls back to
+    /// the nanosecond path rather than rounding the position here.
+    fn exact_delta(&self, now: RationalTime, anchor: RationalTime) -> Option<RationalTime> {
+        let elapsed = now.checked_sub(&anchor);
+        let rate = elapsed.rate_exact();
+        let (pnum, pden) = self.rate.num_den();
+        let scaled_rate = rate
+            .num()
+            .checked_mul(pden)
+            .and_then(|num| Rate::new(num, rate.den()))?;
+        Some(RationalTime::exact(
+            elapsed.ticks().saturating_mul(i64::from(pnum)),
+            scaled_rate,
+        ))
     }
 
     /// Wall-clock duration converted to media time at the current rate,
@@ -281,6 +326,7 @@ impl<S: TimeSource> PlaybackClock<S> {
     fn reanchor(&mut self) {
         self.anchor_media = self.position();
         self.anchor_wall = self.source.elapsed();
+        self.anchor_exact = self.source.elapsed_exact();
     }
 
     // -- transport ---------------------------------------------------------
@@ -305,6 +351,7 @@ impl<S: TimeSource> PlaybackClock<S> {
         };
         self.anchor_media = from;
         self.anchor_wall = self.source.elapsed();
+        self.anchor_exact = self.source.elapsed_exact();
         self.state = TransportState::Playing;
         Ok(())
     }
@@ -324,6 +371,7 @@ impl<S: TimeSource> PlaybackClock<S> {
         }
         self.anchor_media = self.range.0;
         self.anchor_wall = self.source.elapsed();
+        self.anchor_exact = self.source.elapsed_exact();
         self.state = TransportState::Stopped;
     }
 
@@ -335,6 +383,7 @@ impl<S: TimeSource> PlaybackClock<S> {
         let was_advancing = self.state.is_advancing();
         self.anchor_media = self.clamp(to);
         self.anchor_wall = self.source.elapsed();
+        self.anchor_exact = self.source.elapsed_exact();
         self.telemetry.seeks += 1;
         self.state = if was_advancing {
             TransportState::Playing
@@ -368,6 +417,7 @@ impl<S: TimeSource> PlaybackClock<S> {
         let stepped = here.checked_add(&RationalTime::exact(frames, rate));
         self.anchor_media = self.clamp(stepped);
         self.anchor_wall = self.source.elapsed();
+        self.anchor_exact = self.source.elapsed_exact();
         self.state = TransportState::Paused;
         Ok(self.anchor_media)
     }
@@ -382,6 +432,7 @@ impl<S: TimeSource> PlaybackClock<S> {
         let here = self.position();
         self.anchor_media = self.clamp(here);
         self.anchor_wall = self.source.elapsed();
+        self.anchor_exact = self.source.elapsed_exact();
     }
 
     // -- reporting what actually happened -----------------------------------
