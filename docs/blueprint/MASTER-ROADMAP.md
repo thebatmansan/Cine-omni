@@ -35,11 +35,17 @@ since the audit, each with its evidence in the named document or test:
 | Phase 2 — schema | op-log records stamped; newer schema refused; migration table enforced | `engine_tests.rs` |
 | Phase 3 — jobs | `cine-jobs` (priority, resources, dependencies, cancel, retry, journal/resume); checksum verification and thumbnails as jobs; jobs panel | `jobs.rs`, `jobs_protocol.rs` |
 | Phase 3 — colour metadata | H.264 SPS/VUI parsed; pictures carry what the stream declares | `sps_real.rs` |
+| Phase 7 — colour management (pulled forward) | ACES 2.0 output transform ported from aces-core (31 displays, both directions); the released cg and studio ACES configs checked against OpenColorIO end to end — 88/88 views, 158/160 conversions; display-referred view transforms, Rec.2100 PQ/HLG, pass-thru exponents, Canon CAT02, Apple Log and ADX fixed or added on that evidence | `aces2_oracle.rs`, `released_configs.rs`, `licenses/THIRD-PARTY.toml` |
 | Phase 8 — sound (pulled forward) | ALSA device via runtime-loaded libasound; the cut's sound decoded, mixed and played in the native window, pacing the picture | `AV-SYNC.md` |
 | Wrong-direction corrections | takes owned by the production log, not shots (migrated at open); compositing data window; a failed cascade stays undoable; zero rate refused; same-length rewording reaches the cut; TCP_NODELAY | commits since `6d8fd67` |
 
-Still open from the audit's wrong-direction list: the OCIO parallel parser (a
-policy decision), union bounding boxes and windowed transforms in compositing,
+The audit's "OCIO parallel parser" item is decided as research 13 §7
+recommends: the native parser stays, the rendering is ported from the Academy's
+Apache-2.0 reference, and a real OpenColorIO is a developer-side oracle whose
+outputs on the released configs are committed and compared on every test run —
+so drift from the format fails a test instead of shipping.
+
+Still open from the audit's wrong-direction list: union bounding boxes and windowed transforms in compositing,
 and one GPU device shared by compute and presentation (the second device is now
 created only for `--dump`).
 
@@ -215,7 +221,9 @@ either. `cine start` becomes the whole application.
   wired to the viewer; wheels, curves, qualifiers, windows with tracking; CDL
   round-trip; HDR surface and scopes.
 * **Visible:** grade the cut against a loaded studio config with live scopes.
-* **Gate:** OCIO oracle conformance across all shipped ACES configs.
+* **Gate:** OCIO oracle conformance across all shipped ACES configs. *Met for
+  views and colorspace conversions (2026-09-16); file rules, viewing rules and
+  named transforms are still listed as unimplemented keys.*
 * **Estimate:** 4–6 months.
 
 ## Phase 8 — Sound

@@ -13,6 +13,10 @@
 //!   preserved ratios (hue preserving), followed by gamut conversion and the
 //!   display encoding. It is not the official CTL either, but it is exact,
 //!   documented, and parametric in peak luminance.
+//!
+//! Neither is the ACES 2.0 output transform. That is [`crate::aces2`], ported
+//! from the Academy's reference and checked against OpenColorIO; the config
+//! builtins use it.
 
 #![allow(clippy::needless_range_loop)]
 

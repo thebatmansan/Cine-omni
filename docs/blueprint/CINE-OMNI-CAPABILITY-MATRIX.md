@@ -176,8 +176,8 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 
 | Capability | Reference | What professionals need | Status | Now | Requires | Model | Deps / licensing | Perf | Cx | P | Validation |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Display transforms | Resolve, Baselight | Correct, declared, never substituted | **PARTIAL** | ACES 2.0 exact on neutrals; saturated off ≤0.30; ACES 1.0 refused | BE · G | color.config | ACES Apache-2.0 | real time | M | P1 | OCIO oracle conformance (1,441 samples) |
-| OCIO config loading | OpenColorIO | Load studio and ACES configs | **PARTIAL** | the cg and studio ACES 2.0 configs OCIO 2.5.2 ships load (shared views, `<USE_DISPLAY_NAME>`); unimplemented keys listed (file/viewing rules, named transforms, environment, virtual display, inactive colorspaces); coverage measured: cg 34/37 display/view pairs compile (10 marked approximations), studio 37/51; display styles match OCIO to ≤9.1e-6 | ACES 2.0 port for other peak luminances · file rules · named transforms | color.config | OCIO BSD-3-Clause (verified); configs used unmodified as test data | — | M | **P0** (for colour) | `released_configs.rs`, `display_styles.rs` |
+| Display transforms | Resolve, Baselight | Correct, declared, never substituted | **IMPLEMENTED** | ACES 2.0 output transform ported from the Academy's aces-core CTL (`aces2.rs`): all 31 displays OpenColorIO 2.5.2 registers, both directions, 3,038 samples, worst forward 1.8e-5 / inverse 5.2e-4; ACES 1.x refused; not yet applied in the viewer, so nobody sees it | viewer display pipeline (GPU) · FE view selector | color.config | aces-core Apache-2.0 (`licenses/THIRD-PARTY.toml`) | ~20 ms table build per display; per-pixel cost not measured | M | P1 | `aces2_oracle.rs` |
+| OCIO config loading | OpenColorIO | Load studio and ACES configs | **PARTIAL** | the cg and studio ACES 2.0 configs OCIO 2.5.2 ships load (shared views, `<USE_DISPLAY_NAME>`); unimplemented keys listed (file/viewing rules, named transforms, environment, virtual display, inactive colorspaces); compared with OpenColorIO on the same files: all 88 display/view pairs render as OCIO does (worst code value 1.5e-5); 158/160 colorspace conversions match (worst 1.6e-5), ACES→ADX refused and ACEScc below zero kept to the Academy reference (adjudicated) | file rules · viewing rules · named transforms · environment | color.config | OCIO BSD-3-Clause (verified); configs used unmodified as test data | — | M | **P0** (for colour) | `released_configs.rs`, `display_styles.rs`, `aces2_oracle.rs` |
 | Primaries: wheels, lift/gamma/gain, offset | Resolve | Precise, GPU, per-shot | **MISSING** | CDL maths exists | FE wheels · G | color.grade | — | 4K real time | M | P1 | ASC CDL conformance |
 | Curves | Resolve | RGB, hue-vs-X | **MISSING** | — | FE · G | grade | — | — | M | P1 | — |
 | Qualifiers & windows | Resolve | HSL keys, power windows, tracking | **MISSING** | keyer exists | FE · G · tracking | grade nodes | — | — | L | P1 | — |
@@ -187,7 +187,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | HDR (PQ/HLG) grading & monitoring | Resolve Studio | HDR scopes, mastering metadata | **MISSING** | — | G HDR surface · BE | mastering meta | — | — | L | P2 | — |
 | Dolby Vision | Resolve Studio | Analysis metadata; trims | **BLOCKED** | — | Dolby tools | — | Dolby: basic metadata free in tools; trims licence $2,500/yr; SDK terms proprietary | — | L | P3 | — |
 | Shot matching, stills/gallery | Resolve | Reference stills, split-screen compare | **MISSING** | — | FE · M | stills | — | — | M | P2 | — |
-| Camera RAW / log colour science | Resolve | Log curves, gamut per camera | **PARTIAL** | some transforms | BE · RAW SDKs | — | vendor specs | — | M | P2 | vendor LUT parity |
+| Camera RAW / log colour science | Resolve | Log curves, gamut per camera | **PARTIAL** | log/gamut → ACES for ARRI LogC3/C4, Sony S-Log3, RED Log3G10, Panasonic V-Log, Canon Log 2/3 (CAT02), Apple Log, ADX10/16 — each matches OCIO through the released configs; no RAW | BE · RAW SDKs | — | vendor specs | — | M | P2 | vendor LUT parity |
 
 ### 3.5 Audio
 
@@ -275,8 +275,8 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 | Status | Count |
 |---|---:|
 | VERIFIED | 17 |
-| IMPLEMENTED | 5 |
-| PARTIAL | 47 |
+| IMPLEMENTED | 6 |
+| PARTIAL | 46 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
 | MISSING | 58 |
