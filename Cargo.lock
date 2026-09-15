@@ -518,6 +518,7 @@ name = "cine-shell"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cine-audio-io",
  "cine-gpu",
  "cine-media",
  "cine-timeline",

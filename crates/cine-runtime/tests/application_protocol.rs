@@ -71,7 +71,7 @@ fn every_capability_states_what_it_is_and_why() {
 
 /// The two claims this build must never make.
 #[test]
-fn real_time_playback_and_audio_are_reported_unavailable() {
+fn browser_playback_is_unavailable_and_sound_says_where_it_plays() {
     let h = Harness::start();
     let mut c = h.client();
     let caps = c.call("capabilities", json!({}));
@@ -87,7 +87,12 @@ fn real_time_playback_and_audio_are_reported_unavailable() {
         .as_str()
         .unwrap()
         .contains("GPU"));
-    assert_eq!(find("audio.monitoring")["state"], "unavailable");
+    // Sound plays with the picture only in the native window, and the claim
+    // says where and what it lacks rather than being verified outright.
+    let monitoring = find("audio.monitoring");
+    assert_eq!(monitoring["state"], "degraded");
+    let detail = monitoring["detail"].as_str().unwrap();
+    assert!(detail.contains("native window") && detail.contains("Not in the browser"), "{detail}");
     // And the honest thing the browser *can* do is not oversold either.
     assert_eq!(find("media.preview")["state"], "degraded");
     assert!(find("media.preview")["detail"]
