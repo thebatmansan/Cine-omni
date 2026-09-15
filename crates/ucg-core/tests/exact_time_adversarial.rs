@@ -567,3 +567,13 @@ fn serialization_round_trips_exactly() {
         );
     }
 }
+
+#[test]
+fn a_serialized_time_with_a_zero_rate_is_refused_not_replaced() {
+    let bad = r#"{"ticks":10,"rate_num":24,"rate_den":0}"#;
+    let err = serde_json::from_str::<ucg_core::RationalTime>(bad).unwrap_err();
+    assert!(err.to_string().contains("invalid rate"), "{err}");
+    let good: ucg_core::RationalTime =
+        serde_json::from_str(r#"{"ticks":10,"rate_num":24000,"rate_den":1001}"#).unwrap();
+    assert_eq!(good.rate_exact(), ucg_core::Rate::F23_976);
+}

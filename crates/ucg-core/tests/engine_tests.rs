@@ -956,3 +956,41 @@ fn archive_compaction_boundary_is_explicit() {
         "history before the snapshot is intentionally gone"
     );
 }
+
+/// A reactor whose plan always fails.
+struct Broken;
+impl Reactor for Broken {
+    fn name(&self) -> &str {
+        "broken"
+    }
+    fn interested(&self, cs: &ChangeSet) -> bool {
+        cs.touches_kind("script.scene")
+    }
+    fn react(&self, _: &ChangeSet, _: &Graph) -> Result<Vec<Plan>> {
+        Ok(vec![Plan::new("fail", |_| {
+            Err(UcgError::Aborted("deliberate".into()))
+        })])
+    }
+}
+
+#[test]
+fn a_failed_cascade_leaves_the_committed_change_undoable() {
+    let engine = Engine::new();
+    engine.add_reactor(Arc::new(Broken));
+    let mut scene = EntityId::nil();
+    let res = engine.transact("create scene", |tx| {
+        scene = tx.create("script.scene")?;
+        Ok(())
+    });
+    assert!(res.is_err(), "the reactor failure is reported");
+    assert!(
+        engine.read().contains(scene),
+        "the user's change did commit"
+    );
+    let history = engine.history();
+    assert_eq!(history.undo.len(), 1, "and it is on the undo stack");
+    assert_eq!(history.undo[0].label, "create scene");
+    engine.undo().unwrap();
+    assert!(!engine.read().contains(scene));
+    assert_eq!(engine.history().redo.len(), 1);
+}

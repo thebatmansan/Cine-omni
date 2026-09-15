@@ -27,7 +27,7 @@ pub mod time;
 pub mod tx;
 pub mod value;
 
-pub use engine::{ChangeSet, Engine, EngineLimits, EngineStats, Plan, Reactor, UndoGroup};
+pub use engine::{ChangeSet, Engine, EngineLimits, EngineStats, History, Plan, Reactor, UndoGroup};
 pub use error::{Result, UcgError};
 pub use exact_time::{Rate, Rounding};
 pub use graph::Graph;

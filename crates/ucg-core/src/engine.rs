@@ -180,6 +180,14 @@ pub struct UndoGroup {
     pub deltas: Vec<Arc<Delta>>,
 }
 
+/// A snapshot of the undo and redo stacks. Groups share their deltas with the
+/// engine, so taking one is cheap.
+#[derive(Clone, Debug, Default)]
+pub struct History {
+    pub undo: Vec<UndoGroup>,
+    pub redo: Vec<UndoGroup>,
+}
+
 /// Bounds on the engine's in-memory windows.
 ///
 /// Neither bound affects durability. The on-disk op log remains the complete
@@ -356,10 +364,16 @@ impl Engine {
             label: label.to_string(),
             deltas: Vec::new(),
         };
+        let mut failure = None;
         if let Some(cs) = first {
             group.deltas.push(cs.delta.clone());
             if *self.reacting.lock() {
-                self.cascade(cs, &mut group)?;
+                // The user's change is already committed. If a reactor fails,
+                // what did commit must still be undoable as one step, so the
+                // error is held until the group is on the undo stack.
+                if let Err(e) = self.cascade(cs, &mut group) {
+                    failure = Some(e);
+                }
             }
         }
         if !group.deltas.is_empty() {
@@ -372,7 +386,18 @@ impl Engine {
             }
             self.redo.lock().clear();
         }
-        Ok(group)
+        match failure {
+            Some(e) => Err(e),
+            None => Ok(group),
+        }
+    }
+
+    /// The undo and redo stacks, oldest first: what the shared history shows.
+    pub fn history(&self) -> History {
+        History {
+            undo: self.undo.lock().clone(),
+            redo: self.redo.lock().clone(),
+        }
     }
 
     /// Commit without triggering the reactor cascade or undo bookkeeping

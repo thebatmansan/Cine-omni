@@ -580,9 +580,16 @@ impl Serialize for RationalTime {
 impl<'de> Deserialize<'de> for RationalTime {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         match AnyForm::deserialize(d)? {
+            // A zero rate is not a time. Substituting 24 fps here would turn a
+            // corrupt value into a plausible wrong one.
             AnyForm::Exact(e) => Ok(RationalTime {
                 value: e.ticks,
-                rate: Rate::new(e.rate_num, e.rate_den).unwrap_or(Rate::F24),
+                rate: Rate::new(e.rate_num, e.rate_den).ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "invalid rate {}/{}: a rate must be non-zero",
+                        e.rate_num, e.rate_den
+                    ))
+                })?,
             }),
             AnyForm::Legacy(l) => Ok(RationalTime::new(l.value, l.rate)),
         }
