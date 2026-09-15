@@ -55,11 +55,25 @@ empty target directory, one configuration at a time.
 | Configuration | Total | `deps` | incremental | test exes |
 |---|---:|---:|---:|---:|
 | baseline (dependency debuginfo on) | 9.41 GB | 7.04 GB | 2.08 GB | 61 |
-| **dependency debuginfo off** | **6.59 GB** | **4.48 GB** | 2.08 GB | 63 |
+| **dependency debuginfo off** (applied) | **6.59 GB** | **4.48 GB** | 2.08 GB | 63 |
+| + workspace `line-tables-only` (opt-in) | **3.74 GB** | 2.37 GB | 1.35 GB | 64 |
 
-**30% smaller overall, 36% smaller in `deps`** — and the smaller build contains
-*more* test binaries than the larger one, because three test files were added
-between the two runs. The reduction is therefore a lower bound, not a best case.
+**30% smaller overall and 36% in `deps`** for the applied setting — and a lower
+bound, not a best case, because the smaller builds contain *more* test binaries
+than the baseline did (test files were added between runs).
+
+Going further, to `line-tables-only` on the workspace crates too, is **60%
+smaller** and also cuts the incremental directory by a third. It is *not* the
+default, on purpose: it keeps file-and-line in panic backtraces but removes
+variable inspection in a debugger **for our own code**, and that is a working
+tool, not a build artifact. It is offered as a choice rather than imposed:
+
+```
+cargo test --config 'profile.dev.debug="line-tables-only"'
+```
+
+Whoever owns the machine can make that the default; this work will not make it
+for them.
 
 Build *times* from those runs are not comparable and are deliberately not quoted:
 the two ran under different amounts of competing load.
