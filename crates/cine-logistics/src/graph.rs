@@ -169,12 +169,12 @@ pub fn write_shot_list(tx: &mut Tx, scene: EntityId, shots: &[ShotEntry]) -> Res
     }
     // Shots whose camera is gone. A shot is derived and may be regenerated, but
     // a take is *captured* — it records that something was actually shot. Takes
-    // hang beneath shots by `Contains`, and node deletion recurses into
-    // `Contains` children, so deleting a stale shot would destroy them.
+    // are owned by the production log, so deleting a shot cannot destroy them;
+    // it would still cut the take off from what it was shot for.
     //
-    // A shot holding captured data is therefore retired rather than deleted: it
-    // is marked stale for a human to resolve, and its takes are untouched. Only
-    // a shot with nothing captured against it is cleaned up.
+    // A shot with takes against it is therefore retired rather than deleted: it
+    // is marked stale for a human to resolve. Only a shot with nothing captured
+    // against it is cleaned up.
     for stale in children_of_kind(tx.graph(), list, kinds::LOGISTICS_SHOT) {
         if keep.contains(&stale) {
             continue;
@@ -416,8 +416,33 @@ pub fn read_call_sheet(graph: &Graph, day: EntityId) -> Option<CallSheet> {
         .and_then(|n| n.get_as(CALL_SHEET_ATTR))
 }
 
-/// Store a take's metadata summary and events as a `logistics.take`
-/// contained in `shot`.
+/// The production log: the one place captured takes are owned.
+///
+/// Planned things — shots, shot lists, schedules — are derived and may be
+/// regenerated or deleted. What was shot may not, so it is not structurally
+/// beneath anything derived: a take is `Contains`-owned by the log and
+/// `References` the shot it covers. `References` does not propagate dirtiness,
+/// so replanning a shot never marks a take stale, and deleting a shot removes
+/// only the reference.
+pub fn production_log_id(graph: &Graph) -> EntityId {
+    match graph.of_kind(kinds::PROJECT).first() {
+        Some(project) => EntityId::derived(project.id, kinds::LOGISTICS_PRODUCTION_LOG),
+        None => EntityId::from_key("logistics:production_log"),
+    }
+}
+
+fn ensure_production_log(tx: &mut Tx) -> Result<EntityId> {
+    let log = production_log_id(tx.graph());
+    tx.ensure(log, kinds::LOGISTICS_PRODUCTION_LOG)?;
+    tx.set(log, attrs::NAME, "Production log")?;
+    if let Some(project) = tx.graph().of_kind(kinds::PROJECT).first().map(|n| n.id) {
+        tx.link(project, log, EdgeKind::Contains)?;
+    }
+    Ok(log)
+}
+
+/// Store a take's metadata summary and events as a `logistics.take` in the
+/// production log, referencing `shot`.
 pub fn write_take_metadata(
     tx: &mut Tx,
     shot: EntityId,
@@ -426,6 +451,7 @@ pub fn write_take_metadata(
     events: &[MetadataEvent],
 ) -> Result<EntityId> {
     require(tx.graph(), shot)?;
+    let log = ensure_production_log(tx)?;
     let id = take_id(shot, take_number);
     tx.ensure(id, kinds::LOGISTICS_TAKE)?;
     tx.set(id, attrs::NAME, format!("Take {take_number}"))?;
@@ -433,8 +459,35 @@ pub fn write_take_metadata(
     tx.set(id, attrs::ORDER, take_number)?;
     tx.set_as(id, attrs::METADATA, summary)?;
     tx.set_as(id, EVENTS_ATTR, &events.to_vec())?;
-    tx.link(shot, id, EdgeKind::Contains)?;
+    tx.link(log, id, EdgeKind::Contains)?;
+    tx.link(id, shot, EdgeKind::References)?;
     Ok(id)
+}
+
+/// Move takes recorded under the old structure — `Contains`-children of shots
+/// — into the production log, referencing their shots. Returns how many moved;
+/// a second run moves none.
+pub fn migrate_takes_out_of_shots(tx: &mut Tx) -> Result<usize> {
+    let misplaced: Vec<(EntityId, EntityId)> = tx
+        .graph()
+        .of_kind(kinds::LOGISTICS_SHOT)
+        .iter()
+        .flat_map(|shot| {
+            children_of_kind(tx.graph(), shot.id, kinds::LOGISTICS_TAKE)
+                .into_iter()
+                .map(move |take| (shot.id, take))
+        })
+        .collect();
+    if misplaced.is_empty() {
+        return Ok(0);
+    }
+    let log = ensure_production_log(tx)?;
+    for (shot, take) in &misplaced {
+        tx.unlink(*shot, *take, EdgeKind::Contains)?;
+        tx.link(log, *take, EdgeKind::Contains)?;
+        tx.link(*take, *shot, EdgeKind::References)?;
+    }
+    Ok(misplaced.len())
 }
 
 /// Read a take's summary and events.
@@ -448,7 +501,26 @@ pub fn read_take_metadata(
     Some((summary, events))
 }
 
-/// Take node ids under a shot, in take order.
+/// Takes covering a shot, in take order.
 pub fn takes_of_shot(graph: &Graph, shot: EntityId) -> Vec<EntityId> {
-    children_of_kind(graph, shot, kinds::LOGISTICS_TAKE)
+    let mut takes: Vec<(i64, EntityId)> = graph
+        .sources(shot, EdgeKind::References)
+        .into_iter()
+        .filter(|t| {
+            graph
+                .node(*t)
+                .is_some_and(|n| n.kind.as_str() == kinds::LOGISTICS_TAKE)
+        })
+        .map(|t| {
+            (
+                graph
+                    .attr(t, attrs::ORDER)
+                    .and_then(|v| v.as_int())
+                    .unwrap_or(0),
+                t,
+            )
+        })
+        .collect();
+    takes.sort();
+    takes.into_iter().map(|(_, t)| t).collect()
 }

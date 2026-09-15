@@ -82,13 +82,33 @@ impl OmniProject {
             .ok_or_else(|| PipelineError::Script("project has no root entity".into()))?;
         crate::reactors::install_all(&engine);
         disk.enable_autosave();
-        Ok(OmniProject {
+        let project = OmniProject {
             engine,
             root,
             disk: Some(disk),
             session: Default::default(),
             jobs: Default::default(),
-        })
+        };
+        project.migrate()?;
+        Ok(project)
+    }
+
+    /// Structural corrections to data written by earlier versions, committed as
+    /// system changes so they are persisted once and never undone.
+    fn migrate(&self) -> Result<()> {
+        let mut moved = 0;
+        self.engine.commit_system(
+            "migrate: captured takes out from under planned shots",
+            |tx| {
+                moved = cine_logistics::graph::migrate_takes_out_of_shots(tx)
+                    .map_err(|e| crate::engine_err("logistics", e))?;
+                Ok(())
+            },
+        )?;
+        if moved > 0 {
+            eprintln!("      migrated {moved} take(s) into the production log");
+        }
+        Ok(())
     }
 
     fn init_root(engine: &Engine, setup: &ProjectSetup) -> Result<EntityId> {

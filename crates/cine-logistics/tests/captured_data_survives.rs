@@ -260,3 +260,61 @@ fn a_retired_shot_is_un_retired_when_its_camera_returns() {
         "its takes were never lost"
     );
 }
+
+/// Takes recorded under the old structure — owned by a shot — are moved into
+/// the production log once, and after that a deleted shot cannot take them.
+#[test]
+fn old_takes_owned_by_shots_are_migrated_into_the_production_log() {
+    use cine_logistics::graph::{migrate_takes_out_of_shots, production_log_id};
+    let engine = Engine::new();
+    let (project, shot, take) = (
+        EntityId::from_key("project:root"),
+        EntityId::from_key("shot"),
+        EntityId::from_key("take"),
+    );
+    engine
+        .transact("the old shape", |tx| {
+            tx.ensure(project, kinds::PROJECT)?;
+            tx.ensure(shot, kinds::LOGISTICS_SHOT)?;
+            tx.ensure(take, kinds::LOGISTICS_TAKE)?;
+            tx.set(take, attrs::ORDER, 1i64)?;
+            tx.link(shot, take, EdgeKind::Contains)
+        })
+        .unwrap();
+    let mut moved = 0;
+    engine
+        .transact("migrate", |tx| {
+            moved = migrate_takes_out_of_shots(tx).map_err(|e| UcgError::Aborted(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(moved, 1);
+    {
+        let g = engine.read();
+        assert!(
+            !g.has_edge(shot, take, EdgeKind::Contains),
+            "no longer owned by the shot"
+        );
+        assert!(g.has_edge(take, shot, EdgeKind::References));
+        assert!(g.has_edge(production_log_id(&g), take, EdgeKind::Contains));
+        assert_eq!(takes_of_shot(&g, shot), vec![take]);
+    }
+    let rev = engine.revision();
+    engine
+        .transact("again", |tx| {
+            migrate_takes_out_of_shots(tx)
+                .map(|_| ())
+                .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .unwrap();
+    assert_eq!(engine.revision(), rev, "a second run changes nothing");
+
+    engine
+        .transact("delete the shot", |tx| tx.delete(shot))
+        .unwrap();
+    let g = engine.read();
+    assert!(
+        g.contains(take),
+        "deleting a planned shot never deletes what was shot"
+    );
+}

@@ -52,6 +52,9 @@ pub const LOGISTICS_DAY: &str = "logistics.day";
 pub const LOGISTICS_CALL_SHEET: &str = "logistics.call_sheet";
 pub const LOGISTICS_LENS_GRID: &str = "logistics.lens_grid";
 pub const LOGISTICS_TAKE: &str = "logistics.take";
+/// What was actually shot, owned by nothing that was planned. Takes live here
+/// and *reference* the shots they cover.
+pub const LOGISTICS_PRODUCTION_LOG: &str = "logistics.production_log";
 pub const LOGISTICS_CREW: &str = "logistics.crew";
 pub const LOGISTICS_CAST: &str = "logistics.cast";
 

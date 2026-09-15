@@ -449,7 +449,14 @@ fn call_sheet_and_take_metadata_round_trip() {
     assert!(g.has_edge(ids.0, day, EdgeKind::DerivedFrom));
     assert_eq!(read_call_sheet(&g, day).as_ref(), Some(&sheet));
     let shot = shot_id(shots[0].camera);
-    assert!(g.has_edge(shot, ids.2, EdgeKind::Contains));
+    // Captured, so owned by the production log; the shot is only referenced.
+    assert!(!g.has_edge(shot, ids.2, EdgeKind::Contains));
+    assert!(g.has_edge(ids.2, shot, EdgeKind::References));
+    assert!(g.has_edge(
+        cine_logistics::graph::production_log_id(&g),
+        ids.2,
+        EdgeKind::Contains
+    ));
     assert_eq!(takes_of_shot(&g, shot), vec![ids.2]);
     assert_eq!(g.node(ids.2).unwrap().kind.as_str(), kinds::LOGISTICS_TAKE);
     let (s, e) = read_take_metadata(&g, ids.2).expect("take metadata");

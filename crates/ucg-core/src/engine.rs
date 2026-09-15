@@ -400,6 +400,17 @@ impl Engine {
         }
     }
 
+    /// Commit a change the *system* makes — a data migration at open — rather
+    /// than one a person made: persisted and published like any commit, but not
+    /// on the undo stack and not reacted to. Undoing a migration would restore a
+    /// structure the application no longer understands.
+    pub fn commit_system<F>(&self, label: &str, f: F) -> Result<Option<u64>>
+    where
+        F: FnOnce(&mut Tx) -> Result<()>,
+    {
+        Ok(self.commit(label, 0, None, f)?.map(|cs| cs.revision()))
+    }
+
     /// Commit without triggering the reactor cascade or undo bookkeeping
     /// (used for op-log replay and undo/redo).
     fn commit<F>(
