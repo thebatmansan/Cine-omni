@@ -7,6 +7,7 @@ import { Production } from "./panels/Production";
 import { Inspector } from "./panels/Inspector";
 import { Record } from "./panels/Record";
 import { Script } from "./panels/Script";
+import { Writer } from "./panels/Writer";
 import { Timeline, itemKey } from "./panels/Timeline";
 import { Viewer } from "./panels/Viewer";
 import type { EditOp, ExactTime, MediaView, TimelineItem, TimelineTrack, TimelineView } from "./rpc/client";
@@ -45,6 +46,7 @@ export function App() {
   const [sceneId, setSceneId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<"inspector" | "history" | "jobs">("inspector");
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [scriptMode, setScriptMode] = useState<"read" | "write">("read");
 
   const media = useMemo(
     () => session.media.find((m) => m.id === mediaId) ?? session.media.find((m) => m.video?.decodable) ?? null,
@@ -316,8 +318,30 @@ export function App() {
         </div>
       )}
 
-      {workspace === "script" && (
+      {workspace === "script" && scriptMode === "write" && session.script?.documents[0] && (
+        <div className="work script-write">
+          <div className="mode-bar">
+            <button onClick={() => setScriptMode("read")}>Read &amp; bind</button>
+            <button aria-pressed>Write</button>
+          </div>
+          <Writer
+            client={client}
+            document={session.script.documents[0].id}
+            revision={revision}
+            run={session.run}
+          />
+          {impact}
+        </div>
+      )}
+
+      {workspace === "script" && (scriptMode === "read" || !session.script?.documents[0]) && (
         <div className="work script">
+          <div className="mode-bar">
+            <button aria-pressed>Read &amp; bind</button>
+            <button disabled={!session.script?.documents[0]} onClick={() => setScriptMode("write")}>
+              Write
+            </button>
+          </div>
           <Script
             script={session.script}
             sceneId={sceneId}

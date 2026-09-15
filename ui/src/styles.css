@@ -771,3 +771,18 @@ select, input, textarea {
 .sheet-table th { text-align: left; color: var(--text-faint); font-weight: 400; font-size: 10px; }
 .sheet-table td { padding: 2px 4px 2px 0; border-bottom: 1px solid #ffffff08; font-family: var(--mono); }
 .bd-heading { font-weight: 600; margin-bottom: 6px; }
+
+/* ---- writing ---------------------------------------------------------- */
+
+.work.script { grid-template-rows: 28px minmax(0, 1fr); }
+.work.script > :not(.mode-bar) { grid-row: 2; }
+.work.script-write { grid-template-columns: minmax(0, 1fr) 360px; grid-template-rows: 28px minmax(0, 1fr); }
+.work.script-write > :not(.mode-bar) { grid-row: 2; }
+.mode-bar { grid-column: 1 / -1; grid-row: 1; display: flex; gap: 2px; align-items: center; padding: 0 8px; background: var(--sunken); border-bottom: 1px solid var(--line); }
+.mode-bar button { height: 20px; font-size: 11px; }
+.mode-bar button[aria-pressed] { background: var(--accent-dim); border-color: var(--accent); }
+.writer textarea.fountain {
+  flex: 1 1 auto; margin: 0; border: none; border-radius: 0; resize: none; padding: 20px 10%;
+  background: #f4f1ea; color: #1b1b1b; font: 13px/1.6 "Courier Prime", "Courier New", Courier, monospace;
+}
+button.danger { background: #6b2a22; border-color: var(--bad); }

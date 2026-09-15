@@ -553,6 +553,13 @@ export class RpcClient {
   impact(revision?: number) { return this.call<ImpactView | null>("impact", revision == null ? {} : { revision }); }
   history(limit = 100) { return this.call<HistoryView>("history", { limit }); }
   pictureAt(timeline: string, time: ExactTime) { return this.call<PictureAt>("picture_at", { timeline, time }); }
+  scriptText(document: string) { return this.call<string>("script_text", { document }); }
+  scriptWrite(document: string, text: string, allowOrphans = false) {
+    return this.call<CascadeResult & { refused: boolean; orphans: { scene: string; heading: string; clips: number; takes: number }[] }>(
+      "script_write",
+      { document, text, allow_orphans: allowOrphans },
+    );
+  }
   production(document?: string) {
     return this.call<ProductionView>("production", document ? { document } : {});
   }
