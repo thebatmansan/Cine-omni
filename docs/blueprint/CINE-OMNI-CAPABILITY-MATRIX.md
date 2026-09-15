@@ -159,7 +159,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Node graph | Nuke, Fusion | Typed nodes, caching, pull evaluation | **PROTOTYPE** | 28 node kinds, persistence | FE node editor · data windows | comp.graph/node | — | interactive on 2K | L | P1 | — |
 | Image I/O on plates | Nuke | Read/Write EXR, DPX, TIFF, sequences | **MISSING** | re-verified: no file I/O | M | — | OpenEXR, OIIO | streaming | M | **P0** | — |
-| Data windows / ROI | Nuke bbox | Work only where pixels exist | **MISSING** | re-verified: none | BE type change | image | — | ROI proportional work | M | **P0** | 64² ROI allocates 64² |
+| Data windows / ROI | Nuke bbox | Work only where pixels exist | **PARTIAL** | `Image` carries its canvas window; generators and passes allocate only the region; every node's result cropped to its region; regions of real chains equal the full frame (edges included). Merge output takes B's window (no union bbox); transform, roto and procedural still compute the full frame and crop | union bbox · windowed transform | image | — | 64² of a 2048² blur: 16.7 ms / 16,384 floats vs 4.5 s / 16.8 M | M | **P0** | `evaluator.rs` region tests |
 | Layers / precomps | After Effects | Layer-based compositing | **MISSING** | — | FE · BE | — | — | — | L | P2 | — |
 | Merge / premult correctness | Nuke | Correct over/add/premult handling | **PARTIAL** | additive-element defect found (R12) | BE | — | — | — | S | P1 | additive glow survives grade |
 | Keying | Nuke, Keylight | Chroma/luma/difference keys | **PARTIAL** | keyer kernel (GPU) | FE · real plates | — | — | real time 2K | M | P1 | — |
@@ -276,10 +276,10 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 |---|---:|
 | VERIFIED | 17 |
 | IMPLEMENTED | 5 |
-| PARTIAL | 45 |
+| PARTIAL | 46 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
-| MISSING | 60 |
+| MISSING | 59 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |
 

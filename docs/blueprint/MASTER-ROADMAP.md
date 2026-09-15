@@ -23,6 +23,28 @@ reliable.
 
 ---
 
+## Progress (2026-09-16)
+
+The phases below are the dependency order, not approval gates. What has landed
+since the audit, each with its evidence in the named document or test:
+
+| Area | Landed | Evidence |
+|---|---|---|
+| Phase 1 — editor | all 11 edits through the graph, linked edits, place/insert/overwrite, record picture, impact by department, shared history, script line editing and scene binding; UI tools, two monitors, impact/history/script panels | `APPLICATION.md`, `editorial_protocol.rs`, `ui/e2e/editor.mjs` |
+| Phase 2 — one application | `cine start` opens the native window in the same process; it plays the flattened cut, follows commits, shares the open sequence with the browser | `APPLICATION-RUNTIME.md` §6a |
+| Phase 2 — schema | op-log records stamped; newer schema refused; migration table enforced | `engine_tests.rs` |
+| Phase 3 — jobs | `cine-jobs` (priority, resources, dependencies, cancel, retry, journal/resume); checksum verification and thumbnails as jobs; jobs panel | `jobs.rs`, `jobs_protocol.rs` |
+| Phase 3 — colour metadata | H.264 SPS/VUI parsed; pictures carry what the stream declares | `sps_real.rs` |
+| Phase 8 — sound (pulled forward) | ALSA device via runtime-loaded libasound; the cut's sound decoded, mixed and played in the native window, pacing the picture | `AV-SYNC.md` |
+| Wrong-direction corrections | takes owned by the production log, not shots (migrated at open); compositing data window; a failed cascade stays undoable; zero rate refused; same-length rewording reaches the cut; TCP_NODELAY | commits since `6d8fd67` |
+
+Still open from the audit's wrong-direction list: the OCIO parallel parser (a
+policy decision), union bounding boxes and windowed transforms in compositing,
+and one GPU device shared by compute and presentation (the second device is now
+created only for `--dump`).
+
+---
+
 ## Phase 0 — Foundation *(done)*
 
 Exact time · project graph with undo and op log · crash recovery · one runtime,
