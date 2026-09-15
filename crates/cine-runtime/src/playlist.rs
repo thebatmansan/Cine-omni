@@ -53,6 +53,8 @@ pub struct EditList {
     pub rate: Rate,
     pub end: RationalTime,
     pub entries: Vec<Entry>,
+    /// Every audible sound clip, resolved the same way. Mixed by the player.
+    pub sound: Vec<Entry>,
     /// Transitions played as cuts.
     pub transitions: usize,
 }
@@ -78,33 +80,42 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                 .map(|s| s.record.start_time.rate_exact())
         })
         .unwrap_or(Rate::F24);
+    let resolve = |record: TimeRange,
+                   track: usize,
+                   item: usize,
+                   clip: Option<EntityId>,
+                   source_start: RationalTime| {
+        let name = tracks
+            .get(track)
+            .and_then(|t| t.children.get(item))
+            .map(|i| i.name().to_string())
+            .unwrap_or_default();
+        let asset = clip.and_then(|c| tl::media_of_clip(graph, c));
+        let node = asset.and_then(|a| graph.node(a));
+        let available = node
+            .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
+            .and_then(Value::as_range);
+        Entry {
+            record,
+            clip,
+            name,
+            track,
+            asset,
+            path: node
+                .and_then(|n| n.get_str(attrs::MEDIA_PATH))
+                .map(PathBuf::from),
+            offset: available.map(|a| source_start.checked_sub(&a.start_time)),
+            online: node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
+        }
+    };
+    let sound = cine_timeline::sound_segments(&composed)
+        .iter()
+        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start))
+        .collect();
     let entries = flat
         .segments
         .iter()
-        .map(|s| {
-            let name = tracks
-                .get(s.track)
-                .and_then(|t| t.children.get(s.item))
-                .map(|i| i.name().to_string())
-                .unwrap_or_default();
-            let asset = s.clip.and_then(|c| tl::media_of_clip(graph, c));
-            let node = asset.and_then(|a| graph.node(a));
-            let available = node
-                .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
-                .and_then(Value::as_range);
-            Entry {
-                record: s.record,
-                clip: s.clip,
-                name,
-                track: s.track,
-                asset,
-                path: node
-                    .and_then(|n| n.get_str(attrs::MEDIA_PATH))
-                    .map(PathBuf::from),
-                offset: available.map(|a| s.source_start.checked_sub(&a.start_time)),
-                online: node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
-            }
-        })
+        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start))
         .collect();
     Ok(EditList {
         timeline,
@@ -112,6 +123,7 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
         rate,
         end: flat.end.unwrap_or_else(|| RationalTime::zero(rate)),
         entries,
+        sound,
         transitions: flat.transitions,
     })
 }

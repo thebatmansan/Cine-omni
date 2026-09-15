@@ -14,7 +14,7 @@
 //! on the GPU, which is a separate capability, not something to fake here.
 
 use crate::otio::{Item, Timeline, TrackKind};
-use crate::session::{any_solo_of, is_visible};
+use crate::session::{any_solo_of, is_audible, is_visible};
 use ucg_core::{EntityId, RationalTime, TimeRange};
 
 /// One stretch of record time showing one clip.
@@ -122,4 +122,45 @@ pub fn picture_segments(timeline: &Timeline) -> PictureList {
         transitions,
         end,
     }
+}
+
+/// One clip's sound on the sequence. Sound is not flattened: every audible clip
+/// plays, and a player mixes them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SoundSegment {
+    pub record: TimeRange,
+    pub track: usize,
+    pub item: usize,
+    pub clip: Option<EntityId>,
+    /// Media time heard at `record.start_time`, in source coordinates.
+    pub source_start: RationalTime,
+}
+
+/// Every enabled clip on every audible sound track, in track then time order.
+/// Muted tracks are absent; soloing any sound track leaves only soloed ones.
+pub fn sound_segments(timeline: &Timeline) -> Vec<SoundSegment> {
+    let solo = any_solo_of(timeline, TrackKind::Audio);
+    let mut out = Vec::new();
+    for (ti, track) in timeline.tracks().enumerate() {
+        if track.kind != TrackKind::Audio || !track.enabled || !is_audible(track, solo) {
+            continue;
+        }
+        for (ii, item) in track.children.iter().enumerate() {
+            let Item::Clip(c) = item else { continue };
+            if !c.enabled {
+                continue;
+            }
+            let (Some(span), Some(source)) = (track.range_of_child(ii), c.trimmed_range()) else {
+                continue;
+            };
+            out.push(SoundSegment {
+                record: span,
+                track: ti,
+                item: ii,
+                clip: item.ucg_id(),
+                source_start: source.start_time,
+            });
+        }
+    }
+    out
 }

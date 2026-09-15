@@ -120,3 +120,23 @@ fn rates_are_kept_exact_across_ntsc() {
     assert_eq!(s.source_start, ntsc(1001));
     assert_eq!(s.record.duration, ntsc(2002));
 }
+
+#[test]
+fn every_audible_sound_clip_plays_and_muted_tracks_do_not() {
+    let a1 = Track::new("A1", TrackKind::Audio).with(clip("dialogue", 10, 48));
+    let mut a2 = Track::new("A2", TrackKind::Audio)
+        .with(Gap::new(f(12)))
+        .with(clip("music", 0, 96));
+    let v1 = Track::new("V1", TrackKind::Video).with(clip("pic", 0, 48));
+    let got = cine_timeline::sound_segments(&timeline(vec![v1.clone(), a1.clone(), a2.clone()]));
+    assert_eq!(got.len(), 2, "both sound tracks, not the picture");
+    assert_eq!(got[1].record, TimeRange::from_frames(12, 96, 24.0));
+    assert_eq!(got[0].source_start, f(10));
+    TrackState {
+        muted: true,
+        ..Default::default()
+    }
+    .apply(&mut a2);
+    let got = cine_timeline::sound_segments(&timeline(vec![v1, a1, a2]));
+    assert_eq!(got.len(), 1);
+}
