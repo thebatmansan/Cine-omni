@@ -1,12 +1,36 @@
 # A/V synchronisation
 
-**Status: FOUNDATION — no audio device exists on this build, so A/V sync is
-`UNSUPPORTED` end to end.** What is implemented and verified is the clock
-architecture, the audio scheduler, and the proof that a picture paced by an audio
-clock lands on the exact sample it should. What is missing is the last piece: a
-sink that reaches hardware.
+**Status: VERIFIED in the native window, measured by the device's own reported
+delay.** The sequence's sound is decoded, mixed and played through ALSA
+(PipeWire's default device, loaded at runtime), and the picture's clock reads the
+frames the device has played. Not in the browser, which has no playback.
 
-Nothing here is simulated, and nothing claims sound is playing.
+## Measured (release, `cine start --window-play 3`, two-clip sequence of real media)
+
+```
+device       default (2400 frames buffer, 600 period), 48 kHz stereo float
+picture      presented 70, dropped 0, late 0; preroll 25 pictures in 2.37 s
+sound        wrote 141,504 frames, 0 underruns, worst queue 3,218 frames (67 ms)
+offset       picture minus audible sound at each presentation:
+             median -3.5 ms, 5-95% -4.6 .. -1.5 ms over 70 pictures
+device clock 48 kHz consumed within 61 ppm of the system clock (device.rs)
+lock         a PlaybackClock on the device's played frames holds its lag to the
+             wall clock within 0.3 ms (device.rs)
+```
+
+**What the offset is.** "Audible" is the scheduler's cursor minus the frames the
+device reports as not yet played (`snd_pcm_delay`). If the device under-reports
+its latency, sound reaches the room later than this says. No acoustic loopback
+measurement has been made, so no claim about the room is made. The -3.5 ms bias
+is inside a frame and inside the audible threshold for lip sync, but it is a bias
+and the ±1 ms target is not met.
+
+**What is not implemented.** Resampling (other rates are refused and silent),
+downmix beyond stereo, clip gain and fades, sound at speeds other than 1 (the
+system clock paces the picture instead), sound in the browser, device selection,
+and buffers below the requested 50 ms.
+
+The rest of this document is the design, unchanged.
 
 ---
 

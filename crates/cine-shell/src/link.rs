@@ -11,7 +11,7 @@
 //! builds from the same flattened edit list the browser's record monitor reads.
 //! The window never composes the cut itself.
 
-use cine_media::EditEntry;
+use cine_media::{EditEntry, SoundEntry};
 use cine_timeline::session::TrackState;
 use cine_timeline::Timeline;
 use ucg_core::{EntityId, Rate, RationalTime};
@@ -24,6 +24,8 @@ pub struct SequencePlan {
     pub rate: Rate,
     pub end: RationalTime,
     pub entries: Vec<EditEntry>,
+    /// Every audible sound clip, for the window to mix and play.
+    pub sound: Vec<SoundEntry>,
     /// Transitions on visible picture tracks, which play as cuts.
     pub transitions: usize,
     /// The composed timeline, for the timeline pane.

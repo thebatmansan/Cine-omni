@@ -193,8 +193,8 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 
 | Capability | Reference | What professionals need | Status | Now | Requires | Model | Deps / licensing | Perf | Cx | P | Validation |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Device output | Pro Tools, Fairlight | Low-latency playback | **BLOCKED** | architecture verified; no device | BE runtime-loaded libasound/PipeWire | — | LGPL system libs loaded at runtime — review | <10 ms buffer | M | **P0** | measured device latency |
-| A/V sync | All NLEs | Picture paced by sound, offset measured | **IMPLEMENTED** | exact audio-mastered clock | device | — | — | ±1 ms | S | P0 | 240-picture exactness test |
+| Device output | Pro Tools, Fairlight | Low-latency playback | **VERIFIED** | `cine-audio-io`: ALSA via runtime-loaded libasound (PipeWire default device); 48 kHz within 61 ppm of the system clock, 71 ms max device delay, no xruns | lower-latency buffers; device selection UI | — | LGPL system library loaded at runtime, nothing linked or redistributed | 50 ms requested buffer; <10 ms not yet attempted | M | **P0** | `cine-audio-io/tests/device.rs` |
+| A/V sync | All NLEs | Picture paced by sound, offset measured | **VERIFIED** | native window plays the sequence's mixed sound on the device and paces the picture from it: 70/70 pictures, 0 dropped, 0 audio underruns; picture minus sound −3.5 ms median, 5–95% −4.6..−1.5 ms (device-reported delay, not acoustic) | browser A/V; acoustic loopback measurement | — | — | ±1 ms target not met: ~3.5 ms bias | S | P0 | `--window-play` evidence run |
 | Multitrack editing | Pro Tools | Clip gain, fades, crossfades, sample-accurate edits | **PARTIAL** | sample-accurate splices, fades | FE · RT engine | audio.clip | — | — | L | P1 | — |
 | Real-time mixer, buses, sends | Pro Tools, Fairlight | Real-time-safe graph | **PARTIAL** | offline renderer, compiled; 48 stereo fine; 128×7.1.4 misses | BE streaming engine | audio.bus | — | deadline at 128 tracks | L | P1 | block deadline histogram |
 | Automation | Pro Tools | Volume, pan, plugin params, sample accurate | **MISSING** | — | BE · FE | automation lanes | — | — | M | P1 | — |
@@ -274,13 +274,13 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 
 | Status | Count |
 |---|---:|
-| VERIFIED | 15 |
-| IMPLEMENTED | 6 |
+| VERIFIED | 17 |
+| IMPLEMENTED | 5 |
 | PARTIAL | 45 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
 | MISSING | 60 |
-| BLOCKED | 10 |
+| BLOCKED | 9 |
 | DEFERRED | 8 |
 
 The honest reading: **the foundation is verified, the product is mostly missing,

@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 cine-gpu = { workspace = true, features = ["wgpu"] }
 cine-media.workspace = true
+cine-audio-io.workspace = true
 cine-timeline.workspace = true
 ucg-core.workspace = true
 thiserror.workspace = true

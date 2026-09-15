@@ -201,9 +201,11 @@ fn capabilities() -> J {
             "id": "audio.monitoring",
             "name": "Audio monitoring and A/V sync",
             "group": "Audio",
-            "state": "unavailable",
-            "detail": "The device works (see audio.device), but the cut's own sound is not \
-                       yet decoded, mixed and played with the picture",
+            "state": "degraded",
+            "detail": "In the native window the sequence's sound is decoded, mixed and played, \
+                       and paces the picture (measured -3.5 ms median, 3 ms spread, by the \
+                       device's reported delay). Not in the browser. No resampling, no downmix, \
+                       no clip gain or fades, and no sound at speeds other than 1",
         }),
         json!({
             "id": "colour.management",

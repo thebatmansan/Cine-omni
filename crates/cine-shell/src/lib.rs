@@ -39,6 +39,7 @@ pub mod egui_layer;
 pub mod gpu;
 pub mod link;
 pub mod present;
+pub mod sound;
 pub mod viewer;
 pub mod workspace;
 

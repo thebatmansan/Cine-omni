@@ -10,11 +10,12 @@ use crate::egui_layer::EguiLayer;
 use crate::gpu::SurfaceContext;
 use crate::link::{ProjectLink, SequencePlan};
 use crate::present::Presenter;
+use crate::sound::{AppTime, SoundEngine};
 use crate::viewer::FrameUploader;
 use crate::workspace::{Command, ViewerStatus, Workspace};
 use crate::ShellCapabilities;
 use cine_gpu::device::GpuContext;
-use cine_media::clock::{PlaybackClock, PlaybackRate, SystemTime, TransportState};
+use cine_media::clock::{PlaybackClock, PlaybackRate, TransportState};
 use cine_media::decode_ahead::{AheadConfig, DecodeAhead};
 use cine_media::schedule::{FrameSource, Presentation, Scheduler};
 use cine_media::{EditListSource, VideoFrame, VideoReader};
@@ -28,7 +29,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-type Playback = Scheduler<SystemTime, DecodeAhead<AnySource>>;
+type Playback = Scheduler<AppTime, DecodeAhead<AnySource>>;
 
 /// What the window plays: one file (the reference viewer), or the project's cut.
 ///
@@ -244,6 +245,8 @@ struct App {
     finished: bool,
     /// The sequence being played, when this window is a project surface.
     sequence: Option<SequencePlan>,
+    /// The sequence's sound on the device, when there is one.
+    sound: Option<SoundEngine>,
 }
 
 impl App {
@@ -279,6 +282,7 @@ impl App {
             preroll_took: None,
             finished: false,
             sequence: None,
+            sound: None,
         }
     }
 
@@ -353,6 +357,14 @@ impl App {
         };
         match outcome {
             Presentation::Present(p) => {
+                if let (Some(sound), Some(pts)) = (
+                    self.sound.as_mut(),
+                    self.playback
+                        .as_ref()
+                        .and_then(|s| s.source().pts_of(p.index)),
+                ) {
+                    sound.observe(pts);
+                }
                 let first = self.colour.is_none();
                 if p.dropped > 0 || p.late_by.is_some() {
                     self.last_report = Some(format!(
@@ -609,6 +621,9 @@ impl App {
         if let Some(note) = &self.last_report {
             println!("last irregular frame: {note}");
         }
+        if let Some(sound) = &self.sound {
+            println!("{}", sound.report());
+        }
     }
 
     /// Begin playing in a direction, after pre-rolling a cushion of pictures.
@@ -619,6 +634,14 @@ impl App {
         let Some(p) = self.playback.as_mut() else {
             return;
         };
+        // Pre-roll starts from a stopped clock. It is also the only state in
+        // which the clock may change which source it reads (see `sound`).
+        if p.state().is_advancing() {
+            p.clock_mut().pause();
+        }
+        if let Some(sound) = &self.sound {
+            sound.stop(p.position());
+        }
         let rate = if reverse {
             PlaybackRate::new(-1, 1)
         } else {
@@ -671,6 +694,13 @@ impl App {
                 "preroll gave up after {waited:?} with {have} of {} pictures",
                 pre.want
             );
+        }
+        // Sound leads at normal forward speed; at any other speed it cannot be
+        // heard correctly, and the system clock paces the picture instead.
+        if let Some(sound) = &self.sound {
+            if p.clock().rate() == PlaybackRate::FORWARD {
+                sound.play_from(p.position());
+            }
         }
         if let Err(state) = p.clock_mut().play() {
             eprintln!("cannot play: transport is {}", state.label());
@@ -878,7 +908,21 @@ impl App {
             println!("the sequence is empty");
             return;
         };
-        let clock = PlaybackClock::new(SystemTime::default(), start, end);
+        // Rebuilt with the picture: the edit list changed, so the mix did too.
+        self.sound = None;
+        let time = match SoundEngine::open(seq.end, seq.sound.clone()) {
+            Ok(engine) => {
+                println!("sound: {}", engine.device);
+                let t = engine.time();
+                self.sound = Some(engine);
+                t
+            }
+            Err(why) => {
+                println!("sound: none — {why}");
+                AppTime::system()
+            }
+        };
+        let clock = PlaybackClock::new(time, start, end);
         let ahead = DecodeAhead::new(AnySource::Sequence(source), AheadConfig::default());
         let proxy = Mutex::new(self.proxy.clone());
         ahead.set_notify(move || {
@@ -921,7 +965,7 @@ impl App {
                     reader.keyframe_indices()
                 );
                 self.keyframes = reader.keyframe_indices().to_vec();
-                let clock = PlaybackClock::new(SystemTime::default(), start, end);
+                let clock = PlaybackClock::new(AppTime::system(), start, end);
                 let ahead =
                     DecodeAhead::new(AnySource::File(Box::new(reader)), AheadConfig::default());
                 // The worker wakes the event loop when a picture lands. A proxy
@@ -1112,6 +1156,14 @@ impl ApplicationHandler<Wake> for App {
 
         for command in std::mem::take(&mut self.pending_commands) {
             self.apply(command);
+        }
+
+        // Sound follows the picture's transport: whatever stopped the clock —
+        // a pause, a step, a seek, the end of the sequence — stops the sound.
+        if let (Some(sound), Some(p)) = (self.sound.as_ref(), self.playback.as_ref()) {
+            if sound.is_playing() && !p.state().is_advancing() {
+                sound.stop(p.position());
+            }
         }
 
         let prerolling = self.advance_preroll();

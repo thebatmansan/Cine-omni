@@ -7,7 +7,7 @@
 //! graph operations the protocol uses. There is no second engine, no second
 //! op log and no second composition.
 
-use cine_media::EditEntry;
+use cine_media::{EditEntry, SoundEntry};
 use cine_runtime::Runtime;
 use cine_shell::link::{ProjectLink, SequencePlan};
 use cine_timeline::session::TrackState;
@@ -126,7 +126,18 @@ impl ProjectLink for RuntimeLink {
                 name: e.name.clone(),
             })
             .collect();
+        let sound = list
+            .sound
+            .iter()
+            .map(|e| SoundEntry {
+                record: e.record,
+                path: e.unplayable().is_none().then(|| e.path.clone()).flatten(),
+                offset: e.offset,
+                name: e.name.clone(),
+            })
+            .collect();
         Some(SequencePlan {
+            sound,
             id,
             name: list.name.clone(),
             rate: list.rate,
