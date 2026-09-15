@@ -34,8 +34,10 @@
 //! and nothing beneath it changes. Nothing below `cine-shell` may `use` a
 //! windowing or GUI crate.
 
+pub mod app;
 pub mod egui_layer;
 pub mod gpu;
+pub mod link;
 pub mod present;
 pub mod viewer;
 pub mod workspace;

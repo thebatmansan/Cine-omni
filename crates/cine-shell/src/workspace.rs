@@ -78,6 +78,9 @@ pub struct ViewerStatus {
     pub buffer_bytes: usize,
     /// Colour interpretation and whether it had to be assumed.
     pub colour: Option<(String, bool)>,
+    /// Why the picture on screen is black, when it is: a gap, or media that
+    /// cannot be played. Said over the picture, never left to be guessed.
+    pub note: Option<String>,
     pub keyframes: Vec<usize>,
 }
 
@@ -397,6 +400,15 @@ impl PaneBehavior<'_> {
                 "no media open",
                 FontId::proportional(14.0),
                 DIM,
+            );
+        }
+        if let Some(note) = &self.status.note {
+            ui.painter().text(
+                rect.center_top() + Vec2::new(0.0, 16.0),
+                Align2::CENTER_TOP,
+                note,
+                FontId::proportional(13.0),
+                WARN,
             );
         }
         if let Some((note, assumed)) = &self.status.colour {
