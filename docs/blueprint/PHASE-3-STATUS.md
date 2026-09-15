@@ -96,10 +96,13 @@ argument for the evidence discipline, not against it.
 | Capability registry | Yes | 🟢 VERIFIED | Single source of truth; tests enforce evidence and forbid unverified hardware claims |
 | Hardware decode | Yes | 🔴 NOT IMPLEMENTED | **Not claimed.** Registry test fails if any hardware entry is added |
 | Playback scheduler | Yes | 🟢 VERIFIED | `clock → scheduler → decode → selection → presentation`, 39 tests; exact frame selection at every one of 240 boundaries of the real asset |
-| Real-time playback | Yes | 🟡 PARTIAL | **Real but below real time.** 21.9 fps sequential decode against 24 fps needed; 1 s of playback presented 8 and dropped 14, transport reported `Degraded`. See `PLAYBACK.md` |
-| Reverse playback | Yes | 🟡 PARTIAL | Correct and unusably slow on long-GOP media: 2 sync samples in 240 pictures, mean 8.47 s per picture. Reported through the drop counters, not refused |
+| Decode-ahead / buffering | Yes | 🟢 VERIFIED | Worker thread, bounded by bytes, generation-invalidated, keyframe-aware reverse; 23 step-by-step tests |
+| Real-time playback, headless | Yes | 🟢 VERIFIED (this asset, this machine) | 240/240 pictures, **0 dropped**, after a 1.03 s pre-roll; 720/720 over three passes. Margin is ~0.1 ms per picture — see `PLAYBACK.md` before generalising |
+| Real-time playback, on screen | Yes | 🟡 DEGRADED | 35 of 154 presented. Bottleneck measured as the presentation path, not decode: 69.4 ms colour conversion per picture against 41.7 ms |
+| Reverse playback | Yes | 🟡 DEGRADED | 8.47 s → **71.9 ms per picture** with keyframe-aligned chunks, 118x. Still 28.9% dropped crossing a GOP boundary |
+| Seek | Yes | 🟡 PARTIAL | 2.6 µs warm; 4.82 s cold into a 189-picture GOP — the keyframe walk, unavoidable in this design |
+| Short-GOP media | Yes | ⚪ UNVERIFIED | Both assets here are long-GOP; one is a single 240-picture GOP. No encoder to make one |
 | A/V sync | Yes | 🔴 NOT IMPLEMENTED | No audio consumer of the clock exists. Not simulated |
-| Decode-ahead / buffering | Yes | 🔴 NOT IMPLEMENTED | Decode is synchronous; a slow decode appears as lateness and drops, never as an underrun |
 | Edit list (`elst`) handling | Yes | 🔴 NOT IMPLEMENTED | The reference asset presents from 1024/12288, not 0, and nothing compensates |
 | Proxies, thumbnails, waveforms | Yes | 🔵 PLANNED | |
 
@@ -287,12 +290,14 @@ Listed because an unlisted known defect is indistinguishable from a lie.
 * "Real-time" for audio in general — 48 stereo tracks hold a 512-frame
   deadline with 3x margin and may be claimed; 128 x 7.1.4 does not and 128
   stereo is marginal, so neither may be
-* "Real-time playback" — measured 21.9 fps against the 24 fps the asset asks
-  for, and 92% drops through the real window. Playback **exists** and is
-  scheduled from the exact clock; it is `Degraded`, and the shell says so
+* "Real-time playback" **on screen** — 77% drops through the real window, with
+  the colour-conversion round trip measured as the cause
+* "Real-time playback" **in general** — headless playback of the reference clip
+  is drop-free, but on a margin of ~0.1 ms per picture, on one asset, on one
+  machine. That is a measurement, not a property of the system
 * "A/V sync" — no audio consumer of the playback clock exists
-* "Smooth" or "production" playback of long-GOP media — catching up by
-  skipping does not converge on a 120-picture GOP; measured collapse from 8
-  pictures per second headless to 8 in five seconds on screen
+* "Smooth" or "production" playback of long-GOP media — reverse still drops
+  28.9% crossing a GOP boundary and a cold seek into a GOP costs 4.8 s
+* "Short-GOP" anything — unverified, no asset
 * "Hardware accelerated" — no hardware path exists
 * "Production-ready" for any subsystem

@@ -8,19 +8,26 @@
 //!
 //! ## What drives the picture
 //!
-//! `cine_media::Scheduler`. The event loop does not tick at a frame rate; it
-//! sleeps until the scheduler says the picture on screen has expired, decodes
-//! whatever the clock says is due *then*, and puts that on the surface. A frame
-//! the playhead has already passed is never decoded, which is the difference
-//! between falling behind and drifting.
+//! `cine_media::Scheduler` over `cine_media::DecodeAhead`. Decoding happens on
+//! a worker thread, ahead of the playhead, into a bounded buffer. The event loop
+//! does not tick at a frame rate: it sleeps until the scheduler says the picture
+//! on screen has expired, takes whatever the clock says is due *then* from the
+//! buffer, and puts it on the surface. When the buffer does not have it, the
+//! transport reports an underrun and the loop sleeps until the worker wakes it —
+//! through a winit user event, not a timer and not a spin.
+//!
+//! Starting playback pre-rolls: the clock is not started until a cushion of
+//! pictures is decoded, and how long that took is printed. It is a visible,
+//! measured step, not a silent delay.
 //!
 //! `--smoke` verifies the presentation path without anyone watching: it drives
 //! the real window, surface and swapchain for a fixed number of frames and
 //! exits non-zero if anything failed.
 //!
 //! `--play` is the evidence mode: it plays for a wall-clock duration and prints
-//! the scheduler's counters — presented, dropped, late, and the measured decode
-//! cost. Those numbers, not an adjective, are what this build claims.
+//! the scheduler's counters — presented, dropped, late, underruns — the
+//! decode-ahead worker's, and the time spent in each presentation stage. Those
+//! numbers, not an adjective, are what this build claims.
 //!
 //! ## Transport
 //!
@@ -29,22 +36,57 @@
 
 use cine_gpu::device::GpuContext;
 use cine_media::clock::{PlaybackClock, PlaybackRate, SystemTime, TransportState};
-use cine_media::schedule::{Presentation, Scheduler};
+use cine_media::decode_ahead::{AheadConfig, DecodeAhead};
+use cine_media::schedule::{FrameSource, Presentation, Scheduler};
 use cine_media::{VideoFrame, VideoReader};
 use cine_shell::gpu::SurfaceContext;
 use cine_shell::present::Presenter;
 use cine_shell::viewer::FrameUploader;
 use cine_shell::ShellCapabilities;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-type Playback = Scheduler<SystemTime, VideoReader>;
+type Playback = Scheduler<SystemTime, DecodeAhead<VideoReader>>;
+
+/// Sent by the decode-ahead worker when a picture lands, so a starved loop wakes
+/// exactly when there is something to show.
+#[derive(Debug)]
+struct Wake;
+
+/// Pictures decoded before the clock starts. One second at 24 fps: the measured
+/// decode deficit on the reference asset is about 2 pictures per second of
+/// playback, so this covers a ten-second clip. It is a starting point to be
+/// re-measured, not a tuned constant.
+const PREROLL_PICTURES: usize = 24;
+/// Pre-roll never blocks the transport for longer than this; it starts anyway
+/// and the underrun counters say what that cost.
+const PREROLL_LIMIT: Duration = Duration::from_secs(10);
+
+/// Wall time spent in each stage of getting a decoded picture onto the screen.
+#[derive(Default)]
+struct Stages {
+    pictures: u32,
+    /// CPU plane normalisation, GPU YUV→RGB dispatch and read-back.
+    convert: Duration,
+    convert_worst: Duration,
+    /// Re-uploading the converted image as a texture.
+    upload: Duration,
+    /// Surface draws: blit and queue present.
+    draws: u32,
+    draw: Duration,
+}
+
+struct Preroll {
+    from: usize,
+    want: usize,
+    began: Instant,
+}
 
 struct Args {
     media: Option<PathBuf>,
@@ -119,10 +161,14 @@ struct App {
     failure: Option<String>,
     /// The last thing the transport did, printed rather than guessed at.
     last_report: Option<String>,
+    proxy: EventLoopProxy<Wake>,
+    stages: Stages,
+    preroll: Option<Preroll>,
+    preroll_took: Option<(usize, Duration)>,
 }
 
 impl App {
-    fn new(args: Args) -> App {
+    fn new(args: Args, proxy: EventLoopProxy<Wake>) -> App {
         App {
             args,
             window: None,
@@ -136,6 +182,10 @@ impl App {
             play_until: None,
             failure: None,
             last_report: None,
+            proxy,
+            stages: Stages::default(),
+            preroll: None,
+            preroll_took: None,
         }
     }
 
@@ -149,7 +199,13 @@ impl App {
             return;
         };
         let (w, h) = (frame.width, frame.height);
-        match self.uploader.upload(compute, frame) {
+        let converting = Instant::now();
+        let converted = self.uploader.upload(compute, frame);
+        let convert = converting.elapsed();
+        self.stages.pictures += 1;
+        self.stages.convert += convert;
+        self.stages.convert_worst = self.stages.convert_worst.max(convert);
+        match converted {
             Ok(rgba) => {
                 if let Some(path) = self.args.dump.clone() {
                     if let Err(e) = write_png(&path, rgba, w, h) {
@@ -158,9 +214,11 @@ impl App {
                         println!("wrote {} ({w}x{h})", path.display());
                     }
                 }
+                let uploading = Instant::now();
                 if let Err(e) = presenter.set_image(&surface.device, &surface.queue, rgba, w, h) {
                     self.failure = Some(format!("upload failed: {e}"));
                 }
+                self.stages.upload += uploading.elapsed();
             }
             Err(e) => self.failure = Some(format!("colour conversion failed: {e}")),
         }
@@ -198,10 +256,9 @@ impl App {
                 false
             }
             Presentation::BeforeStart => false,
-            Presentation::Underrun => {
-                println!("underrun: the source had no picture for this position");
-                false
-            }
+            // Counted by the scheduler once per stretch and reported at the end;
+            // printing per starved poll would measure the poll rate.
+            Presentation::Underrun => false,
             Presentation::Failed(why) => {
                 // A decode failure is shown, not substituted with a blank frame.
                 eprintln!("playback stopped: {why}");
@@ -238,48 +295,149 @@ impl App {
                 s.drop_rate() * 100.0
             );
         }
+        println!(
+            "underruns: {} episodes over {} starved polls",
+            s.underrun_episodes, s.starved_polls
+        );
+        if let Some((n, took)) = self.preroll_took {
+            println!("preroll: {n} pictures in {took:?}");
+        }
+        let a = p.source().stats();
+        println!(
+            "decode-ahead: {} decoded (mean {:?}, worst {:?}), {} stale, {} evicted, \
+             {} hits / {} misses, peak {:.1} MiB",
+            a.decoded,
+            a.mean_decode().unwrap_or_default(),
+            Duration::from_nanos(a.decode_worst_nanos.min(u128::from(u64::MAX)) as u64),
+            a.stale_discarded,
+            a.evicted,
+            a.hits,
+            a.misses,
+            a.peak_bytes as f64 / (1024.0 * 1024.0)
+        );
+        let st = &self.stages;
+        if st.pictures > 0 {
+            println!(
+                "stages per picture: convert {:?} (worst {:?}), texture upload {:?}; \
+                 per draw: {:?} over {} draws",
+                st.convert / st.pictures,
+                st.convert_worst,
+                st.upload / st.pictures,
+                st.draw.checked_div(st.draws).unwrap_or_default(),
+                st.draws
+            );
+        }
         if let Some(note) = &self.last_report {
             println!("last irregular frame: {note}");
         }
+    }
+
+    /// Begin playing in a direction, after pre-rolling a cushion of pictures.
+    ///
+    /// Does not block: the clock starts from `about_to_wait` once the worker
+    /// has decoded enough, and the worker's notification is what wakes it.
+    fn start_play(&mut self, reverse: bool) {
+        let Some(p) = self.playback.as_mut() else {
+            return;
+        };
+        let rate = if reverse {
+            PlaybackRate::new(-1, 1)
+        } else {
+            Some(PlaybackRate::FORWARD)
+        };
+        if let Some(r) = rate {
+            let _ = p.clock_mut().set_rate(r);
+        }
+        let count = p.source().frame_count();
+        if count == 0 {
+            return;
+        }
+        let mut from = p
+            .on_screen()
+            .or_else(|| p.source().index_at(p.position()))
+            .unwrap_or(0);
+        // At the far end in the direction of travel, go round to the other end
+        // first, as the clock itself would — and pre-roll *there*.
+        if !reverse && from + 1 >= count {
+            from = 0;
+        } else if reverse && from == 0 {
+            from = count - 1;
+        }
+        if let Some(pts) = p.source().pts_of(from) {
+            p.seek(pts);
+        }
+        p.source_mut().prepare(from, reverse);
+        let remaining = if reverse { from + 1 } else { count - from };
+        self.preroll = Some(Preroll {
+            from,
+            want: PREROLL_PICTURES.min(remaining),
+            began: Instant::now(),
+        });
+    }
+
+    /// Start the clock if pre-roll is satisfied or has run out of patience.
+    /// Returns whether pre-roll is still in progress.
+    fn advance_preroll(&mut self) -> bool {
+        let (Some(pre), Some(p)) = (self.preroll.as_ref(), self.playback.as_mut()) else {
+            return false;
+        };
+        let have = p.source().buffered_run(pre.from);
+        let waited = pre.began.elapsed();
+        if have < pre.want && waited < PREROLL_LIMIT {
+            return true;
+        }
+        self.preroll_took = Some((have, waited));
+        if have < pre.want {
+            println!(
+                "preroll gave up after {waited:?} with {have} of {} pictures",
+                pre.want
+            );
+        }
+        if let Err(state) = p.clock_mut().play() {
+            eprintln!("cannot play: transport is {}", state.label());
+        }
+        self.preroll = None;
+        if let Some(secs) = self.args.play_secs {
+            self.play_until = Some(Instant::now() + Duration::from_secs_f64(secs));
+        }
+        false
     }
 
     fn transport(&mut self, key: &Key) -> bool {
         let Some(p) = self.playback.as_mut() else {
             return false;
         };
-        let rate = p.source().time_base();
+        let playing = p.state().is_advancing() || self.preroll.is_some();
+        let reverse = p.clock().rate().is_reverse();
         match key {
             Key::Named(NamedKey::Space) => {
-                if p.state().is_advancing() {
+                if playing {
                     p.clock_mut().pause();
+                    self.preroll = None;
                 } else {
-                    let _ = p.clock_mut().play();
+                    self.start_play(reverse);
                 }
             }
-            Key::Character(c) if c.eq_ignore_ascii_case("l") => {
-                let _ = p.clock_mut().set_rate(PlaybackRate::FORWARD);
-                let _ = p.clock_mut().play();
+            Key::Character(c) if c.eq_ignore_ascii_case("l") => self.start_play(false),
+            Key::Character(c) if c.eq_ignore_ascii_case("j") => self.start_play(true),
+            Key::Character(c) if c.eq_ignore_ascii_case("k") => {
+                p.clock_mut().pause();
+                self.preroll = None;
             }
-            Key::Character(c) if c.eq_ignore_ascii_case("j") => {
-                if let Some(r) = PlaybackRate::new(-1, 1) {
-                    let _ = p.clock_mut().set_rate(r);
-                }
-                let _ = p.clock_mut().play();
+            Key::Named(NamedKey::Home) => {
+                p.clock_mut().stop();
+                self.preroll = None;
             }
-            Key::Character(c) if c.eq_ignore_ascii_case("k") => p.clock_mut().pause(),
-            Key::Named(NamedKey::Home) => p.clock_mut().stop(),
             Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowLeft) => {
+                // By picture, not by clock tick: on this asset a tick of the
+                // time base is 1/12288 s and never changed the picture.
                 let step = if matches!(key, Key::Named(NamedKey::ArrowRight)) {
                     1
                 } else {
                     -1
                 };
-                // Stepping a moving playhead is ambiguous, so the clock refuses
-                // it. Pausing first is what the user meant.
-                if p.state().is_advancing() {
-                    p.clock_mut().pause();
-                }
-                let _ = p.clock_mut().step(step, rate);
+                self.preroll = None;
+                let _ = p.step(step);
             }
             _ => return false,
         }
@@ -325,10 +483,13 @@ impl App {
                 return;
             }
         };
+        let drawing = Instant::now();
         let view = frame.texture.create_view(&Default::default());
         presenter.draw(&surface.device, &surface.queue, &view);
         // Presentation moved to the queue in wgpu 30.
         surface.queue.present(frame);
+        self.stages.draw += drawing.elapsed();
+        self.stages.draws += 1;
         self.presented += 1;
 
         if let Some(limit) = self.args.smoke_frames {
@@ -357,17 +518,26 @@ impl App {
                     return;
                 };
                 println!("extent: {start:?} .. {end:?}");
+                println!(
+                    "keyframes at display indices {:?}",
+                    reader.keyframe_indices()
+                );
                 let clock = PlaybackClock::new(SystemTime::default(), start, end);
-                let mut playback = Scheduler::new(clock, reader);
-                // Show the first picture immediately: an empty window with a
+                let ahead = DecodeAhead::new(reader, AheadConfig::default());
+                // The worker wakes the event loop when a picture lands. A proxy
+                // is `Send` but not `Sync`, hence the mutex.
+                let proxy = Mutex::new(self.proxy.clone());
+                ahead.set_notify(move || {
+                    if let Ok(p) = proxy.lock() {
+                        let _ = p.send_event(Wake);
+                    }
+                });
+                let mut playback = Scheduler::new(clock, ahead);
+                // Ask for the first picture now; it is shown when the worker
+                // delivers it, which wakes the loop. An empty window with a
                 // transport on it says nothing about whether decode works.
-                if let Presentation::Present(p) = playback.poll() {
-                    let frame = p.frame;
-                    self.playback = Some(playback);
-                    self.upload(&frame);
-                } else {
-                    self.playback = Some(playback);
-                }
+                playback.poll();
+                self.playback = Some(playback);
                 if let Some(note) = self.uploader.colour_note() {
                     println!("colour: {note}");
                     if self.uploader.colour_is_assumed() {
@@ -393,7 +563,11 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<Wake> for App {
+    /// A decoded picture landed. Nothing to do here: `about_to_wait` runs next
+    /// and takes it if it is due.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: Wake) {}
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -454,16 +628,12 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Evidence mode: start playing straight away and stop on the clock.
+        // Evidence mode: pre-roll, then play for the requested time. The clock
+        // for `play_until` starts when playback does, not when pre-roll does.
         if let Some(secs) = self.args.play_secs {
-            if let Some(p) = self.playback.as_mut() {
-                match p.clock_mut().play() {
-                    Ok(()) => {
-                        println!("playing for {secs} s");
-                        self.play_until = Some(Instant::now() + Duration::from_secs_f64(secs));
-                    }
-                    Err(state) => eprintln!("cannot play: transport is {}", state.label()),
-                }
+            if self.playback.is_some() {
+                println!("playing for {secs} s after pre-rolling {PREROLL_PICTURES} pictures");
+                self.start_play(false);
             }
         }
 
@@ -486,25 +656,29 @@ impl ApplicationHandler for App {
             return;
         }
 
-        let advancing = self
-            .playback
-            .as_ref()
-            .is_some_and(|p| p.state().is_advancing());
-        if !advancing {
-            // Nothing is moving, so there is nothing to wake up for. A viewer
-            // that polls while paused burns a core to show a still frame.
+        if self.advance_preroll() {
+            // Still pre-rolling: the worker's notification wakes us.
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
         }
 
+        // Pump even when paused: after a step, a seek or opening the file the
+        // due picture may have just arrived from the worker. When nothing has
+        // changed this is a `Hold` and costs nothing.
         if self.pump() {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
         }
-        let next = self.playback.as_ref().and_then(|p| p.next_deadline());
-        event_loop.set_control_flow(match next {
+
+        let Some(p) = self.playback.as_ref() else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        };
+        event_loop.set_control_flow(match p.next_deadline() {
             Some(d) => ControlFlow::WaitUntil(Instant::now() + d),
+            // Paused: nothing to wake for. Starved: the worker wakes us. A viewer
+            // that polls in either case burns a core to show a still frame.
             None => ControlFlow::Wait,
         });
     }
@@ -562,7 +736,7 @@ fn main() {
     let args = parse_args();
     let smoke = args.smoke_frames.is_some();
 
-    let event_loop = match EventLoop::new() {
+    let event_loop = match EventLoop::<Wake>::with_user_event().build() {
         Ok(e) => e,
         Err(e) => {
             eprintln!("no display available: {e}");
@@ -577,7 +751,8 @@ fn main() {
         ControlFlow::Wait
     });
 
-    let mut app = App::new(args);
+    let proxy = event_loop.create_proxy();
+    let mut app = App::new(args, proxy);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("event loop failed: {e}");
         std::process::exit(1);

@@ -849,3 +849,92 @@ fn selection_at_29_97_is_exact_at_the_minute_boundary() {
         Some(1798)
     );
 }
+
+// ---------------------------------------------------------------------------
+// 9. Regressions
+// ---------------------------------------------------------------------------
+
+/// Stepping must move one *picture*, on media whose time base is not its frame
+/// rate. It did not: the shell stepped the clock by one tick of the track's time
+/// base, and on a 12288 Hz track that is 1/12288 s — the picture never changed.
+/// Every other test here used a 24 Hz grid, where a tick and a frame coincide,
+/// which is exactly why nothing caught it.
+#[test]
+fn stepping_moves_one_picture_on_a_time_base_that_is_not_the_frame_rate() {
+    let base = Rate::whole(12288).unwrap();
+    let t = ManualTime::default();
+    let mut src = TableSource::grid(10, base);
+    src.pts = (0..10)
+        .map(|i| Timestamp::exact(1024 + i * 512, base))
+        .collect();
+    src.last_duration = Timestamp::exact(512, base);
+    let clock = PlaybackClock::new(
+        t.clone(),
+        Timestamp::exact(1024, base),
+        Timestamp::exact(1024 + 10 * 512, base),
+    );
+    let mut s = Scheduler::new(clock, src);
+    s.clock_mut().pause();
+    assert_eq!(presented(s.poll()).0, 0);
+
+    for want in 1..=3 {
+        s.step(1).expect("a next picture exists");
+        assert_eq!(presented(s.poll()).0, want, "one step, one picture");
+    }
+    s.step(-2).unwrap();
+    assert_eq!(presented(s.poll()).0, 1);
+    // Clamped at both ends rather than wrapping or refusing silently.
+    s.step(-100).unwrap();
+    assert_eq!(presented(s.poll()).0, 0);
+    s.step(100).unwrap();
+    assert_eq!(presented(s.poll()).0, 9);
+    assert_eq!(s.stats().dropped, 0, "a step is not a dropped frame");
+}
+
+/// Stepping a playing transport pauses it first, rather than being refused.
+#[test]
+fn stepping_while_playing_pauses_and_steps() {
+    let (mut s, _t) = rig(240, Rate::F24);
+    s.clock_mut().play().unwrap();
+    assert_eq!(presented(s.poll()).0, 0);
+    s.step(5).unwrap();
+    assert_eq!(s.state(), TransportState::Paused);
+    assert_eq!(presented(s.poll()).0, 5);
+}
+
+/// A seek whose first poll underruns must still not be counted as drops when
+/// the picture does arrive. The seek flag used to be consumed by the poll that
+/// noticed it — the one that underran — so the next poll counted the whole
+/// seek distance, 136 pictures, as dropped.
+#[test]
+fn a_seek_that_underruns_first_is_still_not_a_dropped_frame() {
+    let (mut s, _t) = rig(240, Rate::F24);
+    s.clock_mut().play().unwrap();
+    assert_eq!(presented(s.poll()).0, 0);
+
+    s.source_mut().empty_at = Some(137);
+    s.seek(Timestamp::exact(137, Rate::F24));
+    assert!(matches!(s.poll(), Presentation::Underrun));
+
+    s.source_mut().empty_at = None;
+    let (index, dropped, _) = presented(s.poll());
+    assert_eq!(index, 137);
+    assert_eq!(
+        dropped, 0,
+        "the seek distance is not a run of dropped frames"
+    );
+    assert_eq!(s.stats().dropped, 0);
+    assert_eq!(s.clock().telemetry().frames_dropped, 0);
+}
+
+/// A synchronous source is always ready, so waiting on it returns at once and
+/// never reports starvation it cannot have.
+#[test]
+fn a_synchronous_source_is_never_waited_on() {
+    let (mut s, _t) = rig(240, Rate::F24);
+    s.clock_mut().play().unwrap();
+    s.poll();
+    assert!(s.wait_for_source(Duration::ZERO));
+    assert!(!s.is_starved());
+    assert_eq!(s.stats().underrun_episodes, 0);
+}

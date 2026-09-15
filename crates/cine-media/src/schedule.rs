@@ -25,13 +25,13 @@
 //!
 //! ## What is deliberately not here
 //!
-//! Decode is **synchronous**. There is no decode-ahead thread, so a slow
-//! decode shows up as a late frame and then as drops on the following poll —
-//! never as an underrun, because nothing is being starved. [`Presentation::Underrun`]
-//! exists for a source that reports "not ready yet"; the synchronous
-//! [`VideoReader`](crate::VideoReader) never does. A buffering pipeline is the
-//! next increment and this scheduler is shaped to accept one without changing
-//! its interface.
+//! The scheduler does not care whether decoding happens on its own thread.
+//! Over a bare [`VideoReader`](crate::VideoReader) it is synchronous: a slow
+//! decode shows up as a late frame and then as drops, never as an underrun.
+//! Over [`DecodeAhead`](crate::decode_ahead::DecodeAhead) the picture is
+//! usually already decoded, and when it is not the source says "not ready",
+//! which the scheduler reports as [`Presentation::Underrun`] and a starved
+//! transport — while the playhead keeps moving.
 //!
 //! There is no audio here, and therefore **no A/V sync**. Audio is a second
 //! consumer of the same clock; nothing about that is implemented or claimed.
@@ -67,6 +67,32 @@ pub trait FrameSource {
     /// `Ok(None)` means the index is past the end. `Err` means the decode
     /// genuinely failed and must be reported, never substituted.
     fn decode_index(&mut self, index: usize) -> Result<Option<VideoFrame>>;
+
+    /// Where the playhead is and which way it is going, every poll.
+    ///
+    /// A synchronous source ignores it. A decode-ahead source uses it to decide
+    /// what to decode next and what to evict — it is the only way the source
+    /// learns about the playhead during a `Hold`, when nothing is requested.
+    fn prepare(&mut self, _index: usize, _reverse: bool) {}
+
+    /// Block until the picture at `index` can be produced without waiting, or
+    /// until `timeout`. Returns whether it is ready.
+    ///
+    /// A synchronous source is always "ready": `decode_index` does the work
+    /// itself. The default says so rather than pretending to wait.
+    fn wait_ready(&self, _index: usize, _timeout: Duration) -> bool {
+        true
+    }
+
+    /// Display index of the nearest picture at or before `index` that decoding
+    /// can start from, if the source knows.
+    ///
+    /// Used to plan reverse decoding: every picture between that entry point and
+    /// the playhead costs the same single walk, so decoding them all at once is
+    /// cheaper than decoding them in pieces that each walk again.
+    fn keyframe_at_or_before(&self, _index: usize) -> Option<usize> {
+        None
+    }
 
     /// Whether this source can play backwards at all.
     ///
@@ -128,6 +154,12 @@ pub struct ScheduleStats {
     pub late: u64,
     pub decode_failures: u64,
     pub end_of_media: u64,
+    /// Separate stretches during which the due picture was not ready. Counted
+    /// once per stretch, so polling faster cannot inflate it.
+    pub underrun_episodes: u64,
+    /// Polls that found the due picture not ready. Depends on poll rate, and is
+    /// reported for that reason rather than as a quality figure.
+    pub starved_polls: u64,
     /// Worst single decode, in nanoseconds. Real elapsed time.
     pub decode_worst_nanos: u128,
     pub decode_total_nanos: u128,
@@ -157,6 +189,14 @@ pub struct Scheduler<S: TimeSource, F: FrameSource> {
     source: F,
     /// Display index currently on screen, once anything has been shown.
     on_screen: Option<usize>,
+    /// The index the last poll wanted, whether or not it got it.
+    wanted: Option<usize>,
+    /// The due picture was not ready on the last poll.
+    starved: bool,
+    /// A seek happened since the last *presented* picture. Latched rather than
+    /// consumed on the poll that notices it, because that poll may underrun —
+    /// and the next one would then count the seek distance as dropped frames.
+    discontinuity: bool,
     /// The clock's seek count as of the last poll. A change means the playhead
     /// was moved deliberately, so the pictures in between were not *dropped* —
     /// nobody was ever going to see them. Watching the counter rather than
@@ -172,6 +212,9 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
             clock,
             source,
             on_screen: None,
+            wanted: None,
+            starved: false,
+            discontinuity: false,
             seeks_seen: 0,
             stats: ScheduleStats::default(),
         }
@@ -236,18 +279,25 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
             // The playhead is before the first picture. Do not invent one.
             return Presentation::BeforeStart;
         };
+        let reverse = self.reverse();
+        self.source.prepare(target, reverse);
+        self.wanted = Some(target);
+
+        if self.clock.telemetry().seeks != self.seeks_seen {
+            self.seeks_seen = self.clock.telemetry().seeks;
+            self.discontinuity = true;
+        }
 
         if self.on_screen == Some(target) {
             self.stats.held += 1;
+            self.starved = false;
             return Presentation::Hold;
         }
 
         // Pictures the playhead passed without any of them being shown. Only
         // meaningful while advancing, and only when the playhead got there by
         // running rather than by being moved.
-        let seeked = self.clock.telemetry().seeks != self.seeks_seen;
-        self.seeks_seen = self.clock.telemetry().seeks;
-        let dropped = if advancing && !seeked {
+        let dropped = if advancing && !self.discontinuity {
             self.skipped_between(self.on_screen, target)
         } else {
             0
@@ -262,12 +312,16 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         let frame = match decoded {
             Ok(Some(f)) => f,
             Ok(None) => {
-                // The index resolved but produced nothing: the source is short
-                // of what its own table claims. Report it, do not substitute —
-                // and tell the clock, so the stall is counted where every other
-                // transport fact is counted. The playhead keeps moving: see
-                // `TransportState::is_advancing`.
-                self.clock.underrun();
+                // No picture for this position yet. Report it, do not
+                // substitute — and tell the clock once per stretch, so the stall
+                // is counted where every other transport fact is counted. The
+                // playhead keeps moving: see `TransportState::is_advancing`.
+                self.stats.starved_polls += 1;
+                if !self.starved {
+                    self.starved = true;
+                    self.stats.underrun_episodes += 1;
+                    self.clock.underrun();
+                }
                 return Presentation::Underrun;
             }
             Err(e) => {
@@ -292,6 +346,8 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
             self.clock.presented(pts);
         }
         self.stats.presented += 1;
+        self.starved = false;
+        self.discontinuity = false;
         if late_by.is_some() {
             self.stats.late += 1;
         } else if dropped == 0 {
@@ -322,6 +378,13 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         if !self.clock.state().is_advancing() {
             return None;
         }
+        // Starved, the next useful moment is when the *source* has the picture,
+        // not when the clock crosses a boundary: the boundary has usually
+        // already passed, and waking on it would spin. Wait on
+        // `wait_for_source` or the source's own notification instead.
+        if self.starved {
+            return None;
+        }
         let current = self.on_screen?;
         let boundary = if self.reverse() {
             // Travelling backwards, the change happens on leaving the bottom of
@@ -349,6 +412,51 @@ impl<S: TimeSource, F: FrameSource> Scheduler<S, F> {
         // per frame — measured, and the reason this is not just `max(1)`.
         let nanos = if self.reverse() { nanos + 1 } else { nanos };
         Some(Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64))
+    }
+
+    /// Whether the last poll found the due picture not ready.
+    pub fn is_starved(&self) -> bool {
+        self.starved
+    }
+
+    /// Block until the picture the last poll wanted is ready, or `timeout`.
+    ///
+    /// This is how a loop waits while starved without spinning and without a
+    /// timer: it waits on the source. A synchronous source returns at once.
+    pub fn wait_for_source(&self, timeout: Duration) -> bool {
+        match self.wanted {
+            Some(index) => self.source.wait_ready(index, timeout),
+            None => true,
+        }
+    }
+
+    /// Step by whole pictures, by display index, and pause.
+    ///
+    /// Not by time. The clock's own `step` moves by whole ticks of whatever rate
+    /// it is given, and the natural rate to hand it — the media time base — is a
+    /// tick, not a frame: on a 12288 Hz track one "step" moved 1/12288 s and the
+    /// picture never changed. Stepping the index cannot make that mistake, and
+    /// it is also correct for media whose frames are not evenly spaced.
+    ///
+    /// Returns the new position, or `None` when there is nothing to step to.
+    pub fn step(&mut self, pictures: i64) -> Option<RationalTime> {
+        if self.clock.state() == TransportState::Unsupported {
+            return None;
+        }
+        if self.clock.state().is_advancing() {
+            self.clock.pause();
+        }
+        let count = self.source.frame_count();
+        if count == 0 {
+            return None;
+        }
+        let here = self
+            .on_screen
+            .or_else(|| self.source.index_at(self.clock.position()))
+            .unwrap_or(0);
+        let to = (here as i64 + pictures).clamp(0, count as i64 - 1) as usize;
+        let pts = self.source.pts_of(to)?;
+        Some(self.clock.seek(pts))
     }
 
     /// Move the playhead. The next poll decodes whatever is now underneath it.

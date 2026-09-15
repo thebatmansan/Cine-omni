@@ -1,11 +1,21 @@
 # Playback
 
-**Status: PARTIAL.** The chain `clock → scheduler → decode → frame selection →
-presentation` exists end to end and is driven by the exact playback clock. It
-does **not** run in real time on this build. It has **no audio and therefore no
-A/V sync**. It has **no decode-ahead**, so a slow decode appears as lateness and
-then as drops; `Underrun` is reserved for a source whose own table names a
-picture it cannot produce, which the synchronous reader never does.
+**Status: PARTIAL.** The chain
+`clock → scheduler → decode-ahead → decode → frame selection → presentation`
+exists end to end and is driven by the exact playback clock.
+
+**Headless, it now plays the reference clip perfectly**: 240 of 240 pictures,
+zero dropped, after a one-second pre-roll — and 720 of 720 over three
+consecutive passes. **On screen it does not**, because with decoding moved off
+the presentation thread the bottleneck moved to the colour-conversion round
+trip, measured at 69.4 ms per picture against a 41.7 ms budget. Both numbers are
+below, and neither is claimed to be the other.
+
+It has **no audio and therefore no A/V sync**. Decode-ahead does **not** make the decoder faster, and the measurements show
+exactly that: with no pre-roll it performs no better than synchronous decoding.
+What it buys is that presentation never waits on a decode, that a deficit can be
+absorbed by a cushion, and that reverse costs one keyframe walk per GOP instead
+of one per picture.
 
 Nothing below is an estimate. Every number came from a test that ran.
 
@@ -111,10 +121,90 @@ wakes before a frame is due.
 
 ---
 
+## Decode-ahead
+
+`cine-media/src/decode_ahead.rs`. A worker thread owns the decoder and decodes in
+the direction of travel into a buffer the scheduler reads without blocking.
+`DecodeAhead` is itself a `FrameSource`, so the scheduler did not change: it asks
+for a picture and either gets one already decoded or is told "not ready", which
+it reports as an underrun while the playhead keeps moving.
+
+```text
+  Scheduler ──decode_index(i)──▶ buffer ◀──insert── worker ──▶ decoder
+      │                            ▲                   ▲
+      └──prepare(i, direction)─────┴──── playhead ─────┘
+```
+
+`prepare` is the part that is easy to miss: without it the source would learn
+nothing during a `Hold`, which is most polls, and could not decide what to
+decode next or what to evict.
+
+### Pre-roll is the whole difference
+
+With no pre-roll, decode-ahead measured **no better than synchronous decoding**
+— 17 pictures presented either way. It cannot: moving a decode to another thread
+does not make it faster, and a buffer that starts empty never gets ahead. With a
+one-second cushion the same code presents every picture. The cushion is an
+explicit, measured step — `DecodeAhead::preroll` returns what it actually got,
+and the shell prints how long it took — not a silent delay.
+
+This works on this clip because the deficit is small and finite. A cushion of
+*n* pictures covers a deficit of *n* pictures and no more; on media whose decode
+is durably slower than real time it postpones the drops rather than preventing
+them. Nothing here claims otherwise.
+
+### Reverse is planned around keyframes
+
+A fixed chunk re-enters the stream at the keyframe for every chunk. Over the
+reference asset's 189-picture GOP, 24-picture chunks would cost roughly 900
+decodes to show 189 pictures backwards; a chunk that runs from the keyframe to
+the playhead costs 189. The chunk is therefore keyframe-aligned and bounded by
+the memory budget, falling back to `reverse_chunk` only when the source cannot
+say where its keyframes are.
+
+### What it cannot do, in the code and in the tests
+
+* **It does not make a decoder faster** — measured above.
+* **Cancellation is one decode call wide.** The worker re-plans between decodes,
+  so a seek abandons the queue at once, but a decode in progress runs to
+  completion; on long-GOP media one `decode_index` can be a walk from a
+  keyframe. Its result is discarded if the playhead has moved away, and counted
+  as `stale_discarded` rather than quietly dropped.
+* **Memory is bounded by bytes, not pictures**, because a 4K picture is roughly
+  nine times a 720p one. The picture at the playhead is admitted even over
+  budget: refusing it would leave a consumer waiting for exactly that picture
+  forever. The budget is checked *before* decoding, using the last picture's
+  size — checking only afterwards let a picture that did not fit be decoded,
+  evicted as the farthest, and decoded again, forever.
+
 ## Measured evidence
 
 Release build, this machine, the project's reference asset: 720x1280 H.264,
 240 pictures, 24 fps, **2 sync samples** (a 120-picture GOP).
+
+### Forward playback, whole clip, headless
+
+Release build, quiet machine, `playback_decode_ahead_real.rs`. Reference asset:
+720x1280 H.264, 240 pictures, 24 fps, keyframes at display indices **[0, 189]**
+— a 189-picture GOP.
+
+```
+MEASURED full clip, synchronous:                17 presented, 217 dropped, 92.7%
+MEASURED full clip, decode-ahead, preroll 0:    17 presented, 223 dropped, 92.9%
+MEASURED full clip, decode-ahead, preroll 24:  240 presented,   0 dropped,  0.0%
+MEASURED full clip, decode-ahead, preroll 48:  240 presented,   0 dropped,  0.0%
+         preroll 25 pictures in 1.025359163s; worker decoded 240
+         (mean 41.763553ms), 0 stale, peak 42.2 MiB, 240 hits / 0 misses
+MEASURED sustained total (3 passes): 720 presented, 0 dropped, 0 underrun
+         episodes; worker peak 68.6 MiB
+```
+
+Mean decode of 41.76 ms against a 41.67 ms frame is a margin of about 0.1 ms per
+picture — roughly 24 ms over the whole clip, which the one-second cushion covers
+comfortably. **The margin is essentially zero**, and an earlier run of the same
+decoder measured 45.7 ms. Both are recorded because the honest reading is that
+this decoder sits right on the 24 fps boundary and which side it lands on varies
+with the machine.
 
 ### Decode cost
 
@@ -137,19 +227,76 @@ The transport reported `Degraded` throughout, which is the assertion.
 
 ### Reverse
 
+Synchronously, one picture at a time:
+
 ```
 MEASURED reverse playback: presented [179], mean decode 8.469602993s
 ```
 
-Reverse is real and correct and unusably slow, for a reason the same test
-prints: **2 sync samples in 240 pictures**. Every backwards step re-enters the
-stream at a keyframe up to 120 pictures away. This is reported through the drop
-counters rather than by refusing, because refusing would be a different false
-statement from pretending it is fast. A source that genuinely cannot reverse
-says so through `FrameSource::supports_reverse`, and the scheduler then refuses
-without touching the decoder.
+With keyframe-aligned decode-ahead:
 
-### Presentation: the real window, the real GPU
+```
+MEASURED reverse from the last picture, decode-ahead: 170 presented, 69 dropped,
+         1 underrun episode, in 9.95871088s; drop rate 28.9%, state Degraded
+         preroll 51 pictures in 2.267362844s; worker decoded 174
+         (mean 40.978795ms), peak 162.2 MiB
+         wall time per presented picture: 71.91808ms
+```
+
+**8.47 s per picture to 71.9 ms** — about 118 times faster, and the drop rate
+falls from total to 28.9%. It is still not real-time, and the remaining drops
+have a specific cause the keyframe list explains: the tail GOP is 51 pictures
+and pre-rolls in 2.3 s, but crossing into the GOP below means one chunk of up to
+189 decodes — about 7.9 s — during which the playhead keeps moving. That is
+reported as `Degraded`, not smoothed over.
+
+A source that genuinely cannot reverse says so through
+`FrameSource::supports_reverse`, and the scheduler then refuses without touching
+the decoder.
+
+### Seeking
+
+```
+MEASURED cold into mid-GOP picture 110:            4.822895207s
+MEASURED warm within the buffer, picture 113:      2.643µs (already decoded)
+MEASURED seek to 5 issued ~5 ms after a seek to 235: 32.531128ms,
+         1 stale decode discarded
+```
+
+A cold seek into the middle of a 189-picture GOP costs the walk from the
+keyframe — 110 decodes — and nothing here avoids that. Inside the buffer a seek
+costs a lookup. The third figure is the cancellation path: the abandoned work is
+one decode, counted.
+
+### Presentation: the real window, the real GPU, with decode-ahead
+
+`cine-shell --play 8`, Intel UHD Graphics (CML GT2) over Vulkan, Bgra8Unorm at
+1280x720, quiet machine:
+
+```
+transport Buffering — presented 35, dropped 119, late 0, held 33 over 136 polls
+underruns: 13 episodes over 68 starved polls
+preroll: 25 pictures in 1.276643775s
+decode-ahead: 186 decoded (mean 47.386353ms, worst 246.629692ms), 0 stale,
+              181 evicted, 35 hits / 68 misses, peak 63.3 MiB
+stages per picture: convert 69.362137ms (worst 1.279395183s),
+                    texture upload 2.856776ms; per draw: 10.247605ms
+```
+
+**This is the finding.** Headless, the same clip and the same worker present 240
+of 240 pictures. On screen, 35 of 154. The per-stage timings say why, and it is
+not decode: **69.4 ms of colour conversion plus 2.9 ms of texture upload plus
+10.2 ms of draw, against a 41.7 ms budget.** Decode-ahead did not fail here — it
+moved the bottleneck onto the stage that was already documented as wasteful in
+`present.rs`, where the YUV→RGB result is written to a storage buffer, read back
+to the CPU, and uploaded again as a 32-bit float texture. Roughly 30 MB crosses
+the bus per picture to deliver 1.4 MB of planes.
+
+That stage is now the thing worth fixing, and it is measured rather than
+assumed. Until it is, the shell reports `Degraded` and shows a live drop
+counter.
+
+### Presentation before decode-ahead, for comparison
 
 `cine-shell <file> --play 5`, Intel UHD Graphics (CML GT2) over Vulkan,
 Bgra8Unorm surface at 1280x720:
@@ -182,6 +329,18 @@ decode-ahead on its own thread rather than anything in the scheduler. Recorded
 here rather than worked around, because a mitigation invented now would be
 guessing at a bottleneck that has been measured exactly once.
 
+### Media the benchmarks could not cover
+
+```
+MEASURED Super_cinematic_image_to_vid.mp4: 240 pictures, keyframes at [0, 189]
+MEASURED A_solitary_monochrome_crimson.mp4: 240 pictures, keyframes at [0]
+```
+
+Both assets on this machine are long-GOP — one is a *single* 240-picture GOP.
+**Short-GOP behaviour is therefore UNVERIFIED**: there is no short-GOP asset here
+and no encoder to make one. Every reverse and seek figure above is a long-GOP
+figure and must not be read as general.
+
 ### Other measurements
 
 ```
@@ -205,6 +364,20 @@ the fake source advance the test clock while it "decodes", which is exactly what
 a slow real decoder does to the wall clock — so drops and lateness are
 deterministic and provable.
 
+`crates/cine-media/tests/decode_ahead.rs` — **23 tests** driving the worker step
+by step. The worker is a real thread; what the tests control is the decoder,
+which announces each decode it *begins* and then blocks until the test grants an
+outcome. So "the worker has started picture 2, now move the playhead, now let it
+finish" is exact, and no assertion depends on how fast anything runs. "The worker
+started nothing else" is proved by `wait_idle`, which inspects the worker's own
+plan under its lock rather than waiting a while and seeing nothing.
+
+`crates/cine-media/tests/playback_decode_ahead_real.rs` — **5 measurement tests**
+against the real file. They assert correctness under concurrency — every
+presented picture is the exact picture for its index, forward runs increase,
+reverse runs decrease, dropping implies `Degraded` — and print speed rather than
+asserting it.
+
 `crates/cine-media/tests/playback_real_media.rs` — **10 tests** against the real
 file on the real clock. Skips loudly when the asset is absent. The measurement
 tests print and assert nothing about speed: a threshold that passes here would be
@@ -224,6 +397,11 @@ Coverage against what was asked for:
 | unsupported media | `unsupported_media_never_reaches_the_decoder`, `media_without_a_decodable_video_track_is_refused_not_faked` |
 | scheduler stalls | `a_source_that_yields_no_picture_reports_an_underrun` |
 | dropped / degraded presentation | `a_decoder_that_cannot_keep_up_drops_frames_and_reports_degraded`, `a_frame_that_misses_its_window_is_reported_late_with_the_real_overshoot`, `the_transport_recovers_once_frames_are_being_made_again` |
+| decode-ahead bounds | `never_decodes_more_than_the_lookahead`, `memory_is_bounded_by_bytes_and_checked_before_decoding`, `the_playhead_picture_is_admitted_even_over_budget` |
+| cancellation / stale work | `a_seek_away_discards_the_in_flight_picture_and_abandons_the_queue`, `a_seek_into_the_buffer_keeps_what_is_already_decoded`, `an_in_flight_picture_that_still_belongs_is_kept` |
+| keyframe-aware reverse | `reverse_with_known_keyframes_decodes_from_the_keyframe_in_one_pass`, `a_keyframe_aligned_reverse_chunk_is_still_bounded_by_the_budget` |
+| starvation | `the_scheduler_reports_starvation_once_and_presents_when_the_picture_arrives`, `a_stream_shorter_than_its_table_stops_instead_of_retrying` |
+| teardown | `dropping_waits_for_the_in_flight_decode_and_then_returns`, `dropping_with_queued_work_starts_at_most_one_more_decode` |
 | exact mixed-rate behaviour | `twenty_four_thousand_frames_at_23_976_land_exactly_on_1001_seconds`, `an_audio_rate_clock_selects_video_frames_exactly`, `selection_at_29_97_is_exact_at_the_minute_boundary` |
 
 Two of those deserve naming. At 23.976 a frame lasts 41 708 333.33 ns, so most
@@ -237,10 +415,15 @@ playhead lands on that audio sample *exactly* — `rescale_checked` returning
 
 ## The shell
 
-`cine-shell` no longer steps an integer index. It builds a `Scheduler` over the
-opened file and sleeps on `ControlFlow::WaitUntil(now + next_deadline())`. When
-nothing is advancing it goes back to `ControlFlow::Wait`, because a viewer that
-polls while paused burns a core to show a still frame.
+`cine-shell` builds a `Scheduler` over a `DecodeAhead` and sleeps on
+`ControlFlow::WaitUntil(now + next_deadline())`. When nothing is advancing it
+goes back to `ControlFlow::Wait`, because a viewer that polls while paused burns
+a core to show a still frame. When it is *starved* it also waits — and the
+decode-ahead worker wakes it through a winit user event as soon as a picture
+lands. No spin, and no timer.
+
+Pressing play pre-rolls first: the clock does not start until a cushion is
+decoded, and the shell prints how many pictures it got and how long that took.
 
 ```
 space  play/pause      J/K/L  reverse/pause/forward
@@ -260,14 +443,21 @@ demonstrably runs. `ShellCapabilities::PLAYBACK` is now `Degraded`, naming the
 
 * **No audio, and therefore no A/V sync.** Audio is a second consumer of the
   same clock. Nothing about it is implemented.
-* **No decode-ahead.** Decode is synchronous on the scheduler's thread, so a
-  slow decode appears as a late frame and then as drops, never as an underrun.
-  A buffering pipeline is the next increment; the `FrameSource` interface is
-  shaped to accept one without changing.
-* **Not real time.** 21.9 fps against 24. The bottleneck is `rusty_h264`;
-  whether that is fixable in pure Rust is unmeasured.
-* **Reverse is not usable at speed** on long-GOP media. A reverse GOP cache
-  would fix it and does not exist.
+* **The presentation path is now the bottleneck, and is unfixed.** 69.4 ms of
+  colour conversion per picture against a 41.7 ms budget, because the result is
+  read back to the CPU and re-uploaded as a float texture. Headless playback is
+  perfect; on screen it is not. This is the next thing to fix.
+* **Not real time on screen**, and only marginally so headless: mean decode sits
+  within 0.1 ms of the frame interval, and varies run to run.
+* **A cushion postpones a deficit, it does not remove one.** Media whose decode
+  is durably slower than real time will still drop, later.
+* **Reverse crosses a GOP boundary badly**: one chunk of up to 189 decodes,
+  ~7.9 s, during which the playhead keeps moving. 28.9% dropped, reported.
+* **Short-GOP media is UNVERIFIED.** Neither asset here has more than two
+  keyframes.
+* **Cold seek into a long GOP costs the walk** — 4.8 s for picture 110. Nothing
+  avoids that yet.
+* **No parallel decode.** Two physical cores; one decode worker.
 * **Edit lists are not parsed.** The reference asset presents from 1024/12288
   rather than 0, and nothing compensates. Anything that assumes media starts at
   zero is wrong on this file.

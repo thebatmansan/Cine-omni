@@ -61,6 +61,13 @@ cd ui && npm test && npm run build
   `Playing` while frames are being dropped — `Degraded` exists for that. Read
   `docs/blueprint/PLAYBACK.md`; it records what is measured and what is not
   claimed.
+* Decoding happens on a worker thread (`cine_media::DecodeAhead`), never on the
+  presentation thread. Two things follow. Decode-ahead does not make a decoder
+  faster — without a pre-roll it measures no better than synchronous decoding,
+  so a transport that starts playing must pre-roll a cushion first. And the
+  buffer is bounded by *bytes*, checked before decoding rather than after:
+  checking after let a picture that did not fit be decoded, evicted, and decoded
+  again forever.
 * A cross-check is not an oracle. When two implementations disagree, adjudicate
   against something exact before deciding which is wrong — the true-peak
   "defect" was real divergence with the blame reversed.

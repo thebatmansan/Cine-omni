@@ -61,6 +61,9 @@ pub struct VideoReader {
     samples: Vec<SampleEntry>,
     /// Indices into `samples`, ordered by presentation time.
     display_order: Vec<usize>,
+    /// Display positions of sync samples, ascending. Computed once at open:
+    /// planning asks for it per decision, and recomputing it walks every sample.
+    keyframes: Vec<usize>,
     decoder: Box<dyn VideoDecoder>,
     /// Next sample to feed the decoder, as an index into `samples`.
     feed_cursor: usize,
@@ -142,6 +145,12 @@ impl VideoReader {
         // Display order, computed exactly from the composition offsets.
         let mut display_order: Vec<usize> = (0..samples.len()).collect();
         display_order.sort_by_key(|&i| samples[i].pts);
+        let keyframes: Vec<usize> = display_order
+            .iter()
+            .enumerate()
+            .filter(|(_, &decode)| samples[decode].is_sync)
+            .map(|(display, _)| display)
+            .collect();
 
         // Colour is whatever the container declared. H.264 VUI parsing is not
         // implemented, so this is currently absent rather than assumed; see the
@@ -157,6 +166,7 @@ impl VideoReader {
             nal_length_size,
             samples,
             display_order,
+            keyframes,
             decoder,
             feed_cursor: 0,
             display_cursor: 0,
@@ -421,6 +431,15 @@ impl VideoReader {
     pub fn keyframe_count(&self) -> usize {
         self.samples.iter().filter(|s| s.is_sync).count()
     }
+
+    /// Display positions of the sync samples, ascending.
+    ///
+    /// For planning, not for decoding: `frame_at` already finds its own entry
+    /// point in decode order. What this answers is "which pictures share one
+    /// keyframe walk", which is what reverse decode-ahead needs to know.
+    pub fn keyframe_indices(&self) -> &[usize] {
+        &self.keyframes
+    }
 }
 
 /// `avcC` records the NAL length prefix width; 4 is usual but 1 and 2 are legal.
@@ -455,6 +474,11 @@ impl crate::schedule::FrameSource for VideoReader {
 
     fn decode_index(&mut self, index: usize) -> Result<Option<VideoFrame>> {
         self.frame_at_index(index)
+    }
+
+    fn keyframe_at_or_before(&self, index: usize) -> Option<usize> {
+        let after = self.keyframes.partition_point(|&k| k <= index);
+        after.checked_sub(1).map(|i| self.keyframes[i])
     }
 
     /// A long-GOP H.264 stream *can* be played backwards, but every picture
