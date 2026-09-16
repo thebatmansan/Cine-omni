@@ -151,3 +151,112 @@ fn removing_a_scene_that_holds_cut_material_is_refused_until_confirmed() {
     c.call("undo", json!({}));
     assert_eq!(scenes(&mut c).len(), 2, "undo brings the scene back");
 }
+
+/// Revisions: the pages that went out, and the marks that say what has moved
+/// since — which is the only way a crew can tell whether the page in their
+/// hand is the one being shot.
+#[test]
+fn issuing_a_revision_marks_what_changes_after_it() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let script = c.call("script", json!({}));
+    let document = script["documents"][0]["id"].as_str().unwrap().to_string();
+    assert!(
+        script["documents"][0]["current_revision"].is_null(),
+        "nothing has gone out yet"
+    );
+    assert_eq!(script["documents"][0]["next_colour"], json!("White"));
+
+    // The first pages go out.
+    let issued = c.call(
+        "issue_revision",
+        json!({ "document": document, "date": "2026-01-12" }),
+    );
+    assert_eq!(issued["revision"]["colour"], json!("White"));
+    assert!(
+        issued["revision"]["elements"].as_u64().unwrap() > 0,
+        "it snapshotted the script"
+    );
+    let after = c.call("script", json!({}));
+    assert_eq!(
+        after["documents"][0]["current_revision"],
+        json!("White — 2026-01-12")
+    );
+    assert_eq!(
+        after["documents"][0]["marked"],
+        json!(0),
+        "nothing has moved yet"
+    );
+    assert_eq!(after["documents"][0]["next_colour"], json!("Blue"));
+
+    // A line is rewritten: it carries a mark, and nothing else does.
+    let line = after["documents"][0]["scenes"][0]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "dialogue")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let was = after["documents"][0]["scenes"][0]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == json!(line))
+        .unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    c.call(
+        "edit_dialogue",
+        json!({ "line": line, "text": "We go at first light, and not before." }),
+    );
+    let marked = c.call("script", json!({}));
+    let elements = marked["documents"][0]["scenes"][0]["elements"]
+        .as_array()
+        .unwrap();
+    let mine = elements.iter().find(|e| e["id"] == json!(line)).unwrap();
+    assert_eq!(
+        mine["revised"],
+        json!("changed"),
+        "the rewritten line is starred"
+    );
+    assert_eq!(
+        elements.iter().filter(|e| !e["revised"].is_null()).count(),
+        1,
+        "and only that line"
+    );
+    assert_eq!(marked["documents"][0]["marked"], json!(1));
+
+    // Put it back: the mark goes, because the page is the page that went out.
+    c.call("edit_dialogue", json!({ "line": line, "text": was }));
+    let restored = c.call("script", json!({}));
+    assert_eq!(
+        restored["documents"][0]["marked"],
+        json!(0),
+        "an undone change is not a change"
+    );
+
+    // The next revision is the next colour, and starts its own marks.
+    c.call(
+        "edit_dialogue",
+        json!({ "line": line, "text": "Not before first light." }),
+    );
+    let blue = c.call(
+        "issue_revision",
+        json!({ "document": document, "date": "2026-01-19" }),
+    );
+    assert_eq!(blue["revision"]["colour"], json!("Blue"));
+    let fresh = c.call("script", json!({}));
+    assert_eq!(
+        fresh["documents"][0]["marked"],
+        json!(0),
+        "the blue pages are the new baseline"
+    );
+    assert_eq!(
+        fresh["documents"][0]["revisions"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(fresh["documents"][0]["next_colour"], json!("Pink"));
+}

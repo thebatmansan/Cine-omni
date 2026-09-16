@@ -734,6 +734,49 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "issue_revision" => {
+            // Pages go out: record what the script says now, so everything
+            // after it can be marked against this.
+            let document = entity(params, "document")?;
+            let date = params
+                .get("date")
+                .and_then(J::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    cine_media::mhl::iso8601_utc(std::time::SystemTime::now())
+                        .split('T')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
+                });
+            let note = params
+                .get("note")
+                .and_then(J::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mut issued = None;
+            let group = p
+                .engine
+                .transact("issue revision", |tx| {
+                    issued = Some(
+                        cine_script::graph::issue_revision(tx, document, &date, &note)
+                            .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?,
+                    );
+                    Ok(())
+                })
+                .map_err(|x| x.to_string())?;
+            let mut out = with_impact(p, &group);
+            if let Some(r) = issued {
+                out["revision"] = json!({
+                    "colour": r.colour.name(),
+                    "round": r.round,
+                    "date": r.date,
+                    "label": r.label(),
+                    "elements": r.snapshot.text.len(),
+                });
+            }
+            out
+        }
         "tag_breakdown" => {
             // A first assistant's correction to what the script implies. It is
             // stored on the scene, not in the derived breakdown, so a rewrite

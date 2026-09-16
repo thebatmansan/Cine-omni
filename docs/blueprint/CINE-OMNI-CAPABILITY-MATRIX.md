@@ -42,7 +42,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Screenplay import | Final Draft, Fade In, WriterDuet | Lossless FDX/Fountain import | **IMPLEMENTED** | `cine-script` Fountain + FDX | FE: script view | script.* | none | instant to 200 pp | S | P0 | round-trip FDX corpus |
 | Screenplay editor | Final Draft 13 | Industry format as you type, element tabbing, smart type, pagination that matches the page count producers budget from | **MISSING** | — | BE paginator · FE editor | script.* | none; do not copy FD UI | keystroke <16 ms at 150 pp | L | P1 | page-count parity vs FD on corpus |
-| Revisions | Final Draft revision mode | Colour revision sets, locked pages, A-pages, omitted scenes, collated revision reports — the way a production office expects | **MISSING** | op log exists; no revision model | BE revision sets · FE revision marks | script.revision | none | — | M | P1 | WGA revision colour sequence; locked page stability |
+| Revisions | Final Draft revision mode | Colour revision sets, locked pages, A-pages, omitted scenes, collated revision reports — the way a production office expects | **PARTIAL** | issuing pages snapshots the script; every element changed or added since carries a mark, shown in the margin where a printed page has it, and the header says which colour the crew is holding and how many marks stand. The colour sequence is the industry's, and continues as "Second Blue" past the end of it. Editing a line back to what it said removes its mark, because the page that went out is the page that went out. No locked pages, A-pages, omitted-scene handling or revision report; no PDF of revised pages | locked pages · A-pages · omitted scenes · revision report · PDF | script.revision | none | — | M | P1 | `revision.rs`, `script_protocol.rs` |
 | Scene numbering & locking | Final Draft | Stable scene numbers after lock (A/B inserts) | **PARTIAL** | numbers imported; no lock | BE · FE | script.scene | — | — | S | P1 | insert between locked scenes gives 12A |
 | Outline / beat board | Final Draft Beat Board, Scrivener | Cards linked to scenes, reorder story structure | **MISSING** | — | BE · FE board | story.beat | — | — | M | P2 | beat reorder reflects in scene order |
 | Character & location tracking | Final Draft reports | Character/location lists, scene counts, dialogue share | **IMPLEMENTED** | derived in graph | FE report views | script.character/location | — | — | S | P1 | counts vs FD reports |
@@ -276,10 +276,10 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 |---|---:|
 | VERIFIED | 18 |
 | IMPLEMENTED | 5 |
-| PARTIAL | 48 |
+| PARTIAL | 49 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
-| MISSING | 56 |
+| MISSING | 55 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |
 

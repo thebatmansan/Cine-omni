@@ -347,6 +347,9 @@ export function App() {
             script={session.script}
             sceneId={sceneId}
             onScene={setSceneId}
+            onIssueRevision={(doc) =>
+              void session.run("issue revision", () => client.issueRevision(doc))
+            }
             onEditLine={(line, text) => void session.run("edit line", () => client.editDialogue(line, text))}
             selectedClip={selection?.item ?? null}
             onBind={(clip, scene) => void session.run("bind", () => client.bindClip(clip, scene))}

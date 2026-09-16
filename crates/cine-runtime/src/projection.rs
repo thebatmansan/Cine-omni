@@ -469,6 +469,20 @@ pub fn script(graph: &Graph) -> J {
         .of_kind(kinds::SCRIPT_DOCUMENT)
         .iter()
         .map(|doc| {
+            // Revision marks: what has changed since the pages went out. The
+            // marks are the difference from the newest revision's snapshot,
+            // computed here rather than stamped on the elements, so an edit
+            // and its undo both leave the right thing behind.
+            let revisions = cine_script::graph::revisions(graph, doc.id);
+            let now = cine_script::graph::snapshot(graph, doc.id);
+            let marks = revisions
+                .last()
+                .map(|r| cine_script::revision::marks(&now, r))
+                .unwrap_or_default();
+            let removed = revisions
+                .last()
+                .map(|r| cine_script::revision::removed_since(&now, r))
+                .unwrap_or_default();
             let scenes: Vec<J> = ordered_children(graph, doc.id, Some(kinds::SCRIPT_SCENE))
                 .into_iter()
                 .filter_map(|scene| {
@@ -483,6 +497,11 @@ pub fn script(graph: &Graph) -> J {
                                 "kind": kind,
                                 "text": en.get_str(attrs::TEXT),
                                 "character": en.get_str(attrs::CHARACTER),
+                                // "changed" or "added" since the last revision.
+                                "revised": marks.get(&e.to_string()).map(|m| match m {
+                                    cine_script::revision::Mark::Changed => "changed",
+                                    cine_script::revision::Mark::Added => "added",
+                                }),
                             }))
                         })
                         .collect();
@@ -510,14 +529,36 @@ pub fn script(graph: &Graph) -> J {
                         "characters": n.get(attrs::CHARACTERS).map(|v| v.to_json()),
                         "elements": elements,
                         "clips": clips,
+                        "revised": marks.get(&scene.to_string()).map(|m| match m {
+                            cine_script::revision::Mark::Changed => "changed",
+                            cine_script::revision::Mark::Added => "added",
+                        }),
                     }))
                 })
                 .collect();
+            let next_colour = {
+                let (colour, round) = cine_script::revision::Colour::next(
+                    revisions.last().map(|r| (r.colour, r.round)),
+                );
+                colour.spoken(round)
+            };
             json!({
                 "id": doc.id,
                 "name": doc.name(),
                 "source_key": doc.get_str(attrs::SOURCE_KEY),
                 "scenes": scenes,
+                // The pages that went out, and what has moved since.
+                "revisions": revisions.iter().map(|r| json!({
+                    "colour": r.colour.name(),
+                    "round": r.round,
+                    "date": r.date,
+                    "note": r.note,
+                    "label": r.label(),
+                })).collect::<Vec<_>>(),
+                "current_revision": revisions.last().map(|r| r.label()),
+                "next_colour": next_colour,
+                "marked": marks.len(),
+                "removed_since_revision": removed,
             })
         })
         .collect();

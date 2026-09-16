@@ -545,3 +545,74 @@ pub fn alignments_under(graph: &Graph, root: EntityId) -> Vec<EntityId> {
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// revisions
+// ---------------------------------------------------------------------------
+
+/// Attribute on a `script.document` holding the issued revisions, newest last.
+pub const REVISIONS_ATTR: &str = "revisions";
+
+/// What the document says now, in the form a revision is compared against.
+pub fn snapshot(graph: &Graph, document: EntityId) -> crate::revision::Snapshot {
+    let mut snap = crate::revision::Snapshot::default();
+    for scene in graph.children(document) {
+        let Some(node) = graph.node(scene) else {
+            continue;
+        };
+        if node.kind.as_str() != kinds::SCRIPT_SCENE {
+            continue;
+        }
+        if let Some(heading) = node.get_str(attrs::HEADING) {
+            snap.headings.insert(scene.to_string(), heading.to_string());
+        }
+        for element in graph.children(scene) {
+            let Some(en) = graph.node(element) else {
+                continue;
+            };
+            if !en.kind.as_str().starts_with("script.") {
+                continue;
+            }
+            if let Some(text) = en.get_str(attrs::TEXT) {
+                snap.text.insert(element.to_string(), text.to_string());
+            }
+        }
+    }
+    snap
+}
+
+/// The revisions issued for `document`, oldest first.
+pub fn revisions(graph: &Graph, document: EntityId) -> Vec<crate::revision::Revision> {
+    graph
+        .attr(document, REVISIONS_ATTR)
+        .and_then(|v| v.to_serde().ok())
+        .unwrap_or_default()
+}
+
+/// Issue the next revision: the colour after the last one, and a snapshot of
+/// the script as it stands.
+///
+/// `date` is the date the pages go out, as a production writes it. Returns the
+/// revision issued. Idempotent only in the sense that issuing twice issues two
+/// revisions — which is what a production means when it does it.
+pub fn issue_revision(
+    tx: &mut Tx,
+    document: EntityId,
+    date: &str,
+    note: &str,
+) -> Result<crate::revision::Revision> {
+    require_kind(tx.graph(), document, kinds::SCRIPT_DOCUMENT)?;
+    let mut all = revisions(tx.graph(), document);
+    let (colour, round) = crate::revision::Colour::next(all.last().map(|r| (r.colour, r.round)));
+    let issued = crate::revision::Revision {
+        colour,
+        round,
+        date: date.to_string(),
+        note: note.to_string(),
+        snapshot: snapshot(tx.graph(), document),
+    };
+    all.push(issued.clone());
+    let value = Value::from_serde(&all).map_err(|e| Error::InvalidDocument(e.to_string()))?;
+    tx.set(document, REVISIONS_ATTR, value)?;
+    Ok(issued)
+}

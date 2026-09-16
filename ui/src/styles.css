@@ -879,3 +879,32 @@ button.danger { background: #6b2a22; border-color: var(--bad); }
 .flags { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--text-dim); }
 .flags label { display: inline-flex; align-items: center; gap: 3px; }
 .flags label.tagged { color: var(--text); }
+
+/* ---- script revisions -------------------------------------------------- */
+
+.panel-head .revision {
+  font-size: 10px;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0 5px;
+}
+.panel-head .revision.blue { border-color: #4f7fc0; color: #9dc0ef; }
+.panel-head .revision.pink { border-color: #c06f96; color: #efa8c8; }
+.panel-head .revision.yellow { border-color: #c0b04f; color: #e8dd9a; }
+.panel-head .revision.green { border-color: #5fa06a; color: #a5dcae; }
+.panel-head .revision.goldenrod { border-color: #c09a3f; color: #e9c983; }
+.panel-head .revision .marked { color: var(--warn); }
+.panel-head .issue {
+  font-size: 10px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 2px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.panel-head .issue:hover { color: var(--text); border-color: var(--accent-dim); }
+.el.revised { position: relative; }
+.el .mark { position: absolute; left: -12px; color: var(--warn); font-weight: bold; }
+.page { position: relative; }

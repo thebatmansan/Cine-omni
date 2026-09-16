@@ -113,6 +113,8 @@ export interface ScriptElement {
   kind: string;
   text: string | null;
   character: string | null;
+  /** `"changed"` or `"added"` since the last revision went out; null if neither. */
+  revised: "changed" | "added" | null;
 }
 
 export interface ScriptScene {
@@ -123,6 +125,7 @@ export interface ScriptScene {
   eighths: number | null;
   est_duration_s: number | null;
   characters: string[] | null;
+  revised: "changed" | "added" | null;
   elements: ScriptElement[];
   clips: {
     id: string;
@@ -135,7 +138,24 @@ export interface ScriptScene {
 }
 
 export interface ScriptView {
-  documents: { id: string; name: string; source_key: string | null; scenes: ScriptScene[] }[];
+  documents: ScriptDocument[];
+}
+
+export interface ScriptDocument {
+  id: string;
+  name: string;
+  source_key: string | null;
+  scenes: ScriptScene[];
+  /** Pages that have gone out, oldest first. */
+  revisions: { colour: string; round: number; date: string; note: string; label: string }[];
+  /** What the crew is holding, e.g. `"Blue — 2026-01-19"`. */
+  current_revision: string | null;
+  /** What the next set of pages would be called. */
+  next_colour: string;
+  /** How many elements carry a revision mark. */
+  marked: number;
+  /** Elements that were in the last revision and have since been cut. */
+  removed_since_revision: string[];
 }
 
 export interface LDate { year: number; month: number; day: number }
@@ -658,6 +678,13 @@ export class RpcClient {
   }
   scheduleConstraints(document: string, constraints: ScheduleConstraints) {
     return this.call<CascadeResult>("schedule_constraints", { document, constraints });
+  }
+  /** Issue revised pages: snapshot the script, so everything after it is marked against it. */
+  issueRevision(document: string, date?: string, note?: string) {
+    return this.call<CascadeResult & { revision: { label: string; colour: string } }>(
+      "issue_revision",
+      { document, date, note },
+    );
   }
   /**
    * Tag a breakdown element by hand: `category` is `prop`, `cast`, `vehicles`,

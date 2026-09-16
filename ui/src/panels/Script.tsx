@@ -19,6 +19,7 @@ export function Script({
   onBind,
   onUnbind,
   onRevealClip,
+  onIssueRevision,
 }: {
   script: ScriptView | null;
   sceneId: string | null;
@@ -28,6 +29,8 @@ export function Script({
   onBind(clip: string, scene: string): void;
   onUnbind(clip: string, scene: string): void;
   onRevealClip(clip: string): void;
+  /** Issue revised pages: everything after them is marked against them. */
+  onIssueRevision?(document: string): void;
 }) {
   const doc = script?.documents[0] ?? null;
   const scene = doc?.scenes.find((s) => s.id === sceneId) ?? doc?.scenes[0] ?? null;
@@ -65,6 +68,21 @@ export function Script({
           <span>Script</span>
           {doc && <span className="count">{doc.name || doc.source_key}</span>}
           <span className="spacer" />
+          {doc && (
+            <span className={`revision ${(doc.current_revision ?? "").split(" ")[0].toLowerCase()}`}>
+              {doc.current_revision ?? "not issued"}
+              {doc.marked > 0 && <span className="marked" title="elements changed since"> · {doc.marked}*</span>}
+            </span>
+          )}
+          {doc && onIssueRevision && (
+            <button
+              className="issue"
+              title={`Issue ${doc.next_colour} pages: everything after them is marked against them`}
+              onClick={() => onIssueRevision(doc.id)}
+            >
+              Issue {doc.next_colour}
+            </button>
+          )}
           {scene && (
             <span className="count">
               {scene.words ?? 0} words · est {scene.est_duration_s?.toFixed(1) ?? "—"} s
@@ -74,9 +92,14 @@ export function Script({
         <div className="panel-body page-scroll">
           {scene && (
             <div className="page">
-              <div className="el heading">
+              <div className={`el heading${scene.revised ? " revised" : ""}`}>
                 {scene.number && <span className="scene-number">{scene.number}</span>}
                 {scene.heading}
+                {scene.revised && (
+                  <span className="mark" title={`${scene.revised} since the last revision`}>
+                    *
+                  </span>
+                )}
               </div>
               {scene.elements.map((el) => (
                 <Element key={el.id} el={el} onCommit={(text) => onEditLine(el.id, text)} />
@@ -162,9 +185,17 @@ function Element({
     setDraft(null);
   };
 
+  // A revision mark sits in the margin, where a printed page has it.
+  const mark = el.revised ? (
+    <span className="mark" title={`${el.revised} since the last revision`}>
+      *
+    </span>
+  ) : null;
+
   if (el.kind === "dialogue") {
     return (
-      <div className="el dialogue-block">
+      <div className={`el dialogue-block${el.revised ? " revised" : ""}`}>
+        {mark}
         <div className="el character">{el.character}</div>
         {draft == null ? (
           <div
@@ -195,5 +226,10 @@ function Element({
       </div>
     );
   }
-  return <div className={`el ${el.kind}`}>{el.text}</div>;
+  return (
+    <div className={`el ${el.kind}${el.revised ? " revised" : ""}`}>
+      {mark}
+      {el.text}
+    </div>
+  );
 }

@@ -34,6 +34,7 @@ pub mod fdx;
 pub mod fountain;
 pub mod graph;
 pub mod model;
+pub mod revision;
 pub mod stats;
 pub mod sync;
 pub mod tag;
