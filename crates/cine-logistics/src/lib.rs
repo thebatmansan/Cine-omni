@@ -40,6 +40,7 @@
 pub mod breakdown;
 pub mod callsheet;
 pub mod date;
+pub mod dood;
 pub mod error;
 pub mod fixtures;
 pub mod graph;
@@ -50,6 +51,7 @@ pub mod shotlist;
 pub use breakdown::{breakdown_document, breakdown_scene, SceneBreakdown};
 pub use callsheet::{build_call_sheet, CallSheet, CallSheetScene, CastCall, CastRoster, CrewCall};
 pub use date::{Date, DateRange, Time, Weekday};
+pub use dood::{day_out_of_days, CastRow, DayOutOfDays, Status};
 pub use error::{Error, Result};
 pub use graph::{
     document_of_scene, read_schedule, write_breakdown, write_call_sheet, write_schedule,

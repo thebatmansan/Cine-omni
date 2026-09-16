@@ -57,7 +57,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Script breakdown & tagging | Movie Magic Scheduling, StudioBinder | One breakdown sheet per scene; tagged cast, props, wardrobe, vehicles, SFX, VFX, animals, extras | **PARTIAL** | breakdown derived from script | FE tagging UI · BE custom categories | logistics.breakdown | — | — | M | P1 | sheet parity with MMS categories |
 | Stripboard | Movie Magic Scheduling | Drag strips to reorder shooting order, day breaks, colour by INT/EXT/DAY/NIGHT | **PARTIAL** | Production workspace: auto-scheduled board in industry colours, pages in eighths, constraints editable and rescheduling live; a script rewrite reaches the board (measured 14.2 ms cascade); **strips cannot be dragged** | BE manual strip ops · FE drag | logistics.schedule/day | — | 300 strips drag at 60 fps | M | P1 | `production_protocol.rs`, `ui/e2e/production.mjs` |
-| Day out of days | Movie Magic Scheduling | Per-cast work/hold/travel/drop-pickup days | **MISSING** | — | BE report | logistics.day + cast | — | — | S | P1 | DOOD vs hand-computed |
+| Day out of days | Movie Magic Scheduling | Per-cast work/hold/travel/drop-pickup days | **PARTIAL** | derived from the stripboard: SW/W/H/WF/SWF per cast per day, work and hold totals, in the Production workspace and as `cine export <dir> dood`; hold days are counted separately, since re-ordering the board moves them and not the work. No travel, drop/pickup or per-cast rate arithmetic | travel · drop/pickup · contracts | logistics.day + cast | — | — | S | P1 | `dood.rs` (codes and hold days), `production_protocol.rs` |
 | Call sheets | StudioBinder, MMS | Daily call sheet from schedule, crew, locations, weather, hospitals | **PARTIAL** | derived per day and shown in the Production workspace; regenerated on reschedule and on script change (tested); no weather, hospitals or PDF | PDF · real crew data | logistics.call_sheet | — | — | M | P1 | regenerate on reschedule |
 | Budgeting | Movie Magic Budgeting, Hot Budget | Chart of accounts, fringes, globals, schedule-linked labour | **MISSING** | — | BE budget model · FE | budget.* | union rate tables are proprietary data | — | L | P2 | schedule change moves labour lines |
 | Crew & cast management | StudioBinder | Contacts, roles, availability, deal memos | **MISSING** | cast/crew kinds exist | BE · FE · privacy | logistics.crew/cast | personal data (GDPR) | — | M | P2 | availability conflict flagged |
@@ -276,10 +276,10 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 |---|---:|
 | VERIFIED | 18 |
 | IMPLEMENTED | 5 |
-| PARTIAL | 47 |
+| PARTIAL | 48 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
-| MISSING | 57 |
+| MISSING | 56 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |
 

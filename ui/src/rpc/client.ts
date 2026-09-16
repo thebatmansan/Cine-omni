@@ -233,10 +233,29 @@ export interface ColorMediaView {
   source: string | null;
 }
 
+/** Day Out of Days: what the stripboard means for the cast. */
+export interface DayOutOfDaysView {
+  /** Day numbers, in order; a cast row's entries line up with these. */
+  days: number[];
+  cast: {
+    name: string;
+    /** `SW`, `W`, `H`, `WF`, `SWF`, or empty for a day they are not engaged. */
+    days: string[];
+    start: number;
+    finish: number;
+    worked: number;
+    /** Days held between first and last: not worked, not released, still paid. */
+    held: number;
+  }[];
+  total_worked: number;
+  total_held: number;
+}
+
 export interface ProductionView {
   document: string;
   breakdowns: SceneBreakdown[];
   schedule: { days: ShootDay[]; warnings: string[]; company_moves: number } | null;
+  dood: DayOutOfDaysView | null;
   call_sheets: CallSheetView[];
   constraints: ScheduleConstraints;
   shots: {

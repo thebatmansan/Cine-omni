@@ -112,3 +112,61 @@ fn impossible_constraints_are_refused_and_change_nothing() {
     assert!(raw.read_reply(3)["error"].is_object());
     assert_eq!(c.call("project", json!({}))["revision"], revision);
 }
+
+/// Day Out of Days: the cast side of the stripboard, and the hold days that
+/// make re-ordering it worth money.
+#[test]
+fn the_day_out_of_days_follows_the_board_and_counts_hold_days() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let p = c.call("production", json!({}));
+    let dood = &p["dood"];
+    assert!(!dood.is_null(), "a schedule has a DOOD");
+    let days = dood["days"].as_array().unwrap();
+    assert_eq!(
+        days.len(),
+        p["schedule"]["days"].as_array().unwrap().len(),
+        "a column per shooting day"
+    );
+    let cast = dood["cast"].as_array().unwrap();
+    assert!(!cast.is_empty(), "the screenplay has cast");
+    for row in cast {
+        let codes: Vec<&str> = row["days"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(codes.len(), days.len(), "every row spans every day");
+        let worked = codes.iter().filter(|c| **c != "H" && !c.is_empty()).count();
+        assert_eq!(
+            worked as u64,
+            row["worked"].as_u64().unwrap(),
+            "the codes and the count agree for {}",
+            row["name"]
+        );
+        // A row starts with a start code and ends with a finish code.
+        let engaged: Vec<&&str> = codes.iter().filter(|c| !c.is_empty()).collect();
+        assert!(
+            engaged.first().is_some_and(|c| **c == "SW" || **c == "SWF"),
+            "{}: first engaged day is a start: {codes:?}",
+            row["name"]
+        );
+        assert!(
+            engaged.last().is_some_and(|c| **c == "WF" || **c == "SWF"),
+            "{}: last engaged day is a finish: {codes:?}",
+            row["name"]
+        );
+    }
+    let held: u64 = cast.iter().map(|r| r["held"].as_u64().unwrap()).sum();
+    assert_eq!(held, dood["total_held"].as_u64().unwrap());
+
+    // And it is a function of the board: the markdown export says the same.
+    let text = c.call("export", json!({ "what": "dood" }));
+    let text = text.as_str().unwrap_or_default();
+    assert!(text.contains("# Day Out of Days"), "{text}");
+    assert!(
+        text.contains(&format!("{} days on hold", dood["total_held"])),
+        "the export and the projection agree: {text}"
+    );
+}

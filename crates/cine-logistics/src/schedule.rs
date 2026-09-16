@@ -174,6 +174,16 @@ impl ShootDay {
         }
     }
 
+    /// A day holding one strip, for tests in this crate that need a schedule
+    /// without running the scheduler.
+    #[cfg(test)]
+    pub(crate) fn for_test(index: usize, strip: Strip) -> ShootDay {
+        let date = Date::new(2026, 1, index.clamp(1, 28) as u32).expect("a January date");
+        let mut day = ShootDay::new(index, date);
+        day.push(strip);
+        day
+    }
+
     fn push(&mut self, strip: Strip) {
         if self.strips.is_empty() {
             self.is_night = strip.is_night();

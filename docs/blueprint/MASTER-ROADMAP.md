@@ -40,6 +40,7 @@ since the audit, each with its evidence in the named document or test:
 | Phase 3 — EXR and image sequences | OpenEXR read and write with both windows, layers by name, `%04d`/`####` sequences scanned rather than guessed; comp `Read`/`Write` per frame, writing opt-in. Reading a third-party HDRI matches Blender's own read exactly | `exr_oracle.rs`, `exr_graph.rs` |
 | Phase 5 — offload (pulled forward) | `cine offload` copies a card hashing as it reads, fsyncs, re-reads and compares, and writes an ASC MHL generation; `cine verify` checks a folder against its newest list and records the check as the next generation | `cine-media/tests/mhl.rs` |
 | Phase 7 — scopes | waveform and vectorscope of the picture as shown (same conversion, same lattice), from a sixteenth of the pixels, measured while the panels redraw | `cine-shell/src/scopes.rs` |
+| Phase 4 — day out of days | the cast side of the stripboard: SW/W/H/WF/SWF per actor per day, work and hold totals, in the workspace, the protocol and an export | `dood.rs`, `production_protocol.rs` |
 | Phase 8 — sound (pulled forward) | ALSA device via runtime-loaded libasound; the cut's sound decoded, mixed and played in the native window, pacing the picture | `AV-SYNC.md` |
 | Wrong-direction corrections | takes owned by the production log, not shots (migrated at open); compositing data window; a failed cascade stays undoable; zero rate refused; same-length rewording reaches the cut; TCP_NODELAY | commits since `6d8fd67` |
 

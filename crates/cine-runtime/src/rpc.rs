@@ -339,6 +339,12 @@ pub fn export(
                 .map(|s| s.to_markdown())
                 .unwrap_or_else(|| "no schedule".into())
         }
+        "dood" => {
+            let g = p.engine.read();
+            cine_logistics::graph::read_schedule(&g, doc)
+                .map(|s| cine_logistics::day_out_of_days(&s).to_markdown())
+                .unwrap_or_else(|| "no schedule".into())
+        }
         "callsheets" => {
             let g = p.engine.read();
             let schedule = EntityId::derived(doc, kinds::LOGISTICS_SCHEDULE);

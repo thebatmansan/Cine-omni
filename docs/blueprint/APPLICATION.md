@@ -177,8 +177,14 @@ scene 1 after the rewrite            2/8 → 13/8 pages, on the stripboard and t
 undo                                 page count restored in every client
 ```
 
+The Day Out of Days beside it is the cast side of the same board: SW, W, H, WF
+and SWF per actor per day, with work and hold counted separately. A hold day —
+not shooting, not released, still paid — is what re-ordering the board actually
+moves, so it is never folded into a single total. `cine export <dir> dood`
+prints the same table.
+
 Strips cannot be dragged, breakdown elements cannot be tagged by hand, there is
-no day-out-of-days report and no budget; the capability says so.
+no travel or drop/pickup on the DOOD and no budget; the capability says so.
 
 ## Colour, and what a view changes
 

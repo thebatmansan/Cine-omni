@@ -737,7 +737,7 @@ select, input, textarea {
 
 /* ---- production ------------------------------------------------------- */
 
-.work.production { grid-template-columns: 260px minmax(0, 1fr) 380px 320px; }
+.work.production { grid-template-columns: 240px 300px minmax(0, 1fr) 340px 300px; }
 .constraints { display: flex; flex-direction: column; gap: 6px; }
 .constraints label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); }
 .constraints label input[type="number"] { width: 70px; }
@@ -802,3 +802,21 @@ button.danger { background: #6b2a22; border-color: var(--bad); }
 .colour-row .dim, .colour-row .tag { flex: 0 0 auto; font-size: 10px; }
 .colour-row .tag { color: var(--accent); }
 .panel-head .dim { font-weight: normal; }
+
+/* ---- day out of days --------------------------------------------------- */
+
+.panel-body.dood { overflow: auto; padding: 8px 10px; }
+.panel-body.dood table { border-collapse: collapse; font-size: 11px; }
+.panel-body.dood th, .panel-body.dood td {
+  border: 1px solid var(--line);
+  padding: 2px 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+.panel-body.dood th { color: var(--text-dim); font-weight: normal; }
+.panel-body.dood td.who { text-align: left; color: var(--text); }
+.panel-body.dood td.code { color: var(--text-dim); font-family: ui-monospace, monospace; }
+.panel-body.dood td.code.sw, .panel-body.dood td.code.swf { color: var(--ok); }
+.panel-body.dood td.code.wf { color: var(--accent); }
+.panel-body.dood td.code.h { color: var(--warn); background: rgba(210, 160, 60, 0.12); }
+.panel-body.dood td.held { color: var(--warn); }

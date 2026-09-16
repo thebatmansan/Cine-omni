@@ -424,6 +424,24 @@ pub fn production(graph: &Graph, document: EntityId) -> Result<J, String> {
         "call_sheets": sheets,
         "constraints": constraints,
         "shots": shots,
+        // Day Out of Days: what the stripboard means for the cast, and what
+        // its shape costs in hold days.
+        "dood": schedule.as_ref().map(|s| {
+            let d = cine_logistics::day_out_of_days(s);
+            json!({
+                "days": d.days,
+                "cast": d.cast.iter().map(|row| json!({
+                    "name": row.name,
+                    "days": row.days.iter().map(|s| s.code()).collect::<Vec<_>>(),
+                    "start": row.start,
+                    "finish": row.finish,
+                    "worked": row.worked,
+                    "held": row.held,
+                })).collect::<Vec<_>>(),
+                "total_worked": d.total_worked(),
+                "total_held": d.total_held(),
+            })
+        }),
     }))
 }
 

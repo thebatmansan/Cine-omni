@@ -10,6 +10,15 @@ import type { CallSheetView, LDate, LTime, ProductionView, ScheduleConstraints, 
  * reschedules, and the board, the call sheets and the impact panel all update
  * from the broadcast.
  */
+/** What each Day Out of Days code means, said where it is shown. */
+const CODE_MEANING: Record<string, string> = {
+  SW: "Start Work — first day, and they work it",
+  W: "Work",
+  H: "Hold — not shooting, not released, still paid",
+  WF: "Work Finish — last day they work",
+  SWF: "Start Work Finish — starts and finishes the same day",
+};
+
 export function Production({
   production,
   onConstraints,
@@ -61,6 +70,59 @@ export function Production({
               ))}
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="panel dood-panel">
+        <div className="panel-head">
+          <span>Day Out of Days</span>
+          <span className="spacer" />
+          <span className="legend">
+            {production.dood && (
+              <span className="dim">
+                {production.dood.total_worked} worked · {production.dood.total_held} held
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="panel-body dood">
+          {!production.dood && <div className="empty">No schedule yet.</div>}
+          {production.dood && (
+            <table>
+              <thead>
+                <tr>
+                  <th>Cast</th>
+                  {production.dood.days.map((d) => (
+                    <th key={d}>{d}</th>
+                  ))}
+                  <th>W</th>
+                  <th>H</th>
+                </tr>
+              </thead>
+              <tbody>
+                {production.dood.cast.map((row) => (
+                  <tr key={row.name}>
+                    <td className="who">{row.name}</td>
+                    {row.days.map((code, i) => (
+                      <td
+                        key={production.dood!.days[i]}
+                        className={`code ${code ? code.toLowerCase() : "off"}`}
+                        title={CODE_MEANING[code] ?? "not engaged"}
+                      >
+                        {code}
+                      </td>
+                    ))}
+                    <td>{row.worked}</td>
+                    <td className={row.held > 0 ? "held" : ""}>{row.held}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div className="hint">
+            A hold day is a day an actor is not shooting and not released — still paid. Re-ordering
+            the board changes it; the work does not.
+          </div>
         </div>
       </div>
 
