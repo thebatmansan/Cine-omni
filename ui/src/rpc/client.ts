@@ -202,6 +202,37 @@ export interface ScheduleConstraints {
   night_shoots_together: boolean;
 }
 
+/** The project's colour config, and what every file in it is in. */
+export interface ColorView {
+  config: { name: string; source: string | null; unimplemented: string[] } | null;
+  /** What everything is being looked at through; null means the config's own default. */
+  view: ViewSelection | null;
+  displays: { name: string; active: boolean; views: { name: string; active: boolean }[] }[];
+  colorspaces: {
+    name: string;
+    family: string;
+    encoding: string;
+    is_display: boolean;
+    isdata: boolean;
+  }[];
+  media: ColorMediaView[];
+}
+
+export interface ViewSelection {
+  display: string;
+  view: string;
+}
+
+export interface ColorMediaView {
+  id: string;
+  name: string;
+  path: string | null;
+  /** Null when nothing has established what this file is in. */
+  input_colorspace: string | null;
+  /** `rule:<file rule>` when the config decided, `user` when a person did. */
+  source: string | null;
+}
+
 export interface ProductionView {
   document: string;
   breakdowns: SceneBreakdown[];
@@ -426,6 +457,7 @@ export class RpcClient {
   private listeners = new Set<(n: ChangeNotification) => void>();
   private stateListeners = new Set<(open: boolean) => void>();
   private focusListeners = new Set<(timeline: string | null) => void>();
+  private viewListeners = new Set<(view: ViewSelection | null) => void>();
   private jobListeners = new Set<(job: JobView) => void>();
 
   constructor(private url: string) {}
@@ -469,6 +501,10 @@ export class RpcClient {
       this.focusListeners.forEach((l) => l((msg.params?.timeline as string | null) ?? null));
       return;
     }
+    if (msg.method === "view") {
+      this.viewListeners.forEach((l) => l((msg.params as ViewSelection | null) ?? null));
+      return;
+    }
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
@@ -485,6 +521,12 @@ export class RpcClient {
   onJob(l: (job: JobView) => void): () => void {
     this.jobListeners.add(l);
     return () => this.jobListeners.delete(l);
+  }
+
+  /** Another surface chose what everything is looked at through. */
+  onView(l: (view: ViewSelection | null) => void): () => void {
+    this.viewListeners.add(l);
+    return () => this.viewListeners.delete(l);
   }
 
   /** Another surface opened a sequence. */
@@ -559,6 +601,21 @@ export class RpcClient {
       "script_write",
       { document, text, allow_orphans: allowOrphans },
     );
+  }
+  /** The project's colour config, what is looked through, and each file's colorspace. */
+  color() {
+    return this.call<ColorView>("color", {});
+  }
+  /** Look through this display and view everywhere; `null` returns to the config's default. */
+  colorView(selection: ViewSelection | null) {
+    return this.call<ColorView>("color_view", {
+      display: selection?.display ?? null,
+      view: selection?.view ?? null,
+    });
+  }
+  /** Say what a file really is. Undoable, like any other edit. */
+  setInputColorspace(media: string, colorspace: string) {
+    return this.call<CascadeResult>("set_input_colorspace", { media, colorspace });
   }
   production(document?: string) {
     return this.call<ProductionView>("production", document ? { document } : {});

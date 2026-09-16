@@ -3,6 +3,7 @@ import { Browser } from "./panels/Browser";
 import { Capabilities } from "./panels/Capabilities";
 import { History, Impact } from "./panels/Impact";
 import { Jobs } from "./panels/Jobs";
+import { Colour } from "./panels/Colour";
 import { Production } from "./panels/Production";
 import { Inspector } from "./panels/Inspector";
 import { Record } from "./panels/Record";
@@ -362,6 +363,20 @@ export function App() {
             production={session.production}
             onConstraints={(doc, c) => void session.run("reschedule", () => client.scheduleConstraints(doc, c))}
           />
+          {impact}
+        </div>
+      )}
+
+      {workspace === "colour" && (
+        <div className="work colour-work">
+          <Colour
+            colour={session.colour}
+            onView={(selection) => void session.run("view", () => client.colorView(selection))}
+            onInputColorspace={(media, colorspace) =>
+              void session.run("input colorspace", () => client.setInputColorspace(media, colorspace))
+            }
+          />
+          <Viewer media={media} capabilities={session.capabilities} index={picture} onIndex={setPicture} />
           {impact}
         </div>
       )}

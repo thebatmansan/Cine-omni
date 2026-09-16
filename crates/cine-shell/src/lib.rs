@@ -105,7 +105,10 @@ impl Availability {
 /// The capabilities the shell can honestly offer today.
 ///
 /// Written as data rather than scattered through the UI so the honest answer is
-/// in one place and can be tested.
+/// in one place and can be tested. Inside `cine start` the runtime's own list
+/// (`cine-runtime::rpc::capabilities`) is what clients are told; this one is
+/// what the window says about itself, standalone or not, and the two must not
+/// drift — a capability that changes here changes there.
 pub struct ShellCapabilities;
 
 impl ShellCapabilities {
@@ -120,13 +123,29 @@ impl ShellCapabilities {
         "playback is scheduled from the clock, but this build's decoder runs \
          below real time and drops frames; the drop counter is live",
     );
-    pub const AUDIO_MONITORING: Availability =
-        Availability::Unavailable("no audio device backend on this platform build");
+    /// The sequence's sound is decoded, mixed and played on the system device
+    /// through a runtime-loaded ALSA, and the picture is paced from its clock:
+    /// measured -3.5 ms median offset (5-95%: -4.6..-1.5 ms), 0 dropped
+    /// pictures, 0 underruns, by the device's reported delay rather than
+    /// acoustically. See `docs/blueprint/AV-SYNC.md`.
+    pub const AUDIO_MONITORING: Availability = Availability::Degraded(
+        "the cut's sound plays on the device and paces the picture, when the device opens; \
+         48 kHz stereo only — no resampling, no downmix, no clip gain or fades, and no sound \
+         at speeds other than 1",
+    );
     pub const SCOPES: Availability = Availability::Unavailable(
         "scopes are implemented in cine-color but not wired to the viewer",
     );
-    pub const COLOUR_MANAGEMENT: Availability = Availability::Unavailable(
-        "the display transform is not ACES-verified; see PHASE-3-STATUS.md",
+    /// The picture is shown through the project's colour config: each clip's
+    /// input colorspace through the chosen display and view, baked by the
+    /// runtime to a 33³ lattice and interpolated in the fragment shader. The
+    /// transforms match OpenColorIO 2.5.2 on the released ACES configs; the
+    /// lattice is 2.1 of 255 from the transform within legal code values
+    /// (`cine-color/tests/view_lattice.rs`, `tests/planar_present.rs`).
+    pub const COLOUR_MANAGEMENT: Availability = Availability::Degraded(
+        "the picture is shown through the project's config and says which view and how far \
+         the lattice is from the transform; a clip with no colorspace gets none. No grading, \
+         no scopes, and no analytic transform on the GPU",
     );
     pub const HDR_OUTPUT: Availability =
         Availability::Unavailable("no HDR surface configuration yet");
@@ -188,9 +207,27 @@ mod tests {
         assert!(ShellCapabilities::VIDEO_DISPLAY.is_working());
     }
 
-    /// Audio is still absent, so nothing may imply A/V sync exists.
+    /// Sound exists now, and says what it does not do. The measurement behind
+    /// it is in `docs/blueprint/AV-SYNC.md`; this guards the claim's shape.
     #[test]
-    fn nothing_claims_audio_or_sync() {
-        assert!(!ShellCapabilities::AUDIO_MONITORING.is_backed());
+    fn sound_is_backed_and_says_what_it_does_not_do() {
+        assert!(ShellCapabilities::AUDIO_MONITORING.is_backed());
+        assert!(!ShellCapabilities::AUDIO_MONITORING.is_working());
+        let why = ShellCapabilities::AUDIO_MONITORING.reason().unwrap();
+        assert!(why.contains("no resampling"), "{why:?}");
+    }
+
+    /// Colour is applied now, and neither claims grading nor hides the
+    /// approximation the GPU interpolates.
+    #[test]
+    fn colour_is_backed_and_names_its_approximation() {
+        assert!(ShellCapabilities::COLOUR_MANAGEMENT.is_backed());
+        assert!(!ShellCapabilities::COLOUR_MANAGEMENT.is_working());
+        let why = ShellCapabilities::COLOUR_MANAGEMENT.reason().unwrap();
+        assert!(
+            why.contains("lattice"),
+            "the approximation must be named: {why:?}"
+        );
+        assert!(why.contains("No grading"), "{why:?}");
     }
 }

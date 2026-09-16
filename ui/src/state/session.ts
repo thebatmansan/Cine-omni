@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Capability,
   ChangeNotification,
+  ColorView,
   HistoryView,
   ImpactView,
   JobView,
@@ -45,6 +46,8 @@ export interface Session {
   changes: ChangeNotification[];
   /** The production office's derived state, when there is a screenplay. */
   production: ProductionView | null;
+  /** The colour config, what is being looked through, and each file's colorspace. */
+  colour: ColorView | null;
   /** Background work, newest first, live. */
   jobs: JobView[];
   /** The last refused request, in the runtime's words. */
@@ -95,6 +98,7 @@ export function useSession(url: string = runtimeUrl()): Session {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobView[]>([]);
   const [production, setProduction] = useState<ProductionView | null>(null);
+  const [colour, setColour] = useState<ColorView | null>(null);
   const selected = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -115,6 +119,8 @@ export function useSession(url: string = runtimeUrl()): Session {
       setHistory(h);
       // No screenplay is a normal state, not an error.
       setProduction(sc.documents.length ? await client.production().catch(() => null) : null);
+      // A project without a colour config is a normal state too.
+      setColour(await client.color().catch(() => null));
       const known = list.some((t) => t.id === selected.current);
       const want = known ? selected.current : (list[0]?.id ?? null);
       selected.current = want;
@@ -154,6 +160,11 @@ export function useSession(url: string = runtimeUrl()): Session {
     client.onJob((job) => {
       if (!live) return;
       setJobs((all) => [job, ...all.filter((j) => j.id !== job.id)].sort((x, y) => y.id - x.id).slice(0, 200));
+    });
+    // Someone else chose a view: follow it, as the native window does.
+    client.onView(() => {
+      if (!live) return;
+      void client.color().then((c) => live && setColour(c)).catch(() => {});
     });
     client.onFocus((timeline) => {
       if (!live || !timeline || timeline === selected.current) return;
@@ -228,6 +239,7 @@ export function useSession(url: string = runtimeUrl()): Session {
     changes,
     refusal,
     production,
+    colour,
     jobs,
     client,
     selectTimeline,
