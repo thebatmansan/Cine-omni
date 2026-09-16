@@ -172,7 +172,8 @@ with optimised dependencies, two clients):
 
 ```
 production projection                7.1 ms
-dialogue rewrite, full cascade       14.2 ms   impact: Previs, Production, Script, Sound, VFX
+dialogue rewrite, full cascade       10.6 ms   impact: Previs, Production, Script, Sound, VFX
+strip moved, board rescheduled       3.5 ms    the pin is a constraint; undo releases it
 scene 1 after the rewrite            2/8 → 13/8 pages, on the stripboard and the call sheet
 undo                                 page count restored in every client
 ```
@@ -183,8 +184,15 @@ not shooting, not released, still paid — is what re-ordering the board actuall
 moves, so it is never folded into a single total. `cine export <dir> dood`
 prints the same table.
 
-Strips cannot be dragged, breakdown elements cannot be tagged by hand, there is
-no travel or drop/pickup on the DOOD and no budget; the capability says so.
+A strip can be moved: the buttons on it put the scene on another day, and the
+scheduler then arranges everything else around it rather than moving it back,
+because the pin is stored with the constraints. Releasing it hands the decision
+back. A pin that overfills a day is kept and warned about — the person looking
+at the board can see what this cannot.
+
+Strips are moved with buttons rather than dragged, breakdown elements cannot be
+tagged by hand, there is no travel or drop/pickup on the DOOD and no budget; the
+capability says so.
 
 ## Colour, and what a view changes
 

@@ -200,6 +200,8 @@ export interface ScheduleConstraints {
   cast_availability: Record<string, unknown>;
   group_by_location: boolean;
   night_shoots_together: boolean;
+  /** Scenes a person put on a day: scene id → shooting day number. */
+  pinned?: Record<string, number>;
 }
 
 /** The project's colour config, and what every file in it is in. */
@@ -641,6 +643,10 @@ export class RpcClient {
   }
   scheduleConstraints(document: string, constraints: ScheduleConstraints) {
     return this.call<CascadeResult>("schedule_constraints", { document, constraints });
+  }
+  /** Put a scene on a shooting day, or `null` to let the scheduler decide again. */
+  moveStrip(document: string, scene: string, day: number | null) {
+    return this.call<CascadeResult>("move_strip", { document, scene, day });
   }
   jobs(limit = 100) { return this.call<JobView[]>("jobs", { limit }); }
   submitJob(kind: string, params: Record<string, unknown>) { return this.call<JobView>("job_submit", { kind, ...params }); }

@@ -362,6 +362,9 @@ export function App() {
           <Production
             production={session.production}
             onConstraints={(doc, c) => void session.run("reschedule", () => client.scheduleConstraints(doc, c))}
+            onMoveStrip={(doc, scene, day) =>
+              void session.run("move strip", () => client.moveStrip(doc, scene, day))
+            }
           />
           {impact}
         </div>

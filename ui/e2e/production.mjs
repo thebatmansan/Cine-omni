@@ -86,6 +86,36 @@ ok(
   restored.breakdowns.find((b) => b.scene === scene1.scene).page_eighths === scene1.page_eighths,
   "undo restores the page count everywhere",
 );
-console.log(`MEASURED production projection ${projectionMs.toFixed(1)} ms; dialogue rewrite with full cascade ${editMs.toFixed(1)} ms`);
+// The board is a person's: move a strip, and it stays where it was put.
+const dayOf = (p, scene) =>
+  p.schedule.days.find((d) => d.strips.some((s) => s.scene === scene))?.index ?? null;
+const board = await A.call("production");
+const wasOn = dayOf(board, scene1.scene);
+t0 = performance.now();
+const moved = await A.call("move_strip", {
+  document: board.document,
+  scene: scene1.scene,
+  day: wasOn + 1,
+});
+const moveMs = performance.now() - t0;
+ok(moved.impact.departments.length > 0, `moving a strip is a change with consequences (${moveMs.toFixed(1)} ms)`);
+const boarded = await B.call("production");
+ok(dayOf(boarded, scene1.scene) === wasOn + 1, `scene ${scene1.number} stayed on day ${wasOn + 1}`);
+ok(
+  Object.keys(boarded.constraints.pinned ?? {}).includes(scene1.scene),
+  "and it is a constraint, so a reschedule keeps it",
+);
+const allScenes = boarded.schedule.days.flatMap((d) => d.strips.map((s) => s.scene));
+ok(allScenes.length === boarded.breakdowns.length, "nothing was lost or duplicated by the move");
+const dood = boarded.dood;
+ok(dood && dood.cast.length > 0, `day out of days: ${dood.cast.length} cast, ${dood.total_held} hold day(s)`);
+await A.call("move_strip", { document: boarded.document, scene: scene1.scene, day: null });
+ok(dayOf(await B.call("production"), scene1.scene) === wasOn, "released, the scheduler decides again");
+
+
+console.log(
+  `MEASURED production projection ${projectionMs.toFixed(1)} ms; dialogue rewrite with full cascade ${editMs.toFixed(1)} ms; ` +
+    `strip move with reschedule ${moveMs.toFixed(1)} ms`,
+);
 console.log("ALL OK");
 process.exit(0);

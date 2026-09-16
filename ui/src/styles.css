@@ -820,3 +820,23 @@ button.danger { background: #6b2a22; border-color: var(--bad); }
 .panel-body.dood td.code.wf { color: var(--accent); }
 .panel-body.dood td.code.h { color: var(--warn); background: rgba(210, 160, 60, 0.12); }
 .panel-body.dood td.held { color: var(--warn); }
+
+/* ---- moving a strip ---------------------------------------------------- */
+
+.strip-row { display: flex; align-items: stretch; gap: 2px; }
+.strip-row .strip { flex: 1 1 auto; }
+.strip-row.pinned .strip { box-shadow: inset 2px 0 0 var(--accent); }
+.strip-row .pin { margin-left: 4px; font-size: 9px; }
+.strip-move { display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+.strip-move button {
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 3px;
+  min-width: 16px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.strip-move button:disabled { opacity: 0.3; cursor: default; }
+.strip-move button:hover:not(:disabled) { color: var(--text); border-color: var(--accent-dim); }

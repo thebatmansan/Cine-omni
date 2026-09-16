@@ -712,6 +712,50 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "move_strip" => {
+            // Put a scene on a day, or let the scheduler decide again
+            // (`day: null`). A pin is a constraint like any other, so it is
+            // stored with them, cascades like them, and undoes like them.
+            let document = entity(params, "document")?;
+            let scene = entity(params, "scene")?;
+            let day = match params.get("day") {
+                Some(J::Null) | None => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .filter(|d| *d >= 1)
+                        .ok_or("`day` must be a shooting day number (1 or more), or null")?
+                        as usize,
+                ),
+            };
+            {
+                let g = p.engine.read();
+                if !g
+                    .node(scene)
+                    .is_some_and(|n| n.kind.as_str() == kinds::SCRIPT_SCENE)
+                {
+                    return Err(format!("{scene} is not a scene in this project"));
+                }
+            }
+            let group = p
+                .engine
+                .transact("move strip", |tx| {
+                    let mut constraints =
+                        cine_pipeline::reactors::read_constraints(tx.graph(), document);
+                    match day {
+                        Some(d) => constraints.pinned.insert(scene.to_string(), d),
+                        None => constraints.pinned.remove(&scene.to_string()),
+                    };
+                    let value = Value::from_serde(&constraints)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                    tx.set(
+                        document,
+                        cine_pipeline::reactors::SCHEDULE_CONSTRAINTS_ATTR,
+                        value,
+                    )
+                })
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
         "focus" => {
             // With `timeline`, open that sequence in every surface; `null`
             // closes it. Without, report what is open.

@@ -47,6 +47,14 @@ pub struct ScheduleConstraints {
     pub group_by_location: bool,
     /// Never mix night and day scenes on one shoot day.
     pub night_shoots_together: bool,
+    /// Scenes a person has placed on a particular shooting day, by entity id.
+    ///
+    /// The scheduler is an assistant, not an authority: a pinned scene is put
+    /// where it was put and everything else is arranged around it. A pin that
+    /// breaks the day's limits is honoured and warned about, because the
+    /// person pinning it can see the board and this cannot.
+    #[serde(default)]
+    pub pinned: BTreeMap<String, usize>,
 }
 
 impl Default for ScheduleConstraints {
@@ -63,6 +71,7 @@ impl Default for ScheduleConstraints {
             cast_availability: HashMap::new(),
             group_by_location: true,
             night_shoots_together: true,
+            pinned: BTreeMap::new(),
         }
     }
 }
@@ -354,7 +363,21 @@ pub fn schedule(breakdowns: &[SceneBreakdown], constraints: &ScheduleConstraints
         })
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut remaining: VecDeque<Strip> = keyed.into_iter().map(|(_, s)| s).collect();
+    // Pinned scenes are taken out of the flow and put back on their own day.
+    type Keyed = Vec<(SortKey, Strip)>;
+    let (pinned, loose): (Keyed, Keyed) = keyed
+        .into_iter()
+        .partition(|(_, s)| constraints.pinned.contains_key(&s.scene.to_string()));
+    let pinned: Vec<(usize, Strip)> = pinned
+        .into_iter()
+        .filter_map(|(_, s)| {
+            constraints
+                .pinned
+                .get(&s.scene.to_string())
+                .map(|day| ((*day).max(1), s))
+        })
+        .collect();
+    let mut remaining: VecDeque<Strip> = loose.into_iter().map(|(_, s)| s).collect();
 
     let max_eighths = constraints.max_eighths_per_day();
     let max_hours = constraints.max_hours_per_day.max(0.1);
@@ -363,8 +386,31 @@ pub fn schedule(breakdowns: &[SceneBreakdown], constraints: &ScheduleConstraints
     let mut date = constraints.next_shooting_date(constraints.start_date);
     let mut last_active = date;
 
-    while !remaining.is_empty() {
-        let mut day = ShootDay::new(days.len() + 1, date);
+    let last_pinned_day = pinned.iter().map(|(d, _)| *d).max().unwrap_or(0);
+    while !remaining.is_empty() || days.len() < last_pinned_day {
+        let index = days.len() + 1;
+        let mut day = ShootDay::new(index, date);
+        // What a person put on this day goes on first, and the day is arranged
+        // around it rather than the other way round.
+        for (_, strip) in pinned.iter().filter(|(d, _)| *d == index) {
+            let over_pages = f64::from(day.total_eighths + strip.pages_eighths)
+                > constraints.max_eighths_per_day();
+            let cast_free = constraints.cast_available(&strip.cast, date);
+            let number = strip.number.clone();
+            day.push(strip.clone());
+            if over_pages {
+                warnings.push(format!(
+                    "scene {number} is pinned to day {index}, which now holds {} — over the {} page limit",
+                    eighths_str(day.total_eighths),
+                    constraints.max_pages_per_day
+                ));
+            }
+            if !cast_free {
+                warnings.push(format!(
+                    "scene {number} is pinned to day {index} ({date}), when its cast is unavailable"
+                ));
+            }
+        }
         let mut deferred: Vec<Strip> = Vec::new();
         let force = last_active.days_until(date) > AVAILABILITY_HORIZON_DAYS;
 
@@ -420,7 +466,7 @@ pub fn schedule(breakdowns: &[SceneBreakdown], constraints: &ScheduleConstraints
             remaining.push_front(s);
         }
 
-        if !day.strips.is_empty() {
+        if !day.strips.is_empty() || index <= last_pinned_day {
             last_active = date;
             days.push(day);
         }
@@ -870,5 +916,110 @@ mod tests {
             assert!(md.contains(&format!("Day {:>2}", d.index)));
         }
         assert!(md.contains("company moves"));
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+    use crate::breakdown::SceneBreakdown;
+    use ucg_schema::IntExt;
+
+    fn scene(n: usize, location: &str, eighths: u32) -> SceneBreakdown {
+        let mut bd = SceneBreakdown::empty(EntityId::from_key(&format!("scene:{n}")));
+        bd.number = n.to_string();
+        bd.heading = format!("INT. {location} - DAY");
+        bd.int_ext = IntExt::Int;
+        bd.location = location.into();
+        bd.time_of_day = "DAY".into();
+        bd.page_eighths = eighths;
+        bd.est_minutes = 1.0;
+        bd.cast = vec!["MAREN".into()];
+        bd
+    }
+
+    /// A person puts a scene on a day; the scheduler arranges everything else
+    /// around it rather than moving it back.
+    #[test]
+    fn a_pinned_scene_stays_where_it_was_put() {
+        let scenes: Vec<SceneBreakdown> = (1..=4).map(|n| scene(n, "HARBOUR", 8)).collect();
+        let mut constraints = ScheduleConstraints {
+            max_pages_per_day: 2.0,
+            ..Default::default()
+        };
+        let before = schedule(&scenes, &constraints);
+        let day_of = |s: &Schedule, n: usize| {
+            s.days
+                .iter()
+                .find(|d| d.strips.iter().any(|st| st.number == n.to_string()))
+                .map(|d| d.index)
+        };
+        assert_eq!(
+            day_of(&before, 1),
+            Some(1),
+            "scene 1 lands on day 1 by itself"
+        );
+
+        // Pin scene 1 to day 3.
+        constraints.pinned.insert(scenes[0].scene.to_string(), 3);
+        let after = schedule(&scenes, &constraints);
+        assert_eq!(day_of(&after, 1), Some(3), "the pin is honoured");
+        // Everything else is still scheduled, and only once.
+        let all: Vec<String> = after
+            .days
+            .iter()
+            .flat_map(|d| d.strips.iter().map(|s| s.number.clone()))
+            .collect();
+        assert_eq!(all.len(), 4, "every scene once: {all:?}");
+        for n in 1..=4 {
+            assert!(all.contains(&n.to_string()), "scene {n} is on the board");
+        }
+    }
+
+    /// A pin that breaks the day's limit is honoured and said out loud: the
+    /// person pinning it can see the board, and this cannot.
+    #[test]
+    fn a_pin_that_overfills_a_day_is_kept_and_warned_about() {
+        let scenes = vec![scene(1, "HARBOUR", 16), scene(2, "HARBOUR", 16)];
+        let constraints = ScheduleConstraints {
+            max_pages_per_day: 2.0,
+            pinned: [
+                (scenes[0].scene.to_string(), 1usize),
+                (scenes[1].scene.to_string(), 1usize),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let s = schedule(&scenes, &constraints);
+        assert_eq!(s.days.len(), 1, "both scenes on the pinned day");
+        assert_eq!(s.days[0].strips.len(), 2);
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("pinned to day 1") && w.contains("page limit")),
+            "{:?}",
+            s.warnings
+        );
+    }
+
+    /// Pinning past the end of the board makes the days in between, rather
+    /// than silently pulling the scene earlier.
+    #[test]
+    fn a_pin_beyond_the_last_day_extends_the_board() {
+        let scenes = vec![scene(1, "HARBOUR", 8)];
+        let constraints = ScheduleConstraints {
+            pinned: [(scenes[0].scene.to_string(), 4usize)]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let s = schedule(&scenes, &constraints);
+        assert_eq!(s.days.len(), 4, "the board reaches the pinned day");
+        assert!(s.days[3].strips.iter().any(|st| st.number == "1"));
+        assert!(
+            s.days[..3].iter().all(|d| d.strips.is_empty()),
+            "the days before it are empty, and are real days"
+        );
     }
 }

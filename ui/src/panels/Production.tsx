@@ -22,9 +22,12 @@ const CODE_MEANING: Record<string, string> = {
 export function Production({
   production,
   onConstraints,
+  onMoveStrip,
 }: {
   production: ProductionView | null;
   onConstraints(document: string, c: ScheduleConstraints): void;
+  /** Put a scene on a day, or `null` to release it back to the scheduler. */
+  onMoveStrip?(document: string, scene: string, day: number | null): void;
 }) {
   const [scene, setScene] = useState<string | null>(null);
   const [day, setDay] = useState<number>(1);
@@ -146,26 +149,58 @@ export function Production({
                 <span className="meta">{dateLabel(d.date)}</span>
                 <span className="meta">{eighths(d.total_eighths)} pp</span>
               </button>
-              {d.strips.map((s) => (
-                <button
-                  key={s.scene}
-                  className={`strip ${stripClass(s)}`}
-                  aria-selected={s.scene === breakdown?.scene}
-                  onClick={() => {
-                    setScene(s.scene);
-                    setDay(d.index);
-                  }}
-                  title={`${s.int_ext} ${s.location} — ${s.time_of_day}`}
-                >
-                  <span className="num">{s.number}</span>
-                  <span className="where">
-                    {s.int_ext} {s.location}
-                  </span>
-                  <span className="tod">{s.time_of_day}</span>
-                  <span className="pages">{eighths(s.pages_eighths)}</span>
-                  <span className="cast">{s.cast.join(", ")}</span>
-                </button>
-              ))}
+              {d.strips.map((s) => {
+                const pinnedTo = production.constraints.pinned?.[s.scene] ?? null;
+                return (
+                  <div key={s.scene} className={`strip-row${pinnedTo ? " pinned" : ""}`}>
+                    <button
+                      className={`strip ${stripClass(s)}`}
+                      aria-selected={s.scene === breakdown?.scene}
+                      onClick={() => {
+                        setScene(s.scene);
+                        setDay(d.index);
+                      }}
+                      title={`${s.int_ext} ${s.location} — ${s.time_of_day}${
+                        pinnedTo ? ` — put on day ${pinnedTo} by hand` : ""
+                      }`}
+                    >
+                      <span className="num">{s.number}</span>
+                      <span className="where">
+                        {s.int_ext} {s.location}
+                      </span>
+                      <span className="tod">{s.time_of_day}</span>
+                      <span className="pages">{eighths(s.pages_eighths)}</span>
+                      <span className="cast">{s.cast.join(", ")}</span>
+                      {pinnedTo && <span className="pin" title="pinned by hand">📌</span>}
+                    </button>
+                    {onMoveStrip && (
+                      <span className="strip-move">
+                        <button
+                          aria-label={`Move scene ${s.number} one day earlier`}
+                          disabled={d.index <= 1}
+                          onClick={() => onMoveStrip(production.document, s.scene, d.index - 1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          aria-label={`Move scene ${s.number} one day later`}
+                          onClick={() => onMoveStrip(production.document, s.scene, d.index + 1)}
+                        >
+                          ↓
+                        </button>
+                        <button
+                          aria-label={`Release scene ${s.number} to the scheduler`}
+                          disabled={!pinnedTo}
+                          title="Let the scheduler decide again"
+                          onClick={() => onMoveStrip(production.document, s.scene, null)}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>

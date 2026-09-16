@@ -170,3 +170,93 @@ fn the_day_out_of_days_follows_the_board_and_counts_hold_days() {
         "the export and the projection agree: {text}"
     );
 }
+
+/// Moving a strip: the board is a person's, not the scheduler's.
+#[test]
+fn a_strip_moved_to_a_day_stays_there_until_it_is_released() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let p = c.call("production", json!({}));
+    let document = p["document"].as_str().unwrap().to_string();
+    let day_of = |p: &Value, scene: &str| -> Option<u64> {
+        p["schedule"]["days"].as_array()?.iter().find_map(|d| {
+            d["strips"]
+                .as_array()?
+                .iter()
+                .any(|s| s["scene"] == json!(scene))
+                .then(|| d["index"].as_u64().unwrap_or(0))
+        })
+    };
+    let scene = p["breakdowns"][0]["scene"].as_str().unwrap().to_string();
+    let was = day_of(&p, &scene).expect("the scene is on the board");
+
+    // Put it on a later day.
+    let moved = c.call(
+        "move_strip",
+        json!({ "document": document, "scene": scene, "day": was + 2 }),
+    );
+    assert!(
+        !moved["impact"]["departments"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "a move is a change with consequences"
+    );
+    let after = c.call("production", json!({}));
+    assert_eq!(day_of(&after, &scene), Some(was + 2), "the pin is honoured");
+    assert_eq!(
+        after["constraints"]["pinned"][&scene].as_u64(),
+        Some(was + 2),
+        "and it is stored as a constraint, so a reschedule keeps it"
+    );
+
+    // Every scene is still on the board exactly once.
+    let strips: Vec<String> = after["schedule"]["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|d| d["strips"].as_array().unwrap().iter())
+        .map(|s| s["scene"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        strips.len(),
+        after["breakdowns"].as_array().unwrap().len(),
+        "nothing was lost or duplicated by the move: {strips:?}"
+    );
+
+    // Release it and the scheduler decides again.
+    c.call(
+        "move_strip",
+        json!({ "document": document, "scene": scene, "day": null }),
+    );
+    let released = c.call("production", json!({}));
+    assert_eq!(
+        day_of(&released, &scene),
+        Some(was),
+        "back where it would be"
+    );
+    assert!(released["constraints"]["pinned"][&scene].is_null());
+
+    // A day number that is not a day, and a scene that is not a scene.
+    assert!(c
+        .call_result(
+            "move_strip",
+            json!({ "document": document, "scene": scene, "day": 0 })
+        )
+        .is_err());
+    assert!(c
+        .call_result(
+            "move_strip",
+            json!({ "document": document, "scene": document, "day": 1 })
+        )
+        .is_err());
+
+    // And undo puts the board back, like any other edit.
+    c.call(
+        "move_strip",
+        json!({ "document": document, "scene": scene, "day": was + 1 }),
+    );
+    c.call("undo", json!({}));
+    let undone = c.call("production", json!({}));
+    assert_eq!(day_of(&undone, &scene), Some(was));
+}
