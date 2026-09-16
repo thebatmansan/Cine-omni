@@ -174,10 +174,10 @@ From `STORAGE-FORENSICS.md`, with the current status of each:
 |---|---|
 | Dependency debuginfo in every static test binary | **Addressed** — 30% measured |
 | Incremental sessions accumulating per configuration | **Policy only** — `CARGO_INCREMENTAL=0` for workspace runs; nothing enforces it |
-| Superseded duplicate artifacts (5.72 GB measured) | **Not addressed** — reclaimable only by a clean, which needs authorisation |
+| Superseded duplicate artifacts (5.72 GB measured) | **Reclaimed once, and it came back** — see §6 |
 | Test binaries, ~76 MB each and one per test file | **Reduced, not solved** — fewer, larger test files would cost less; not done |
 | Op log never compacted | **By design** — history is source of truth; compaction stays an explicit action |
-| Orphaned scratch binaries (311 MB) | **Not addressed** — dead output, nothing regenerates it |
+| Orphaned scratch binaries (311 MB) | **Gone with the clean in §6**, and nothing prevents them returning |
 
 ---
 
@@ -191,7 +191,7 @@ set *alongside* the old ones. `target/` will therefore **grow** before it
 benefits. Reclaiming the difference needs one `cargo clean`, which is a decision
 for whoever owns the machine, not something this work will do on its own.
 
-Recommendations carried forward, none executed:
+Recommendations carried forward (see §6 for the one since executed):
 
 1. `cargo clean` once, to drop the ~19 GB of accumulated stale artifacts the
    current 28 GB tree is carrying relative to a 6.6 GB cold build.
@@ -199,3 +199,33 @@ Recommendations carried forward, none executed:
    output whose sources no longer exist in git or the worktree.
 3. Add `du -sh target` to the build documentation. The forensic finding was that
    nobody looked until it was 60 GB.
+
+---
+
+## 6. The one clean, and what it measured
+
+`target/` was surveyed again and had reached **92 GB** — `target/debug` 90 GB
+of it, with 21 GB in `incremental` alone — against the 7–9 GB this document
+targets. The disk was 62% full with 85 GB free: not yet a failure, but eleven
+times the intended size, and the second time the tree has been found far past
+its bound because nobody looked.
+
+With the machine owner's authorisation, one `cargo clean` was run:
+
+```
+Removed 96709 files, 96.4GiB total
+disk 62% used (85 GB free)  ->  21% used (176 GB free)
+```
+
+Three things this does and does not establish:
+
+* **It is reproducible, not a loss.** Everything removed is rebuilt by
+  `cargo build`; nothing under `.cine/` or the worktree was touched. That is
+  why `target/` is a *reproducible artifact* in the table in §1 and why the
+  only question was whose decision it was, not whether it was safe.
+* **Nothing prevents a third time.** The growth mechanisms in §4 are unchanged;
+  `CARGO_INCREMENTAL=0` is policy, not enforcement, and every test file still
+  links its own binary. The clean bought headroom, it did not fix a cause.
+* **`du -sh target` belongs in the loop, not in a document.** The finding that
+  matters is the one in §4's last row: the tree was measured twice, at 60 GB
+  and at 92 GB, and both times only because somebody happened to look.
