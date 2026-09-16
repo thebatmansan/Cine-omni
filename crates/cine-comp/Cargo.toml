@@ -17,3 +17,4 @@ uuid.workspace = true
 rayon.workspace = true
 glam.workspace = true
 petgraph.workspace = true
+exr.workspace = true

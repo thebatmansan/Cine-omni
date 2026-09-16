@@ -63,6 +63,17 @@ license_text = "licenses/OpenColorIO-Config-ACES-BSD-3-Clause.txt"
 obligations = "BSD-3-Clause: binary distributions must reproduce the copyright notice, conditions and disclaimer in their documentation; no endorsement by the copyright holders' names."
 
 [[entry]]
+project = "Blender"
+url = "https://www.blender.org/"
+version = "4.2.4 LTS"
+license = "GPL-2.0-or-later"
+copyright = "Blender Foundation and contributors"
+integration = "oracle"
+used_by = ["crates/cine-comp/tests/data/blender_exr_oracle.py"]
+modifications = "none. Run as a separate program on the command line to read an OpenEXR file and print pixel values, which are committed as reference data (tests/data/exr-oracle.tsv). Nothing of Blender is linked, copied or distributed, and no Blender source was read."
+obligations = "none for CINE-OMNI: a GPL program used as a tool imposes nothing on what it is used on. The EXR it reads is Blender's own installed data file and is not committed."
+
+[[entry]]
 project = "OpenColorIO / PyOpenColorIO"
 url = "https://github.com/AcademySoftwareFoundation/OpenColorIO"
 version = "2.5.2"

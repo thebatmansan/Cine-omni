@@ -47,6 +47,8 @@ rayon = "1"
 crossbeam-channel = "0.5"
 petgraph = "0.8"
 glam = { version = "0.30", features = ["serde"] }
+# OpenEXR in pure Rust (BSD-3-Clause), for image sequences and comp I/O.
+exr = "1.74"
 rustfft = "6"
 roxmltree = "0.20"
 regex = "1"

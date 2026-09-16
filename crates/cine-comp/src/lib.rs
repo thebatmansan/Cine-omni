@@ -38,10 +38,12 @@
 pub mod error;
 pub mod eval;
 pub mod expr;
+pub mod exr_io;
 pub mod graph_model;
 pub mod image;
 pub mod ops;
 pub mod provider;
+pub mod sequence;
 pub mod ucg;
 
 pub use error::{Error, Result};

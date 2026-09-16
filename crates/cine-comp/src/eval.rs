@@ -101,6 +101,11 @@ pub struct Evaluator {
     writes: Mutex<Vec<WriteRecord>>,
     /// Evaluate independent inputs in parallel (default true).
     pub parallel: bool,
+    /// Whether `Write` nodes put their result on disk as well as recording it
+    /// (default false). Evaluating a graph is a pure read of the project;
+    /// writing files is an effect, and a caller asks for it deliberately —
+    /// a render job does, a viewer refreshing its cache does not.
+    pub write_files: bool,
 }
 
 struct Ctx<'a> {
@@ -125,6 +130,7 @@ impl Evaluator {
             stats: Mutex::new(EvalStats::default()),
             writes: Mutex::new(Vec::new()),
             parallel: true,
+            write_files: false,
         }
     }
 
@@ -133,7 +139,9 @@ impl Evaluator {
         Evaluator::new(Box::new(SyntheticPassProvider::default()))
     }
 
-    /// Register an in-memory image for `Read(File { path })` nodes.
+    /// Register an in-memory image for `Read(File { path })` nodes. A
+    /// registered path is used in preference to the disk, which is how a test
+    /// or a preview supplies pixels without a file existing.
     pub fn register_file(&mut self, path: impl Into<String>, image: Image) {
         self.files.insert(path.into(), Arc::new(image));
     }
@@ -370,12 +378,40 @@ impl Evaluator {
 
         match node.kind {
             NodeKind::Read => match node.read_source() {
-                ReadSource::File { path } => self
-                    .files
-                    .get(&path)
-                    .cloned()
-                    .map(Output::Image)
-                    .ok_or_else(|| Error::MissingSource(format!("file `{path}` not registered"))),
+                // A registered image first (tests, previews), then the file
+                // itself: the path may name one file or a frame of a sequence,
+                // and the frame being evaluated decides which.
+                ReadSource::File { path } => {
+                    if let Some(img) = self.files.get(&path) {
+                        return Ok(Output::Image(img.clone()));
+                    }
+                    let resolved = crate::sequence::frame_path(&path, frame);
+                    if !resolved.exists() {
+                        return Err(Error::MissingSource(
+                            if crate::sequence::is_sequence(&path) {
+                                format!(
+                                    "`{path}` at frame {frame} is {}, which does not exist",
+                                    resolved.display()
+                                )
+                            } else {
+                                format!("file `{path}` is neither registered nor on disk")
+                            },
+                        ));
+                    }
+                    let layer = node
+                        .param("layer")
+                        .and_then(|p| p.as_str().map(str::to_string));
+                    match resolved.extension().and_then(|e| e.to_str()) {
+                        Some(e) if e.eq_ignore_ascii_case("exr") => {
+                            let img = crate::exr_io::read(&resolved, layer.as_deref())?;
+                            Ok(Output::Image(Arc::new(img)))
+                        }
+                        _ => Err(Error::MissingSource(format!(
+                            "{}: this build reads OpenEXR; no reader for this file",
+                            resolved.display()
+                        ))),
+                    }
+                }
                 ReadSource::Generator {
                     generator,
                     width,
@@ -656,12 +692,27 @@ impl Evaluator {
             }
             NodeKind::Write => {
                 let src = img(0)?;
+                let pattern = node.str("path");
+                let path = crate::sequence::frame_path(&pattern, frame);
+                if self.write_files {
+                    match path.extension().and_then(|e| e.to_str()) {
+                        Some(e) if e.eq_ignore_ascii_case("exr") => {
+                            crate::exr_io::write(&path, &src, None)?
+                        }
+                        _ => {
+                            return Err(Error::MissingSource(format!(
+                                "{}: this build writes OpenEXR; no writer for this file",
+                                path.display()
+                            )))
+                        }
+                    }
+                }
                 self.writes
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .push(WriteRecord {
                         node: node.id,
-                        path: node.str("path"),
+                        path: path.to_string_lossy().into_owned(),
                         frame,
                         image: src.clone(),
                     });

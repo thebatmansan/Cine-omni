@@ -145,7 +145,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | ProRes decode | Apple / FFmpeg | All flavours | **BLOCKED** | refused | M | — | FFmpeg LGPL build only (R02); Apple licensing for encode | — | M | P1 | — |
 | DNxHR decode | Avid / FFmpeg | — | **BLOCKED** | refused | M | — | FFmpeg LGPL | — | M | P2 | — |
 | Camera RAW (BRAW, R3D, ARRIRAW, CinemaDNG) | vendor SDKs | Debayer with metadata-driven colour | **BLOCKED** | — | separate process or dynamic SDK | — | BRAW SDK free; R3D SDK redistributable only unmodified as part of a larger product; ARRI SDK terms unverified | — | L | P2 | vendor sample clips |
-| EXR / image sequences | OpenImageIO, OpenEXR | Multipart, deep, data windows, AOVs | **MISSING** | — | M · data windows | image sequence | OpenEXR BSD-3, OIIO Apache-2.0 | tile/scanline streaming | M | **P0** (blocks VFX) | OpenEXR test images |
+| EXR / image sequences | OpenImageIO, OpenEXR | Multipart, deep, data windows, AOVs | **PARTIAL** | read and write through the `exr` crate (pure Rust, BSD-3): data and display windows carried as the compositor's own windows, layers addressed by name, `probe` without decoding, f16/f32/u32 read as f32; sequences as `%04d`/`####` with the frames that exist found by scanning; comp `Read`/`Write` nodes work frame by frame. Reading a third-party HDRI matches Blender's own read exactly (44 pixels, 0.0 difference) | deep EXR · multipart writing · tiled/streaming reads · ingest as media | comp read/write | `exr` BSD-3-Clause (`licenses/THIRD-PARTY.toml`) | whole-file reads; no tile streaming | M | **P0** (blocks VFX) | `exr_oracle.rs`, `exr_graph.rs` |
 | Audio decode | FFmpeg, symphonia | WAV/BWF, AIFF, AAC, MP3, FLAC | **PARTIAL** | symphonia (MPL-2.0) | M | — | MPL-2.0 file-level: fine unmodified | — | S | P0 | — |
 | Colour metadata parsing | FFmpeg | `colr`, VUI, mastering display | **PARTIAL** | H.264 SPS/VUI parsed (clean-room from H.264 §7.3.2.1.1, Annex E); pictures carry what the stream declares, unspecified stays absent; `colr` box and mastering-display SEI not parsed | `colr` · SEI | media colour meta | — | — | S | **P0** | parsed size = decoded size on real streams (`sps_real.rs`) |
 | Hardware decode | NVDEC, VA-API, VideoToolbox | Where available, with software fallback | **MISSING** | none claimed | M · G · OS APIs | capability registry | vendor APIs | — | L | P1 | parity vs software decode |
@@ -276,10 +276,10 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 |---|---:|
 | VERIFIED | 18 |
 | IMPLEMENTED | 5 |
-| PARTIAL | 46 |
+| PARTIAL | 47 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
-| MISSING | 58 |
+| MISSING | 57 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |
 
