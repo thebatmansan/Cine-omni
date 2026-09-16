@@ -5,7 +5,8 @@
 //! cine new <dir> [--name NAME]                 create a project
 //! cine import <dir> <file.fountain|.fdx|.otio> import a document (re-import syncs)
 //! cine report <dir>                            print every derived artifact per scene
-//! cine export <dir> <fountain|fdx|usda|otio|breakdown|schedule|dood|callsheets> [--scene N] [--out FILE]
+//! cine export <dir> <fountain|fdx|usda|otio|edl|breakdown|schedule|dood|callsheets> [--scene N] [--out FILE]
+//!                                              (edl: --scene is the track index)
 //! cine export <dir> callsheet-pdf --day N --out FILE   one day's call sheet, printable
 //! cine edit <dir> <scene-index> <line-index> "new text"   edit a dialogue line (runs the cascade)
 //! cine undo <dir> | cine redo <dir>

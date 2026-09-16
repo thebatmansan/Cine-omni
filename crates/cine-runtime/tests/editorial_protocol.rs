@@ -471,3 +471,67 @@ fn the_open_sequence_is_shared_across_clients() {
         "a refused focus changes nothing"
     );
 }
+
+/// The cut leaves the application as an EDL, and says what the format could
+/// not carry rather than letting the receiver discover it.
+#[test]
+fn the_cut_exports_as_an_edl_that_says_what_it_left_behind() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let text = c.call("export", json!({ "what": "edl", "scene": 0 }));
+    let text = text.as_str().unwrap_or_default().to_string();
+    assert!(text.starts_with("TITLE: "), "{text}");
+    assert!(text.contains("FCM: NON-DROP FRAME"), "{text}");
+
+    // Every event has the four timecodes in the columns the format fixes.
+    let events: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with(|c: char| c.is_ascii_digit()))
+        .collect();
+    assert!(
+        !events.is_empty(),
+        "the imported timeline has cuts:\n{text}"
+    );
+    for event in &events {
+        let fields: Vec<&str> = event.split_whitespace().collect();
+        assert!(fields.len() >= 8, "{event}");
+        assert_eq!(fields[3], "C", "cuts only: {event}");
+        for tc in &fields[4..8] {
+            assert!(
+                tc.len() == 11 && tc.chars().filter(|c| *c == ':').count() == 3,
+                "{tc} is not a timecode in {event}"
+            );
+        }
+    }
+    // Record times run forwards and never overlap. They are not always
+    // continuous: a gap on the track is black, which advances the record clock
+    // without an event, and an EDL says so by leaving the hole.
+    let frames = |tc: &str| -> i64 {
+        let p: Vec<i64> = tc.split(':').map(|v| v.parse().unwrap_or(0)).collect();
+        ((p[0] * 60 + p[1]) * 60 + p[2]) * 24 + p[3]
+    };
+    let field = |line: &str, n: usize| {
+        line.split_whitespace()
+            .nth(n)
+            .unwrap_or_default()
+            .to_string()
+    };
+    for pair in events.windows(2) {
+        let (out, next_in) = (frames(&field(pair[0], 7)), frames(&field(pair[1], 6)));
+        assert!(next_in >= out, "events overlap in record time: {:?}", pair);
+    }
+    // Each event's record duration is its source duration: an EDL cut does not
+    // retime.
+    for event in &events {
+        let source = frames(&field(event, 5)) - frames(&field(event, 4));
+        let record = frames(&field(event, 7)) - frames(&field(event, 6));
+        assert_eq!(source, record, "{event}");
+    }
+    // And every event names its clip.
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.starts_with("* FROM CLIP NAME:"))
+            .count(),
+        events.len()
+    );
+}

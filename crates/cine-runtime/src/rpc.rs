@@ -349,6 +349,25 @@ pub fn export(
                 .ok_or_else(|| "no timeline imported".to_string())?;
             p.export_otio(t).map_err(|x| x.to_string())?
         }
+        "edl" => {
+            // The cut as CMX3600, with what the format could not carry said
+            // in the file itself rather than left for the receiver to find.
+            let g = p.engine.read();
+            let timeline_id = g
+                .of_kind(kinds::NLE_TIMELINE)
+                .first()
+                .map(|n| n.id)
+                .ok_or_else(|| "no timeline in this project".to_string())?;
+            let timeline = cine_timeline::graph::export_timeline(&g, timeline_id)
+                .map_err(|e| e.to_string())?;
+            let track = scene.unwrap_or(0);
+            let (text, report) = cine_timeline::edl::write_edl(&timeline, track, &timeline.name);
+            let mut out = text;
+            for note in &report.left_behind {
+                out.push_str(&format!("* NOT IN THIS EDL: {}\n", note.to_uppercase()));
+            }
+            out
+        }
         "breakdown" => {
             let g = p.engine.read();
             cine_logistics::breakdown::to_markdown(&cine_logistics::breakdown::breakdown_document(

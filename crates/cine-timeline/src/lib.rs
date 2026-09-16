@@ -36,6 +36,7 @@
 //! ```
 
 pub mod edit;
+pub mod edl;
 pub mod error;
 pub mod flatten;
 pub mod graph;

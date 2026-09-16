@@ -129,7 +129,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Proxy editing & conform | All NLEs | Cut on proxies, conform to originals exactly | **PARTIAL** | multiple refs preserved; proxy never becomes original | BE proxy gen · FE toggle | media refs | — | — | M | P1 | proxy/original round-trip (tested) |
 | Relink / offline media | All NLEs | Relink by content, name, TC | **VERIFIED** (engine) / **IMPLEMENTED** (UI) | content-hash relink | FE relink dialog | asset.media | — | — | S | P1 | relink tests |
 | OTIO interchange | OpenTimelineIO | Read and write real OTIO | **PARTIAL** | write Tier 1; read fails real files | BE reader hardening | nle.* | Apache-2.0 spec; no usable Rust binding | — | M | P1 | 5-tier harness (R16) |
-| EDL | CMX3600 | EDL import/export | **MISSING** | — | BE | nle.* | — | — | S | P2 | round-trip vs Resolve |
+| EDL | CMX3600 | EDL import/export | **PARTIAL** | export: one track as CMX3600 (`cine export <dir> edl [--scene track]`, or through the protocol) with source and record timecode, reel names in the eight-character column and full names in `FROM CLIP NAME`, gaps advancing the record clock as black. What the format cannot carry — other video tracks, dissolves, clips with no source range — is written into the file as `* NOT IN THIS EDL:` rather than left for the receiver to discover. No import, no drop-frame, no dissolves, no audio levels | import · drop-frame · dissolves | nle.* | — | — | S | P2 | `edl.rs`, `editorial_protocol.rs`; round-trip vs Resolve still owed |
 | AAF | Avid | AAF import/export (Avid and Pro Tools) | **BLOCKED** | — | BE CFB reader/writer | nle.* | **LibAAF is GPL — must not be read**; AAF SDK under its own public source licence (review); `cfb` crate MIT | — | L | P1 | Avid/Pro Tools round-trip |
 | FCPXML / Premiere XML | Final Cut, Premiere | Import/export | **MISSING** | — | BE | nle.* | — | — | M | P2 | — |
 | Render cache | Resolve, Premiere | Background renders, invalidated precisely | **MISSING** | UCG dirty propagation exists | BE cache · jobs · storage policy | cache entries | — | bounded by budget | L | P1 | edit invalidates only affected range |
@@ -276,10 +276,10 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 |---|---:|
 | VERIFIED | 18 |
 | IMPLEMENTED | 5 |
-| PARTIAL | 49 |
+| PARTIAL | 50 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
-| MISSING | 55 |
+| MISSING | 54 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |
 
