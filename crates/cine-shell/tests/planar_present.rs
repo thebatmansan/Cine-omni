@@ -13,6 +13,7 @@
 //!
 //! Skips loudly when there is no GPU.
 
+use cine_color::lut::{Interpolation, Lut3D};
 use cine_gpu::yuv::{yuv_to_rgb_cpu, MatrixChoice, Range, YuvConversion};
 use cine_shell::present::Presenter;
 
@@ -95,11 +96,25 @@ fn conversion(range: Range, matrix: MatrixChoice) -> YuvConversion {
 
 /// Render one picture through the real pipeline and read the result back.
 fn render(gpu: &Gpu, conv: &YuvConversion, planes: [(&[u8], usize); 3]) -> Vec<u8> {
+    render_through(gpu, conv, planes, None)
+}
+
+/// Render one picture, optionally through a view transform.
+fn render_through(
+    gpu: &Gpu,
+    conv: &YuvConversion,
+    planes: [(&[u8], usize); 3],
+    lut: Option<&std::sync::Arc<Lut3D>>,
+) -> Vec<u8> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut presenter = Presenter::new(&gpu.device, format);
     presenter
         .set_planes(&gpu.device, &gpu.queue, conv, planes)
         .expect("planes upload");
+    presenter
+        .set_view_lut(&gpu.device, &gpu.queue, lut)
+        .expect("view lut upload");
+    assert_eq!(presenter.has_view_lut(), lut.is_some());
 
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("target"),
@@ -263,4 +278,71 @@ fn an_assumed_matrix_converts_by_the_same_arithmetic() {
     );
     let want = reference(&conv, &y, &u, &v);
     compare("assumed matrix", &got, &want);
+}
+
+/// The view transform on the GPU, against the same lattice on the CPU.
+///
+/// This is the whole claim of a colour-managed viewer: what the window shows
+/// is the project's colour transform, not an approximation of it that only the
+/// shader knows about. The lattice is the one the runtime bakes — the released
+/// ACES 2.0 config, video seen through the ACES SDR view — and the reference is
+/// the same lattice interpolated on the CPU, the way `Lut3D::worst_error`
+/// measures it against the exact transform.
+#[test]
+fn the_view_transform_on_the_gpu_is_the_one_the_project_compiled() {
+    let gpu = need!(gpu(), "GPU adapter");
+    println!("adapter: {}", gpu.adapter);
+    let config = cine_color::ocio::Config::parse(cine_color::ucg::BUNDLED_CONFIG).unwrap();
+    let processor = config
+        .display_processor(
+            "Rec.1886 Rec.709 - Display",
+            "sRGB - Display",
+            "ACES 2.0 - SDR 100 nits (Rec.709)",
+        )
+        .expect("the view the window shows video through");
+    let mut lut = Lut3D::bake_domain(&processor, 33, [-0.125; 3], [1.125; 3]);
+    lut.interpolation = Interpolation::Trilinear;
+    println!(
+        "MEASURED lattice 33³ over [-0.125, 1.125]: worst {:.5} of full scale against the \
+         transform itself",
+        lut.worst_error(&processor, 4096)
+    );
+    let lut = std::sync::Arc::new(lut);
+
+    let (y, u, v) = planes();
+    let conv = conversion(Range::Limited, MatrixChoice::resolve(Some(1), H));
+    let planes = [
+        (y.as_slice(), W as usize),
+        (u.as_slice(), (W / 2) as usize),
+        (v.as_slice(), (W / 2) as usize),
+    ];
+    let got = render_through(&gpu, &conv, planes, Some(&lut));
+
+    // The reference: the same conversion, through the same lattice, on the CPU.
+    let norm = |p: &[u8]| -> Vec<f32> { p.iter().map(|&b| f32::from(b) / 255.0).collect() };
+    let rgba = yuv_to_rgb_cpu(&conv, &norm(&y), &norm(&u), &norm(&v));
+    let want: Vec<u8> = rgba
+        .chunks(4)
+        .flat_map(|px| {
+            let out = lut.apply([px[0], px[1], px[2]]);
+            [out[0], out[1], out[2], px[3]]
+        })
+        .map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect();
+    compare("view transform", &got, &want);
+
+    // And it is really doing something: without it the picture is different.
+    let plain = render(&gpu, &conv, planes);
+    let changed = got
+        .iter()
+        .zip(&plain)
+        .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+        .max()
+        .unwrap_or(0);
+    println!("MEASURED the view changes the picture by up to {changed} of 255");
+    assert!(
+        changed > 8,
+        "the view transform changed the picture by only {changed} code values — a viewer that \
+         claims a transform and shows the decoded picture is worse than one that claims nothing"
+    );
 }

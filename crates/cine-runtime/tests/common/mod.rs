@@ -113,6 +113,32 @@ impl Client {
         panic!("no reply to {method}");
     }
 
+    /// Like `call`, but a refusal is a value to assert on rather than a panic.
+    pub fn call_result(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send_masked(
+            &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Frame::Text(t) = ws::read_frame(&mut self.reader).expect("read") {
+                let v: serde_json::Value = serde_json::from_str(&t).expect("json");
+                if v.get("id").and_then(|i| i.as_u64()) == Some(id) {
+                    return match v.get("error") {
+                        Some(e) => Err(e["message"].as_str().unwrap_or("error").to_string()),
+                        None => Ok(v["result"].clone()),
+                    };
+                }
+            }
+        }
+        panic!("no reply to {method}");
+    }
+
     /// Drain queued messages, returning how many were `changed` notifications.
     pub fn drain_changes(&mut self, at_least: usize, within: Duration) -> usize {
         let deadline = Instant::now() + within;

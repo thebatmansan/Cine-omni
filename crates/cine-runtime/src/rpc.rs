@@ -61,6 +61,12 @@ pub fn session_notification(event: &cine_pipeline::session::SessionEvent) -> Str
             "params": { "timeline": t },
         })
         .to_string(),
+        cine_pipeline::session::SessionEvent::View(v) => json!({
+            "jsonrpc": "2.0",
+            "method": "view",
+            "params": v.as_ref().map(|v| json!({ "display": v.display, "view": v.view })),
+        })
+        .to_string(),
     }
 }
 
@@ -221,8 +227,13 @@ fn capabilities() -> J {
             "id": "colour.management",
             "name": "Colour management",
             "group": "Colour",
-            "state": "unavailable",
-            "detail": "The display transform is not ACES-verified; see PHASE-3-STATUS.md",
+            "state": "degraded",
+            "detail": "The project carries an OpenColorIO config (the released ACES 2.0 CG \
+                       config by default) and every media file has an input colorspace from \
+                       its file rules. Displays, views and conversions match OpenColorIO 2.5.2 \
+                       on the released configs (aces2_oracle.rs, released_configs.rs). The \
+                       native window shows the picture through the chosen view; the browser \
+                       shows decoded pictures untransformed, and neither grades",
         }),
         json!({
             "id": "colour.scopes",
@@ -719,6 +730,61 @@ pub fn dispatch_with(
                 p.session.set_focus(want);
             }
             json!({ "timeline": p.session.focus() })
+        }
+        "color" => {
+            // The project's colour config, what is being looked through, and
+            // what each media file's colorspace is and who decided it.
+            let g = p.engine.read();
+            crate::projection::color(&g, p.root, &p.session)?
+        }
+        "color_view" => {
+            // With `display`/`view`, look through it everywhere; `null` returns
+            // to the config's default. Without, report what is being used.
+            if params.get("display").is_some() || params.get("view").is_some() {
+                let want = match (params.get("display"), params.get("view")) {
+                    (Some(J::Null), _) | (_, Some(J::Null)) => None,
+                    (Some(d), Some(v)) => {
+                        let (display, view) = (
+                            d.as_str().ok_or("`display` must be a name")?.to_string(),
+                            v.as_str().ok_or("`view` must be a name")?.to_string(),
+                        );
+                        let g = p.engine.read();
+                        let config = crate::projection::color_config(&g, p.root)
+                            .ok_or("the project has no colour config")?;
+                        let views = config
+                            .views(&display)
+                            .map_err(|e| format!("unknown display `{display}`: {e}"))?;
+                        if !views.iter().any(|x| x.name.eq_ignore_ascii_case(&view)) {
+                            return Err(format!("`{display}` has no view `{view}`"));
+                        }
+                        Some(cine_pipeline::session::ViewSelection { display, view })
+                    }
+                    _ => return Err("give both `display` and `view`, or null".into()),
+                };
+                p.session.set_view(want);
+            }
+            let g = p.engine.read();
+            crate::projection::color(&g, p.root, &p.session)?
+        }
+        "set_input_colorspace" => {
+            let media = entity(params, "media")?;
+            let name = params
+                .get("colorspace")
+                .and_then(J::as_str)
+                .ok_or("missing param `colorspace`")?
+                .to_string();
+            let group = p
+                .engine
+                .transact("input colorspace", |tx| {
+                    let config =
+                        crate::projection::color_config(tx.graph(), p.root).ok_or_else(|| {
+                            ucg_core::UcgError::Aborted("the project has no colour config".into())
+                        })?;
+                    cine_color::ucg::set_input_colorspace(tx, media, &config, &name)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                })
+                .map_err(|e| e.to_string())?;
+            with_impact(p, &group)
         }
         "edit_list" => {
             let timeline = entity(params, "timeline")?;

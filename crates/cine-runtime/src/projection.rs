@@ -518,3 +518,84 @@ fn derives_from(graph: &Graph, node: EntityId, ancestor: EntityId) -> bool {
     .any(|k| graph.targets(node, *k).contains(&ancestor))
         || graph.targets(ancestor, EdgeKind::Contains).contains(&node)
 }
+
+/// The project's colour config, parsed.
+pub fn color_config(graph: &Graph, root: EntityId) -> Option<cine_color::ocio::Config> {
+    let id = cine_color::ucg::project_config(graph, root)?;
+    let yaml = graph.node(id)?.get_str(cine_color::ucg::ATTR_YAML)?;
+    cine_color::ocio::Config::parse(yaml).ok()
+}
+
+/// Colour as the application can report it: the config, the displays and views
+/// it offers, what is being looked through, and every media file's input
+/// colorspace with who decided it.
+///
+/// Nothing here is invented: a media file with no colorspace says so rather
+/// than being reported as the working space, and the transform quoted for a
+/// clip is the one the window applies.
+pub fn color(
+    graph: &Graph,
+    root: EntityId,
+    session: &cine_pipeline::session::ProjectSession,
+) -> std::result::Result<J, String> {
+    let Some(config_id) = cine_color::ucg::project_config(graph, root) else {
+        return Ok(json!({ "config": J::Null, "displays": [], "media": [] }));
+    };
+    let config = color_config(graph, root).ok_or("the project's colour config does not parse")?;
+    let node = graph.node(config_id).ok_or("no config")?;
+    let displays: Vec<J> = config
+        .displays
+        .iter()
+        .map(|(name, views)| {
+            json!({
+                "name": name,
+                "active": config.active_displays.is_empty()
+                    || config.active_displays.iter().any(|d| d == name),
+                "views": views.iter().map(|v| json!({
+                    "name": v.name,
+                    "active": config.active_views.is_empty()
+                        || config.active_views.iter().any(|a| a.eq_ignore_ascii_case(&v.name)),
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let colorspaces: Vec<J> = config
+        .colorspaces
+        .iter()
+        .map(|c| {
+            json!({
+                "name": c.name,
+                "family": c.family,
+                "encoding": c.encoding,
+                "is_display": c.is_display,
+                "isdata": c.isdata,
+            })
+        })
+        .collect();
+    let media: Vec<J> = graph
+        .of_kind(kinds::ASSET_MEDIA)
+        .iter()
+        .map(|n| {
+            let meta = <ucg_schema::ColorMeta as ucg_schema::Component>::read_from(graph, n.id);
+            json!({
+                "id": n.id,
+                "name": n.name(),
+                "path": n.get_str(attrs::MEDIA_PATH),
+                "input_colorspace": meta.as_ref().map(|m| m.input_colorspace.clone()),
+                "source": n.get_str(cine_color::ucg::ATTR_INPUT_SOURCE),
+            })
+        })
+        .collect();
+    let selected = session.view();
+    Ok(json!({
+        "config": {
+            "name": node.name(),
+            "source": node.get_str(cine_color::ucg::ATTR_CONFIG_SOURCE),
+            "unimplemented": config.unimplemented,
+        },
+        "view": selected.as_ref().map(|v| json!({ "display": v.display, "view": v.view })),
+        "displays": displays,
+        "colorspaces": colorspaces,
+        "media": media,
+    }))
+}

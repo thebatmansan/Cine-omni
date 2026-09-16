@@ -78,6 +78,9 @@ pub struct ViewerStatus {
     pub buffer_bytes: usize,
     /// Colour interpretation and whether it had to be assumed.
     pub colour: Option<(String, bool)>,
+    /// The view the picture is shown through, and how far the lattice the GPU
+    /// interpolates is from the transform itself, in code value of 255.
+    pub view: Option<(String, f32)>,
     /// Why the picture on screen is black, when it is: a gap, or media that
     /// cannot be played. Said over the picture, never left to be guessed.
     pub note: Option<String>,
@@ -421,6 +424,19 @@ impl PaneBehavior<'_> {
                 colour,
             );
         }
+        // What the picture is being shown through, said on the picture: a
+        // viewer that transforms silently is one nobody can trust.
+        let view = match &self.status.view {
+            Some((what, error)) => format!("{what}  ±{:.1}/255", error * 255.0),
+            None => "no view transform — shown as decoded".to_string(),
+        };
+        ui.painter().text(
+            rect.right_bottom() + Vec2::new(-8.0, -8.0),
+            Align2::RIGHT_BOTTOM,
+            view,
+            FontId::monospace(11.0),
+            DIM,
+        );
         ui.allocate_rect(rect, Sense::hover());
     }
 

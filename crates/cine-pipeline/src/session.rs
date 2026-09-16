@@ -16,6 +16,16 @@ use ucg_core::EntityId;
 pub enum SessionEvent {
     /// The sequence open in the application changed.
     Focus(Option<EntityId>),
+    /// The display and view everything is being looked at through changed.
+    /// `None` means the project config's own default.
+    View(Option<ViewSelection>),
+}
+
+/// A display and one of its views, by name, as the colour config names them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewSelection {
+    pub display: String,
+    pub view: String,
 }
 
 type Listener = Box<dyn Fn(&SessionEvent) + Send + Sync>;
@@ -23,6 +33,7 @@ type Listener = Box<dyn Fn(&SessionEvent) + Send + Sync>;
 #[derive(Default)]
 pub struct ProjectSession {
     focus: RwLock<Option<EntityId>>,
+    view: RwLock<Option<ViewSelection>>,
     listeners: Mutex<Vec<Listener>>,
 }
 
@@ -43,6 +54,28 @@ impl ProjectSession {
             *focus = timeline;
         }
         let event = SessionEvent::Focus(timeline);
+        for l in self.listeners.lock().iter() {
+            l(&event);
+        }
+        true
+    }
+
+    /// What everything is being looked at through, if anyone has chosen.
+    pub fn view(&self) -> Option<ViewSelection> {
+        self.view.read().clone()
+    }
+
+    /// Look through this display and view everywhere. `None` returns to the
+    /// config's default. Returns whether anything changed.
+    pub fn set_view(&self, view: Option<ViewSelection>) -> bool {
+        {
+            let mut current = self.view.write();
+            if *current == view {
+                return false;
+            }
+            *current = view.clone();
+        }
+        let event = SessionEvent::View(view);
         for l in self.listeners.lock().iter() {
             l(&event);
         }

@@ -28,10 +28,21 @@ struct YuvParams {
     _pad1: f32,
 };
 
+struct LutParams {
+    size: u32,
+    enabled: u32,
+    pad0: u32,
+    pad1: u32,
+    domain_min: vec4<f32>,
+    domain_max: vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> params: YuvParams;
 @group(0) @binding(1) var plane_y: texture_2d<f32>;
 @group(0) @binding(2) var plane_u: texture_2d<f32>;
 @group(0) @binding(3) var plane_v: texture_2d<f32>;
+@group(0) @binding(4) var<uniform> lut: LutParams;
+@group(0) @binding(5) var view_lut: texture_3d<f32>;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -60,6 +71,33 @@ fn ycbcr_to_rgb(y: f32, cb: f32, cr: f32) -> vec3<f32> {
     return vec3<f32>(r, g, b);
 }
 
+// The view transform: the project's colour config, baked to a lattice by the
+// runtime and interpolated here.
+//
+// Trilinear, written out rather than left to a sampler, so that it is exactly
+// the interpolation `Lut3D::worst_error` measures on the CPU — the number the
+// application quotes for how far the lattice is from the transform itself.
+fn apply_view_lut(rgb: vec3<f32>) -> vec3<f32> {
+    if (lut.enabled == 0u) {
+        return rgb;
+    }
+    let n = f32(lut.size);
+    let span = max(lut.domain_max.xyz - lut.domain_min.xyz, vec3<f32>(1e-12));
+    let t = clamp((rgb - lut.domain_min.xyz) / span, vec3<f32>(0.0), vec3<f32>(1.0)) * (n - 1.0);
+    let base = min(floor(t), vec3<f32>(n - 2.0));
+    let f = t - base;
+    let i = vec3<u32>(base);
+    var out = vec3<f32>(0.0);
+    for (var c = 0u; c < 8u; c = c + 1u) {
+        let d = vec3<u32>(c & 1u, (c >> 1u) & 1u, (c >> 2u) & 1u);
+        let w = mix(1.0 - f.x, f.x, f32(d.x))
+              * mix(1.0 - f.y, f.y, f32(d.y))
+              * mix(1.0 - f.z, f.z, f32(d.z));
+        out = out + w * textureLoad(view_lut, i + d, 0).rgb;
+    }
+    return out;
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let x = min(u32(in.uv.x * f32(params.width)), params.width - 1u);
@@ -74,5 +112,5 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let luma = (textureLoad(plane_y, vec2<u32>(x, y), 0).r - params.y_offset) * params.y_gain;
     let cb = (textureLoad(plane_u, vec2<u32>(cx, cy), 0).r - params.c_offset) * params.c_gain;
     let cr = (textureLoad(plane_v, vec2<u32>(cx, cy), 0).r - params.c_offset) * params.c_gain;
-    return vec4<f32>(ycbcr_to_rgb(luma, cb, cr), 1.0);
+    return vec4<f32>(apply_view_lut(ycbcr_to_rgb(luma, cb, cr)), 1.0);
 }

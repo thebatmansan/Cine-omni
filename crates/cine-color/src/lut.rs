@@ -286,6 +286,32 @@ impl Lut3D {
         }
     }
 
+    /// Worst absolute error of this lattice against the transform it was baked
+    /// from, over a deterministic sweep of the domain, using the interpolation
+    /// it will be sampled with.
+    ///
+    /// A lattice is an approximation; a viewer built on one may only say so
+    /// with a number. The sweep is a low-discrepancy (additive-recurrence)
+    /// sequence rather than a grid, so it does not land on lattice nodes,
+    /// where the error is zero by construction and the answer would flatter.
+    pub fn worst_error(&self, processor: &Processor, probes: usize) -> f32 {
+        let phi = [0.819_172_5_f32, 0.671_043_6, 0.549_700_5];
+        let mut worst = 0.0f32;
+        for i in 0..probes {
+            let mut rgb = [0.0f32; 3];
+            for c in 0..3 {
+                let t = ((i as f32 + 0.5) * phi[c]).fract();
+                rgb[c] = self.domain_min[c] + t * (self.domain_max[c] - self.domain_min[c]);
+            }
+            let exact = processor.apply_rgb(&rgb);
+            let through = self.apply(rgb);
+            for c in 0..3 {
+                worst = worst.max((exact[c] - through[c]).abs());
+            }
+        }
+        worst
+    }
+
     /// Serialize as `.cube` text.
     pub fn to_cube(&self) -> String {
         let mut s = String::with_capacity(self.data.len() * 30);

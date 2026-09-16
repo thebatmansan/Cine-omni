@@ -19,7 +19,9 @@
 //! checked against the same reference in `tests/planar_present.rs`.
 
 use crate::{Result, ShellError};
+use cine_color::lut::Lut3D;
 use cine_gpu::yuv::YuvConversion;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 /// A picture held on the GPU as its three planes, ready to convert on draw.
@@ -34,6 +36,28 @@ struct Planes {
     chroma_height: u32,
 }
 
+/// The view transform on the GPU: a lattice, and where its domain is.
+///
+/// The shell never builds one. The runtime bakes it from the project's colour
+/// config and hands it over ([`crate::link::Viewing`]), because there is one
+/// place in this application that knows what a colour transform is.
+struct ViewLut {
+    texture: wgpu::Texture,
+    params: wgpu::Buffer,
+    /// Which lattice this is, so the same one is not uploaded twice.
+    key: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LutParams {
+    size: u32,
+    enabled: u32,
+    _pad: [u32; 2],
+    domain_min: [f32; 4],
+    domain_max: [f32; 4],
+}
+
 /// A fullscreen blit of an RGBA image to the surface.
 pub struct Presenter {
     pipeline: wgpu::RenderPipeline,
@@ -43,6 +67,7 @@ pub struct Presenter {
     planar_pipeline: wgpu::RenderPipeline,
     planar_layout: wgpu::BindGroupLayout,
     planes: Option<Planes>,
+    view_lut: ViewLut,
     /// Reused row-padding buffer. WebGPU requires 256-byte row alignment for a
     /// multi-row write, and real decoders produce whatever stride they like.
     staging: Vec<u8>,
@@ -144,6 +169,29 @@ impl Presenter {
                 plane_entry(1),
                 plane_entry(2),
                 plane_entry(3),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        // Read by integer coordinate and interpolated in the
+                        // shader, so the interpolation is the one the CPU
+                        // measures the lattice with, not the hardware's.
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let planar_pipeline_layout =
@@ -181,8 +229,36 @@ impl Presenter {
             planar_pipeline,
             planar_layout,
             planes: None,
+            view_lut: ViewLut::none(device),
             staging: Vec::new(),
         }
+    }
+
+    /// Show pictures through `lut`, or through nothing when `None`.
+    ///
+    /// Uploading the same lattice again is free: a lattice is identified by the
+    /// allocation the runtime handed over, and playback hands over the same one
+    /// for every picture of a clip.
+    pub fn set_view_lut(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        lut: Option<&Arc<Lut3D>>,
+    ) -> Result<()> {
+        let key = lut.map(|l| Arc::as_ptr(l) as usize).unwrap_or(0);
+        if key == self.view_lut.key {
+            return Ok(());
+        }
+        self.view_lut = match lut {
+            None => ViewLut::none(device),
+            Some(l) => ViewLut::upload(device, queue, l, key)?,
+        };
+        Ok(())
+    }
+
+    /// Whether a view transform is being applied.
+    pub fn has_view_lut(&self) -> bool {
+        self.view_lut.key != 0
     }
 
     /// Upload one decoded picture as its three planes.
@@ -379,6 +455,16 @@ impl Presenter {
                             binding: 3,
                             resource: wgpu::BindingResource::TextureView(&vv),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: self.view_lut.params.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.view_lut.texture.create_view(&Default::default()),
+                            ),
+                        },
                     ],
                 });
                 pass.set_pipeline(&self.planar_pipeline);
@@ -406,6 +492,120 @@ impl Presenter {
             }
         }
         queue.submit(Some(encoder.finish()));
+    }
+}
+
+impl ViewLut {
+    /// The identity: a 2×2×2 lattice that is never consulted, because the
+    /// shader is told it is off. Something must still be bound.
+    fn none(device: &wgpu::Device) -> ViewLut {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("view lut (none)"),
+            size: wgpu::Extent3d {
+                width: 2,
+                height: 2,
+                depth_or_array_layers: 2,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("view lut params (none)"),
+            contents: bytemuck::bytes_of(&LutParams {
+                size: 2,
+                enabled: 0,
+                _pad: [0; 2],
+                domain_min: [0.0; 4],
+                domain_max: [1.0; 4],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        ViewLut {
+            texture,
+            params,
+            key: 0,
+        }
+    }
+
+    fn upload(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        lut: &Lut3D,
+        key: usize,
+    ) -> Result<ViewLut> {
+        let n = lut.size as u32;
+        if lut.data.len() != (n as usize).pow(3) {
+            return Err(ShellError::Gpu(format!(
+                "view lattice says {n}³ but carries {} entries",
+                lut.data.len()
+            )));
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("view lut"),
+            size: wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: n,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // 256-byte row alignment, as every multi-row write needs.
+        let row = (n as usize * 16).div_ceil(256) * 256;
+        let mut bytes = vec![0u8; row * n as usize * n as usize];
+        for (i, rgb) in lut.data.iter().enumerate() {
+            let (x, y, z) = (
+                i % n as usize,
+                (i / n as usize) % n as usize,
+                i / (n as usize * n as usize),
+            );
+            let at = (z * n as usize + y) * row + x * 16;
+            let texel = [rgb[0], rgb[1], rgb[2], 1.0];
+            bytes[at..at + 16].copy_from_slice(bytemuck::cast_slice(&texel));
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row as u32),
+                rows_per_image: Some(n),
+            },
+            wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: n,
+            },
+        );
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("view lut params"),
+            contents: bytemuck::bytes_of(&LutParams {
+                size: n,
+                enabled: 1,
+                _pad: [0; 2],
+                domain_min: [lut.domain_min[0], lut.domain_min[1], lut.domain_min[2], 0.0],
+                domain_max: [lut.domain_max[0], lut.domain_max[1], lut.domain_max[2], 1.0],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        Ok(ViewLut {
+            texture,
+            params,
+            key,
+        })
     }
 }
 

@@ -8,7 +8,7 @@
 
 use crate::egui_layer::EguiLayer;
 use crate::gpu::SurfaceContext;
-use crate::link::{ProjectLink, SequencePlan};
+use crate::link::{ProjectLink, SequencePlan, Viewing};
 use crate::present::Presenter;
 use crate::sound::{AppTime, SoundEngine};
 use crate::viewer::FrameUploader;
@@ -245,6 +245,9 @@ struct App {
     finished: bool,
     /// The sequence being played, when this window is a project surface.
     sequence: Option<SequencePlan>,
+    /// How the pictures must be shown: the project's colour config, compiled
+    /// and baked by the runtime. `None` means they are shown as decoded.
+    viewing: Option<Viewing>,
     /// The sequence's sound on the device, when there is one.
     sound: Option<SoundEngine>,
 }
@@ -282,6 +285,7 @@ impl App {
             preroll_took: None,
             finished: false,
             sequence: None,
+            viewing: None,
             sound: None,
         }
     }
@@ -293,6 +297,11 @@ impl App {
     /// verified against a CPU reference and the dumped PNG should be what *it*
     /// produced.
     fn upload(&mut self, frame: &VideoFrame) {
+        // Which clip this picture came from decides how it must be shown: the
+        // sequence's pictures are presented at sequence time, and the plan says
+        // what plays when. A clip with no colorspace gets no transform, and the
+        // window shows it as decoded rather than through someone else's.
+        let lut = self.lut_for(frame.pts);
         let (Some(surface), Some(presenter)) = (self.surface.as_ref(), self.presenter.as_mut())
         else {
             return;
@@ -318,6 +327,10 @@ impl App {
             ));
         }
         self.picture_size = Some((conversion.width, conversion.height));
+        if let Err(e) = presenter.set_view_lut(&surface.device, &surface.queue, lut.as_ref()) {
+            self.failure = Some(format!("the view transform could not be uploaded: {e}"));
+            return;
+        }
         let (Some(y), Some(u), Some(v)) = (frame.plane(0), frame.plane(1), frame.plane(2)) else {
             self.failure = Some("decoded picture is missing a plane".into());
             return;
@@ -345,6 +358,22 @@ impl App {
                 Err(e) => self.failure = Some(format!("colour conversion failed: {e}")),
             }
         }
+    }
+
+    /// The view transform for the picture presenting at `pts`, if the project
+    /// established one for the clip playing then.
+    fn lut_for(
+        &self,
+        pts: ucg_core::RationalTime,
+    ) -> Option<std::sync::Arc<cine_color::lut::Lut3D>> {
+        let viewing = self.viewing.as_ref()?;
+        let entry = self
+            .sequence
+            .as_ref()?
+            .entries
+            .iter()
+            .position(|e| e.record.contains(pts))?;
+        viewing.luts.get(entry).cloned().flatten()
     }
 
     /// One turn of the scheduler. Returns whether the window needs redrawing.
@@ -450,6 +479,10 @@ impl App {
             buffered: p.source().buffered().len(),
             buffer_bytes: a.bytes,
             colour: self.colour.clone(),
+            view: self
+                .viewing
+                .as_ref()
+                .map(|v| (format!("{} / {}", v.display, v.view), v.worst_error)),
             keyframes: self.keyframes.clone(),
         }
     }
@@ -870,6 +903,32 @@ impl App {
             return;
         };
         let plan = link.sequence();
+        let viewing = link.viewing();
+        let same = match (&viewing, &self.viewing) {
+            (Some(a), Some(b)) => a.same_as(b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            match &viewing {
+                Some(v) => {
+                    println!(
+                        "view: {} / {} — {} (lattice within {:.4} of the transform)",
+                        v.display,
+                        v.view,
+                        if v.describe.is_empty() {
+                            "nothing to show it through".to_string()
+                        } else {
+                            v.describe.join("; ")
+                        },
+                        v.worst_error
+                    );
+                }
+                None => println!("view: none — pictures are shown as decoded"),
+            }
+            self.viewing = viewing;
+            self.ui_dirty = true;
+        }
         if plan == self.sequence && self.playback.is_some() {
             return;
         }
