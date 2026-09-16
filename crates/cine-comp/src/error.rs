@@ -57,6 +57,10 @@ pub enum Error {
     /// The UCG entity has the wrong kind or is malformed.
     #[error("invalid comp entity: {0}")]
     InvalidEntity(String),
+    /// The operation is possible in principle but this build refuses it —
+    /// with the numbers that made it refuse, never a silent substitution.
+    #[error("{0}")]
+    Refused(String),
     /// Error bubbled from the UCG.
     #[error(transparent)]
     Ucg(#[from] ucg_core::UcgError),

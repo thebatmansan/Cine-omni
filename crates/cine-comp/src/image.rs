@@ -472,6 +472,25 @@ impl Image {
         (self.x, self.y, self.width, self.height)
     }
 
+    /// The smallest canvas window holding both data windows.
+    ///
+    /// What a merge produces: a foreground outside the background is part of
+    /// the picture, and cropping it away — which is what aligning to the
+    /// background did — loses it for every node downstream.
+    pub fn union_window(&self, other: &Image) -> (i64, i64, usize, usize) {
+        if self.is_empty() {
+            return other.window();
+        }
+        if other.is_empty() {
+            return self.window();
+        }
+        let x0 = self.x.min(other.x);
+        let y0 = self.y.min(other.y);
+        let x1 = (self.x + self.width as i64).max(other.x + other.width as i64);
+        let y1 = (self.y + self.height as i64).max(other.y + other.height as i64);
+        (x0, y0, (x1 - x0) as usize, (y1 - y0) as usize)
+    }
+
     /// RGBA at canvas coordinates; transparent black outside the data window.
     pub fn canvas_rgba(&self, cx: i64, cy: i64) -> [f32; 4] {
         let (bx, by) = (cx - self.x, cy - self.y);

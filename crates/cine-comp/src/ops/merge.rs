@@ -2,6 +2,7 @@
 
 use crate::graph_model::MergeOp;
 use crate::image::Image;
+use rayon::prelude::*;
 
 /// Merge one premultiplied pixel `a` (foreground) with `b` (background).
 pub fn merge_pixel(op: MergeOp, a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
@@ -38,26 +39,49 @@ pub fn merge_pixel(op: MergeOp, a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     out
 }
 
-/// Merge image `a` onto `b`. `b` defines the output format; `a` is
-/// cropped/padded (with transparent black) to match when the sizes differ.
+/// Merge image `a` onto `b`.
+///
+/// The result's data window is the **union** of the two, as OpenEXR and every
+/// compositor mean it: outside `b` the background is transparent black and
+/// `a` still contributes, which is exactly what an over is for. Cropping to
+/// `b` — what this did before — silently threw away the part of the
+/// foreground that hung over the edge.
+///
 /// `mask` (alpha promoted) and `mix` blend the result back towards `b`.
 pub fn merge(op: MergeOp, a: &Image, b: &Image, mask: Option<&Image>, mix: f32) -> Image {
-    let a = a.to_rgba().aligned_to(b);
-    let mask = mask.map(|m| m.aligned_to(b));
-    b.map_rgba_xy(|x, y, bp| {
-        let ap = a.get_rgba(x, y);
-        let r = merge_pixel(op, ap, bp);
-        let m = mix * mask.as_ref().map(|m| m.get_alpha(x, y)).unwrap_or(1.0);
-        if m >= 1.0 {
-            r
-        } else {
-            let mut o = [0.0; 4];
-            for i in 0..4 {
-                o[i] = bp[i] + (r[i] - bp[i]) * m;
+    let a = a.to_rgba();
+    let b = b.to_rgba();
+    let (x0, y0, w, h) = a.union_window(&b);
+    if w == 0 || h == 0 {
+        return Image::rgba(0, 0).placed(x0, y0);
+    }
+    let mut out = Image::rgba(w, h).placed(x0, y0);
+    let mask = mask.map(|m| m.to_rgba());
+    out.data
+        .par_chunks_exact_mut(4 * w)
+        .enumerate()
+        .for_each(|(row, chunk)| {
+            let cy = y0 + row as i64;
+            for (col, px) in chunk.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let cx = x0 + col as i64;
+                let bp = b.canvas_rgba(cx, cy);
+                let ap = a.canvas_rgba(cx, cy);
+                let r = merge_pixel(op, ap, bp);
+                let m = mix
+                    * mask
+                        .as_ref()
+                        .map(|m| m.canvas_rgba(cx, cy)[3])
+                        .unwrap_or(1.0);
+                if m >= 1.0 {
+                    px.copy_from_slice(&r);
+                } else {
+                    for i in 0..4 {
+                        px[i] = bp[i] + (r[i] - bp[i]) * m;
+                    }
+                }
             }
-            o
-        }
-    })
+        });
+    out
 }
 
 #[cfg(test)]

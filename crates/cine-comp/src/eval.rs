@@ -502,7 +502,9 @@ impl Evaluator {
                         .and_then(FilterKind::from_param)
                         .unwrap_or(FilterKind::Bilinear),
                 };
-                flat(ops::transform(&*img(0)?, &t))
+                // The region is applied inside the transform: only the part
+                // of the transformed window the caller asked for is produced.
+                flat(ops::transform_roi(&*img(0)?, &t, roi)?)
             }
             NodeKind::Crop => {
                 let w = usize::try_from(node.int("width")).map_err(|_| bad("width", "negative"))?;
@@ -691,6 +693,24 @@ fn input_roi(
                 roi.height.min(full.height),
             );
             Some(r.offset(node.int("x"), node.int("y")))
+        }
+        // A transform pulls the region it will read: the requested rectangle
+        // mapped back through the transform, grown by the filter's reach.
+        // Only with an explicit pivot — the automatic one is the centre of the
+        // source's data window, which is not known until it is evaluated, and
+        // guessing it would pull the wrong pixels.
+        NodeKind::Transform if !node.bool("center_auto") => {
+            let t = ops::Transform2D {
+                translate: node.vec2("translate"),
+                rotate_deg: node.f32("rotate_deg"),
+                scale: node.vec2("scale"),
+                center: Some(node.vec2("center")),
+                filter: node
+                    .param("filter")
+                    .and_then(FilterKind::from_param)
+                    .unwrap_or(FilterKind::Bilinear),
+            };
+            Some(ops::source_region_for(&t, roi))
         }
         NodeKind::Blur => {
             let kind = node

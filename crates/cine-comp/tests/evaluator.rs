@@ -262,7 +262,14 @@ fn write_records_output_and_graph_json_round_trips() {
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].path, "renders/comp.exr");
     assert_eq!(writes[0].frame, 12);
-    assert_eq!((writes[0].image.width, writes[0].image.height), (96, 64));
+    // The written image is the data window the graph produced, not the
+    // format it started from: the transform in this chain moves and grows it,
+    // and an EXR carries a data window for exactly this reason.
+    assert_eq!(
+        (writes[0].image.width, writes[0].image.height),
+        (134, 106),
+        "the transform's window, kept rather than cropped away"
+    );
     // cached -> no second write record
     ev.evaluate(&back, w, 12).unwrap();
     assert!(ev.writes().is_empty());
@@ -320,22 +327,26 @@ fn a_region_of_a_chain_is_the_full_frames_pixels_in_a_buffer_the_size_of_the_reg
         RegionOfInterest::new(230, 240, 64, 64),
     ] {
         let part = ev.evaluate_roi(&g, merge, 0, roi).unwrap();
-        let clipped = roi.clipped(256, 256);
+        // The region a caller asks for, met with the data that exists: the
+        // chain's window is not the frame — a transform moves pixels outside
+        // it, and those are kept, so the result is the intersection of the two.
+        let (fx, fy, fw, fh) = full.window();
+        let x0 = (roi.x as i64).max(fx);
+        let y0 = (roi.y as i64).max(fy);
+        let x1 = ((roi.x + roi.width) as i64).min(fx + fw as i64);
+        let y1 = ((roi.y + roi.height) as i64).min(fy + fh as i64);
         assert_eq!(
             part.window(),
-            (
-                clipped.x as i64,
-                clipped.y as i64,
-                clipped.width,
-                clipped.height
-            ),
-            "the result is exactly the region, clipped to the frame"
+            (x0, y0, (x1 - x0) as usize, (y1 - y0) as usize),
+            "the result is the region, met with the window the chain produces"
         );
         let mut worst = 0.0f32;
-        for y in clipped.y..clipped.y_end() {
-            for x in clipped.x..clipped.x_end() {
-                let a = part.canvas_rgba(x as i64, y as i64);
-                let b = full.get_rgba(x, y);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let a = part.canvas_rgba(x, y);
+                // Canvas coordinates on both sides: a transform in the chain
+                // moves the window, so local indices are not the same pixels.
+                let b = full.canvas_rgba(x, y);
                 for c in 0..4 {
                     worst = worst.max((a[c] - b[c]).abs());
                 }

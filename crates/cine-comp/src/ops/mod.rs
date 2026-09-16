@@ -25,4 +25,4 @@ pub use keyer::{chroma_key, despill, difference_key, luma_key, screen_key, Chrom
 pub use merge::{merge, merge_pixel};
 pub use procedural::{generate, Perlin, Procedural};
 pub use roto::rasterize;
-pub use transform::{crop, reformat, transform, Transform2D};
+pub use transform::{crop, reformat, source_region_for, transform, transform_roi, Transform2D};

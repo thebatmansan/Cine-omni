@@ -145,16 +145,23 @@ fn blur_preserves_mean_and_transform_translates_exactly() {
         .unwrap();
     g.connect(r, 0, t, 0).unwrap();
     let out = ev.evaluate(&g, t, 0).unwrap();
-    for y in 0..48 {
-        for x in 0..48 {
-            let expect = if x >= 5 && y >= 3 {
-                src.get_rgba(x - 5, y - 3)
-            } else {
-                [0.0; 4]
-            };
-            assert_eq!(out.get_rgba(x, y), expect, "at {x},{y}");
+    // The window moves with the picture: every source pixel is still there,
+    // five right and three down, and nothing was cropped off the far edge.
+    assert_eq!(out.window(), (5, 3, src.width, src.height));
+    for y in 0..src.height {
+        for x in 0..src.width {
+            assert_eq!(
+                out.canvas_rgba(x as i64 + 5, y as i64 + 3),
+                src.get_rgba(x, y),
+                "at {x},{y}"
+            );
         }
     }
+    assert_eq!(
+        out.canvas_rgba(0, 0),
+        [0.0; 4],
+        "nothing outside the window"
+    );
     let bic = g
         .add(
             CompNode::transform("bic", [5.0, 3.0], 0.0, [1.0, 1.0]).with_param("filter", "bicubic"),
@@ -421,4 +428,72 @@ fn display_and_multilayer_output() {
     let bytes = ml.beauty().unwrap().to_display_u8();
     assert_eq!(bytes.len(), 32 * 24 * 4);
     assert!(bytes.chunks(4).all(|p| p[3] == 255));
+}
+
+/// A foreground that hangs over the background's edge is part of the picture.
+///
+/// The merge used to crop the foreground to the background's window, so the
+/// overhang was discarded before anything downstream could see it — the audit's
+/// "no union bounding box". The result is now the union of the two windows,
+/// as OpenEXR and every compositor mean it.
+#[test]
+fn a_foreground_over_the_edge_survives_the_merge() {
+    use cine_comp::image::Image;
+    use cine_comp::ops;
+
+    let mut background = Image::rgba(64, 64);
+    for y in 0..64 {
+        for x in 0..64 {
+            background.set_rgba(x, y, [0.0, 0.0, 0.5, 1.0]);
+        }
+    }
+    // An opaque patch, half of it beyond the background's right edge.
+    let mut foreground = Image::rgba(32, 32);
+    for y in 0..32 {
+        for x in 0..32 {
+            foreground.set_rgba(x, y, [1.0, 0.0, 0.0, 1.0]);
+        }
+    }
+    let foreground = foreground.placed(48, 16);
+
+    let out = ops::merge(MergeOp::Over, &foreground, &background, None, 1.0);
+    assert_eq!(
+        out.window(),
+        (0, 0, 80, 64),
+        "the result covers both: the background, and the foreground's overhang"
+    );
+    // Over the background.
+    assert_eq!(out.canvas_rgba(50, 20), [1.0, 0.0, 0.0, 1.0]);
+    // Beyond the background's edge, where the old behaviour lost it.
+    assert_eq!(
+        out.canvas_rgba(70, 20),
+        [1.0, 0.0, 0.0, 1.0],
+        "the overhang is still there"
+    );
+    // Background where the foreground is not.
+    assert_eq!(out.canvas_rgba(10, 10), [0.0, 0.0, 0.5, 1.0]);
+    // And nothing was invented where neither image is.
+    assert_eq!(out.canvas_rgba(70, 60), [0.0; 4]);
+}
+
+/// The region pulled back through a transform is the region it reads: a small
+/// window of a scaled-up plate costs a small window of the source.
+#[test]
+fn a_transform_pulls_only_the_source_region_it_reads() {
+    use cine_comp::image::RegionOfInterest;
+    use cine_comp::ops;
+
+    let t = ops::Transform2D {
+        translate: [100.0, 50.0],
+        scale: [4.0, 4.0],
+        center: Some([0.0, 0.0]),
+        ..Default::default()
+    };
+    let roi = RegionOfInterest::new(200, 150, 40, 40);
+    let source = ops::source_region_for(&t, roi);
+    // (200,150) maps back to ((200-100)/4, (150-50)/4) = (25, 25), and 40
+    // destination pixels are 10 source pixels, plus the filter's reach.
+    assert!(source.x <= 25 && source.y <= 25, "{source:?}");
+    assert!(source.width <= 14 && source.height <= 14, "{source:?}");
+    assert!(source.width >= 10 && source.height >= 10, "{source:?}");
 }
