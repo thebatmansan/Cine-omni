@@ -1121,20 +1121,11 @@ impl ApplicationHandler<Wake> for App {
         }
         self.surface = Some(surface);
 
-        // The compute context is separate today: `GpuContext` owns its own
-        // device. Sharing one device between compute and presentation is the
-        // stated architecture and the next step; it is not yet done, and the
-        // cost is an extra device rather than a wrong result.
-        // Only `--dump` uses it, so nothing else pays for a second device.
+        // Compute runs on the window's device, not a second one: a kernel's
+        // result is then already on the device that will present it. The
+        // adapter is the display's, chosen with `compatible_surface`.
         if self.args.dump.is_some() {
-            match GpuContext::new() {
-                Ok(c) => self.compute = Some(c),
-                Err(e) => {
-                    self.failure = Some(format!("no compute adapter: {e}"));
-                    event_loop.exit();
-                    return;
-                }
-            }
+            self.compute = self.surface.as_ref().map(|s| s.compute_context());
         }
 
         if let Some(path) = self.args.timeline.clone() {

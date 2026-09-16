@@ -89,6 +89,21 @@ impl SurfaceContext {
         })
     }
 
+    /// A compute context on **this** device.
+    ///
+    /// One device for compute and presentation, which is the point: a kernel's
+    /// result is already on the device that will draw it. The window's adapter
+    /// is the display's, chosen with `compatible_surface`, so compute follows
+    /// the display rather than the other way round.
+    pub fn compute_context(&self) -> cine_gpu::device::GpuContext {
+        cine_gpu::device::GpuContext::adopt(
+            self.instance.clone(),
+            self.adapter.clone(),
+            self.device.clone(),
+            self.queue.clone(),
+        )
+    }
+
     pub fn adapter_name(&self) -> String {
         let info = self.adapter.get_info();
         format!("{} ({:?})", info.name, info.backend)

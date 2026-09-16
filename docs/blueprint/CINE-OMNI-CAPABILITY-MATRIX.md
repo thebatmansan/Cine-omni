@@ -157,7 +157,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 
 | Capability | Reference | What professionals need | Status | Now | Requires | Model | Deps / licensing | Perf | Cx | P | Validation |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Node graph | Nuke, Fusion | Typed nodes, caching, pull evaluation | **PROTOTYPE** | 28 node kinds, persistence | FE node editor · data windows | comp.graph/node | — | interactive on 2K | L | P1 | — |
+| Node graph | Nuke, Fusion | Typed nodes, caching, pull evaluation | **PROTOTYPE** | 28 node kinds, persistence, data windows throughout: merges produce the union of their inputs' windows, transforms their transformed window, and a region of interest is pulled up the chain (a 64² region of a blurred 2048² frame in 16.7 ms against 4.5 s for the frame) | FE node editor · file I/O | comp.graph/node | — | interactive on 2K | L | P1 | `evaluator.rs`, `nodes.rs` |
 | Image I/O on plates | Nuke | Read/Write EXR, DPX, TIFF, sequences | **MISSING** | re-verified: no file I/O | M | — | OpenEXR, OIIO | streaming | M | **P0** | — |
 | Data windows / ROI | Nuke bbox | Work only where pixels exist | **PARTIAL** | `Image` carries its canvas window; generators and passes allocate only the region; every node's result cropped to its region; regions of real chains equal the full frame (edges included). Merge output takes B's window (no union bbox); transform, roto and procedural still compute the full frame and crop | union bbox · windowed transform | image | — | 64² of a 2048² blur: 16.7 ms / 16,384 floats vs 4.5 s / 16.8 M | M | **P0** | `evaluator.rs` region tests |
 | Layers / precomps | After Effects | Layer-based compositing | **MISSING** | — | FE · BE | — | — | — | L | P2 | — |

@@ -46,9 +46,12 @@ Apache-2.0 reference, and a real OpenColorIO is a developer-side oracle whose
 outputs on the released configs are committed and compared on every test run —
 so drift from the format fails a test instead of shipping.
 
-Still open from the audit's wrong-direction list: union bounding boxes and windowed transforms in compositing,
-and one GPU device shared by compute and presentation (the second device is now
-created only for `--dump`).
+The audit's wrong-direction list is closed. The last three: compositing merges
+now produce the union of their data windows and transforms produce their
+transformed window (so nothing moved is lost, and a region bounds the work);
+compute runs on the window's own device, adopted rather than opened a second
+time. Earlier: takes owned by the production log, the data window itself, the
+single application shell, and synchronous whole-range audio.
 
 ---
 

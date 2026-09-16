@@ -68,6 +68,27 @@ impl GpuContext {
         })
     }
 
+    /// Adopt a device someone else created — the one drawing the window.
+    ///
+    /// A compositing kernel and the surface it will be presented on must run
+    /// on the same device, or every result crosses the bus to get there. The
+    /// window owns its device because the adapter has to match the display;
+    /// this is how the compute side joins it instead of opening a second one.
+    pub fn adopt(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+    ) -> Self {
+        GpuContext {
+            instance,
+            adapter,
+            device,
+            queue,
+            pipelines: HashMap::new(),
+        }
+    }
+
     pub fn adapter_name(&self) -> String {
         let info = self.adapter.get_info();
         format!("{} ({:?})", info.name, info.backend)
