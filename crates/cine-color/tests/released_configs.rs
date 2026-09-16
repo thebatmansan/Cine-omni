@@ -72,7 +72,8 @@ fn a_released_aces_view_compiles_as_what_it_says() {
 }
 
 /// Coverage, measured against OpenColorIO rendering the same files: every
-/// (display, view) pair that compiles here must produce OpenColorIO's pixels
+/// (source, display, view) combination that compiles here must produce
+/// OpenColorIO's pixels
 /// (`tests/data/config-views.tsv`, from `generate_config_views.py`), and every
 /// pair that does not is counted with its reason.
 #[test]
@@ -80,20 +81,24 @@ fn measured_view_coverage_of_the_released_configs() {
     use std::collections::BTreeMap;
     let text = include_str!("data/config-views.tsv");
     let mut configs: BTreeMap<String, Config> = BTreeMap::new();
-    let mut pairs: BTreeMap<
-        (String, String, String),
-        Result<cine_color::processor::Processor, String>,
-    > = BTreeMap::new();
+    type Combination = (String, String, String, String);
+    let mut pairs: BTreeMap<Combination, Result<cine_color::processor::Processor, String>> =
+        BTreeMap::new();
     let mut worst: BTreeMap<String, f64> = BTreeMap::new();
     let mut failures = Vec::new();
     for line in text.lines().filter(|l| !l.starts_with('#')).skip(1) {
         let f: Vec<&str> = line.split('\t').collect();
-        let key = (f[0].to_string(), f[1].to_string(), f[2].to_string());
-        let v: Vec<f64> = f[3..].iter().map(|s| s.parse().unwrap()).collect();
+        let key = (
+            f[0].to_string(),
+            f[1].to_string(),
+            f[2].to_string(),
+            f[3].to_string(),
+        );
+        let v: Vec<f64> = f[4..].iter().map(|s| s.parse().unwrap()).collect();
         let config = configs.entry(key.0.clone()).or_insert_with(|| load(&key.0));
         let compiled = pairs.entry(key.clone()).or_insert_with(|| {
             config
-                .display_processor("ACES2065-1", &key.1, &key.2)
+                .display_processor(&key.1, &key.2, &key.3)
                 .map_err(|e| e.to_string())
         });
         let Ok(p) = compiled else { continue };
@@ -123,7 +128,7 @@ fn measured_view_coverage_of_the_released_configs() {
         }
     }
     for file in configs.keys() {
-        let mine: Vec<_> = pairs.iter().filter(|((f, _, _), _)| f == file).collect();
+        let mine: Vec<_> = pairs.iter().filter(|((f, _, _, _), _)| f == file).collect();
         let exact = mine.iter().filter(|(_, r)| r.is_ok()).count();
         let mut refused: BTreeMap<&str, usize> = BTreeMap::new();
         for (_, r) in &mine {
@@ -132,8 +137,8 @@ fn measured_view_coverage_of_the_released_configs() {
             }
         }
         println!(
-            "MEASURED {file}: {} display/view pairs — {exact} render as OpenColorIO does \
-             (worst code-value error {:.1e}), {} refused",
+            "MEASURED {file}: {} source/display/view combinations — {exact} render as \
+             OpenColorIO does (worst code-value error {:.1e}), {} refused",
             mine.len(),
             worst.get(file).copied().unwrap_or(0.0),
             mine.len() - exact

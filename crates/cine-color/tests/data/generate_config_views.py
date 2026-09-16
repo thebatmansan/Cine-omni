@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Display/view renderings of the released ACES configs, from OpenColorIO.
 
-Every (display, view) pair of the configs in `configs/`, from ACES2065-1, on a
-fixed set of samples. `tests/released_configs.rs` compiles the same pairs and
+Every (display, view) pair of the configs in `configs/`, from ACES2065-1 and
+from a video colorspace (the one the configs' own file rules give a movie), on
+a fixed set of samples. `tests/released_configs.rs` compiles the same pairs and
 compares.
 
 Regenerate:
@@ -18,7 +19,8 @@ SAMPLES = [
 ]
 HERE = os.path.dirname(os.path.abspath(__file__))
 print(f"# OpenColorIO {ocio.__version__}; ACES2065-1 in, display code out")
-print("config\tdisplay\tview\tr\tg\tb\tout_r\tout_g\tout_b")
+SOURCES = ["ACES2065-1", "Rec.1886 Rec.709 - Display"]
+print("config\tsource\tdisplay\tview\tr\tg\tb\tout_r\tout_g\tout_b")
 for file in sorted(os.listdir(os.path.join(HERE, "configs"))):
     if not file.endswith(".ocio"):
         continue
@@ -26,14 +28,18 @@ for file in sorted(os.listdir(os.path.join(HERE, "configs"))):
     for display in cfg.getDisplaysAll():
         views = list(cfg.getViews(ocio.VIEW_DISPLAY_DEFINED, display)) + list(cfg.getViews(ocio.VIEW_SHARED, display))
         for view in views:
-            t = ocio.DisplayViewTransform(src="ACES2065-1", display=display, view=view)
-            try:
-                cpu = cfg.getProcessor(t).getOptimizedCPUProcessor(
-                    ocio.BIT_DEPTH_F32, ocio.BIT_DEPTH_F32, ocio.OPTIMIZATION_NONE
-                )
-            except Exception as e:  # noqa: BLE001 - recorded, not hidden
-                print(f"# {file} {display} / {view}: OpenColorIO refuses: {e}")
-                continue
-            for s in SAMPLES:
-                r = cpu.applyRGB(list(s))
-                print(f"{file}\t{display}\t{view}\t{s[0]!r}\t{s[1]!r}\t{s[2]!r}\t{r[0]!r}\t{r[1]!r}\t{r[2]!r}")
+            for src in SOURCES:
+                t = ocio.DisplayViewTransform(src=src, display=display, view=view)
+                try:
+                    cpu = cfg.getProcessor(t).getOptimizedCPUProcessor(
+                        ocio.BIT_DEPTH_F32, ocio.BIT_DEPTH_F32, ocio.OPTIMIZATION_NONE
+                    )
+                except Exception as e:  # noqa: BLE001 - recorded, not hidden
+                    print(f"# {file} {src} -> {display} / {view}: OpenColorIO refuses: {e}")
+                    continue
+                for s in SAMPLES:
+                    r = cpu.applyRGB(list(s))
+                    print(
+                        f"{file}\t{src}\t{display}\t{view}\t{s[0]!r}\t{s[1]!r}\t{s[2]!r}"
+                        f"\t{r[0]!r}\t{r[1]!r}\t{r[2]!r}"
+                    )

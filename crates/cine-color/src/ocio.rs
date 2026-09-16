@@ -972,6 +972,23 @@ impl Config {
         Ok(Vec::new())
     }
 
+    /// Cross between the scene and display references when `from` and `to` are
+    /// not the same one; nothing when they are.
+    fn bridge_ops(&self, from_display: bool, to_display: bool, depth: usize) -> Result<Vec<Op>> {
+        match (from_display, to_display) {
+            (false, true) => self.scene_to_display_ops(depth),
+            (true, false) => {
+                let vt = self.default_view_transform().ok_or_else(|| {
+                    Error::Unsupported(
+                        "no view transform to bridge display and scene references".into(),
+                    )
+                })?;
+                self.view_transform_ops(vt, Direction::Inverse, depth)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
     /// Scene reference → display reference through the default view transform.
     fn scene_to_display_ops(&self, depth: usize) -> Result<Vec<Op>> {
         let vt = self.default_view_transform().ok_or_else(|| {
@@ -1089,11 +1106,6 @@ impl Config {
                 view: view.to_string(),
             })?;
         let s = self.require(src)?;
-        if s.is_display {
-            return Err(Error::Unsupported(format!(
-                "display colorspace `{src}` as the source of a display view"
-            )));
-        }
         // A data source, or a view onto a data colorspace (the "Raw" view), is a no-op.
         if s.isdata
             || v.colorspace
@@ -1110,9 +1122,7 @@ impl Config {
         }
         if let Some(cs) = &v.colorspace {
             let d = self.require(cs)?;
-            if d.is_display {
-                ops.extend(self.scene_to_display_ops(depth)?);
-            }
+            ops.extend(self.bridge_ops(s.is_display, d.is_display, depth)?);
             ops.extend(self.ops_from_reference(d, depth)?);
             return Ok(ops);
         }
@@ -1124,12 +1134,12 @@ impl Config {
         let vt = self
             .view_transform(vt_name)
             .ok_or_else(|| Error::Invalid(format!("unknown view transform `{vt_name}`")))?;
-        // A display-referred view transform starts from the display reference,
-        // so a scene-referred source crosses to it through the default view
-        // transform first, as OpenColorIO does.
-        if vt.is_display_referred() {
-            ops.extend(self.scene_to_display_ops(depth)?);
-        }
+        // The view transform starts from one reference, the source is in the
+        // other or the same: cross between them through the default view
+        // transform, in whichever direction, as OpenColorIO does. Video seen
+        // through an ACES view is the interesting case — a display-referred
+        // source into a scene-referred view transform.
+        ops.extend(self.bridge_ops(s.is_display, vt.is_display_referred(), depth)?);
         ops.extend(self.view_transform_ops(vt, Direction::Forward, depth)?);
         let dcs_name = v
             .display_colorspace
