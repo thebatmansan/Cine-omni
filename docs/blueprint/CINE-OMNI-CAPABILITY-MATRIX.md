@@ -176,8 +176,8 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 
 | Capability | Reference | What professionals need | Status | Now | Requires | Model | Deps / licensing | Perf | Cx | P | Validation |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Display transforms | Resolve, Baselight | Correct, declared, never substituted | **IMPLEMENTED** | ACES 2.0 output transform ported from the Academy's aces-core CTL (`aces2.rs`): all 31 displays OpenColorIO 2.5.2 registers, both directions, 3,038 samples, worst forward 1.8e-5 / inverse 5.2e-4; ACES 1.x refused; not yet applied in the viewer, so nobody sees it | viewer display pipeline (GPU) · FE view selector | color.config | aces-core Apache-2.0 (`licenses/THIRD-PARTY.toml`) | ~20 ms table build per display; per-pixel cost not measured | M | P1 | `aces2_oracle.rs` |
-| OCIO config loading | OpenColorIO | Load studio and ACES configs | **PARTIAL** | the cg and studio ACES 2.0 configs OCIO 2.5.2 ships load (shared views, `<USE_DISPLAY_NAME>`); unimplemented keys listed (file/viewing rules, named transforms, environment, virtual display, inactive colorspaces); compared with OpenColorIO on the same files: all 88 display/view pairs render as OCIO does (worst code value 1.5e-5); 158/160 colorspace conversions match (worst 1.6e-5), ACES→ADX refused and ACEScc below zero kept to the Academy reference (adjudicated) | file rules · viewing rules · named transforms · environment | color.config | OCIO BSD-3-Clause (verified); configs used unmodified as test data | — | M | **P0** (for colour) | `released_configs.rs`, `display_styles.rs`, `aces2_oracle.rs` |
+| Display transforms | Resolve, Baselight | Correct, declared, never substituted | **VERIFIED** | ACES 2.0 output transform ported from the Academy's aces-core CTL (`aces2.rs`): all 31 displays OpenColorIO 2.5.2 registers, both directions, 3,038 samples, worst forward 1.8e-5 / inverse 5.2e-4; ACES 1.x refused. Applied in the native window — each clip's input colorspace through the chosen display and view, baked to a 33³ lattice, interpolated in the fragment shader; the view and the lattice's distance from the transform are shown on the picture. Choosing a view in the browser reaches every surface | grading · scopes · an analytic GPU transform instead of a lattice | color.config | aces-core Apache-2.0, config BSD-3 (`licenses/THIRD-PARTY.toml`) | lattice 88 ms to bake, 0.6 MB; draw incl. conversion 11.6 ms over 55 draws (dev build, Intel UHD) | M | P1 | `aces2_oracle.rs`, `planar_present.rs`, `view_lattice.rs`, `ui/e2e/colour.mjs` |
+| OCIO config loading | OpenColorIO | Load studio and ACES configs | **PARTIAL** | the cg and studio ACES 2.0 configs OCIO 2.5.2 ships load (shared views, `<USE_DISPLAY_NAME>`); file rules decide a file's colorspace as OCIO decides it (42 paths, every rule kind); remaining unimplemented keys listed (viewing rules, named transforms, environment, virtual display, inactive colorspaces); compared with OpenColorIO on the same files: 176 source/display/view combinations render as OCIO does (worst code value 1.5e-5), video into an ACES view included; 158/160 colorspace conversions match (worst 1.6e-5), ACES→ADX refused and ACEScc below zero kept to the Academy reference (adjudicated). The cg config is bundled as every new project's config | viewing rules · named transforms · environment | color.config | OCIO BSD-3-Clause (verified); configs used unmodified as test data | — | M | **P0** (for colour) | `released_configs.rs`, `display_styles.rs`, `aces2_oracle.rs`, `file_rules.rs` |
 | Primaries: wheels, lift/gamma/gain, offset | Resolve | Precise, GPU, per-shot | **MISSING** | CDL maths exists | FE wheels · G | color.grade | — | 4K real time | M | P1 | ASC CDL conformance |
 | Curves | Resolve | RGB, hue-vs-X | **MISSING** | — | FE · G | grade | — | — | M | P1 | — |
 | Qualifiers & windows | Resolve | HSL keys, power windows, tracking | **MISSING** | keyer exists | FE · G · tracking | grade nodes | — | — | L | P1 | — |
@@ -274,8 +274,8 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 
 | Status | Count |
 |---|---:|
-| VERIFIED | 17 |
-| IMPLEMENTED | 6 |
+| VERIFIED | 18 |
+| IMPLEMENTED | 5 |
 | PARTIAL | 46 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |

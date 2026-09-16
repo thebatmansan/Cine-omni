@@ -180,6 +180,46 @@ undo                                 page count restored in every client
 Strips cannot be dragged, breakdown elements cannot be tagged by hand, there is
 no day-out-of-days report and no budget; the capability says so.
 
+## Colour, and what a view changes
+
+Every project carries an OpenColorIO config — the released ACES 2.0 CG config,
+bundled, which is the same file the conformance tests compare against
+OpenColorIO 2.5.2. Every media file gets an input colorspace from that config's
+*file rules* when it is ingested or relinked, and the graph records which rule
+decided (`rule:Movies`) or that a person did (`user`). Nothing is assumed
+silently: a file the rules cannot place has no colorspace, and is shown
+untransformed.
+
+The Colour workspace chooses the display and view. That choice is session
+state, like the open sequence: it is shared by every surface, and the native
+window applies it to the picture it is playing. The runtime compiles each
+clip's transform — input colorspace → display/view — and bakes it to a 33³
+lattice; the window interpolates that lattice in the fragment shader, where the
+pixels already are, and prints on the picture which view it is showing and how
+far the lattice is from the transform itself.
+
+The browser does not apply it. A browser cannot receive GPU textures, so the
+pictures there are decoded frames with no transform, and the panel says so
+rather than letting a chosen view imply otherwise.
+
+Measured (`ui/e2e/colour.mjs` against a running `cine start` with real media,
+`planar_present.rs` and `view_lattice.rs` on this machine's Intel UHD):
+
+```
+colour projection                    7.5 ms
+view chosen and broadcast            12.2 ms   every client, unasked
+input colorspace with cascade        7.2 ms    undoable; undo restores the rule's decision
+GPU vs the same lattice on the CPU   ≤ 1 of 255
+the view vs no view                  up to 75 of 255    it is doing something
+lattice vs the exact transform       2.1 of 255 in legal code values, 2.8 with sub-black
+lattice cost                         88 ms to bake, 0.6 MB on the GPU
+```
+
+There is no grading — no wheels, curves, qualifiers or windows — no scopes in
+any viewer, and no analytic transform on the GPU: the lattice is an
+approximation, and its size is the measured number above rather than a matter
+of taste. A 65³ lattice would halve the error at 558 ms to bake.
+
 ## What remains
 
 * **No multi-select, no linked selection, no sync-break indicator.** Edits follow
@@ -194,6 +234,7 @@ no day-out-of-days report and no budget; the capability says so.
   The record monitor steps; it does not play.
 * **Component rendering is untested.** There is no DOM test tooling installed
   and no network to add any; the decision logic is tested, the drawing is not.
-* **Script, storyboard, previs, 3D, VFX, colour, audio, production and delivery
-  workspaces do not exist.** Their data is in the graph; their interfaces are
-  not built.
+* **Storyboard, previs, 3D, VFX, audio and delivery workspaces do not exist.**
+  Their data is in the graph; their interfaces are not built. Colour has a
+  workspace that chooses what to look through and what each file is in, and no
+  grading at all.
