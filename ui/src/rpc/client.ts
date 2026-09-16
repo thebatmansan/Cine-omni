@@ -50,7 +50,20 @@ export interface EditMarks {
  * runtime has no time effect to carry the speed, so it says so rather than
  * offering a button that does a trim under another name.
  */
-export type MarkMismatch = "refuse" | "trim_tail" | "trim_head" | "honour_source";
+export type MarkMismatch = "refuse" | "trim_tail" | "trim_head" | "honour_source" | "fit_to_fill";
+
+/**
+ * A clip's speed, as the runtime worked it out.
+ *
+ * `media`/`track` is the number — an exact ratio of two integers. `label` is
+ * for a badge and nothing computes from it.
+ */
+export interface ClipSpeed {
+  media: number;
+  track: number;
+  reversed: boolean;
+  label: string;
+}
 
 /** A resolved three- or four-point edit, as the runtime worked it out. */
 export interface EditPlan {
@@ -62,6 +75,8 @@ export interface EditPlan {
   derived: string[];
   /** How a four-point disagreement was settled, if there was one. */
   reconciled: string | null;
+  /** The speed change the marks asked for, when they asked for one. */
+  retime: { played: Time; reversed: boolean } | null;
   description: string;
 }
 
@@ -476,6 +491,8 @@ export interface TimelineItem {
   available_range: Span | null;
   handles: { head: Time; tail: Time } | null;
   link: string | null;
+  /** `null` when the clip plays in real time, which is nearly always. */
+  speed: ClipSpeed | null;
   needs_conform: boolean;
   conform_reason: string | null;
   /** Scenes (or shots) this clip is bound to. */
@@ -703,6 +720,10 @@ export class RpcClient {
       mode,
       mismatch,
     });
+  }
+  /** Set a clip's speed by saying how long it should play; `null` removes it. */
+  retime(clip: string, played: ExactTime | null, reversed = false) {
+    return this.call<CascadeResult>("retime", { clip, played, reversed });
   }
   newTimeline(name: string, rate_num: number, rate_den: number) {
     return this.call<CascadeResult & { id: string }>("new_timeline", { name, rate_num, rate_den });

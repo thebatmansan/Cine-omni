@@ -113,7 +113,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Timeline view | Resolve, Premiere, Avid | Tracks, clips, transitions, markers, ruler, playhead, zoom | **VERIFIED** | browser + native, from graph | — | nle.* | — | 60 fps redraw | — | P0 | projection tests + e2e |
 | Track state: lock/mute/solo/target | All NLEs | Exactly these, with solo ≠ mute | **VERIFIED** | commits through graph, live across clients | — | OTIO metadata | — | — | — | P0 | 19 tests + live-sync test |
 | Insert / overwrite | All NLEs | Source → record with targeting | **VERIFIED** | `EditOp` + `place` (picture and sound placed linked, to targeted tracks); UI `,` / `.` from marked source; binds the project's asset, never a second identity | — | nle.* | — | commit 1.7 ms median (e2e) | S | **P0** | `editorial_protocol.rs`, `ui/e2e/editor.mjs` |
-| Three-point / four-point editing | Avid, Premiere | In/out on source and record, fit-to-fill | **VERIFIED** (three-point, backtiming) / **MISSING** (fit-to-fill) | `three_point` resolves any three of four marks and returns the plan: derived points named, backtimed edits flagged, checked against the asset's available range before committing; `I`/`O` mark whichever monitor is active and the ruler draws the band; four marks that disagree are refused with the difference in frames unless the editor picks how to settle them (trim head, trim tail, keep source length) | fit-to-fill needs a time effect in the model | marks are editor state | — | — | M | **P0** | 12 unit + 5 graph + 1 protocol test; `edit.test.ts` |
+| Three-point / four-point editing | Avid, Premiere | In/out on source and record, fit-to-fill | **VERIFIED** | `three_point` resolves any three of four marks and returns the plan: derived points named, backtimed edits flagged, checked against the asset's available range before committing; `I`/`O` mark whichever monitor is active and the ruler draws the band; four marks that disagree are refused with the difference in frames unless the editor picks how to settle them — trim head, trim tail, keep source length, or fit to fill, which sets an exact retime | — | marks are editor state | — | — | M | **P0** | 12 unit + 5 graph + 2 protocol tests; `edit.test.ts` |
 | Ripple / roll / slip / slide / trim | All NLEs | Handle-bounded, reports applied delta, mixed rate | **VERIFIED** | drag tools with frame readout; runtime clamps and reports requested vs applied; one undo step | — | nle.* | — | edit → other client refetched 5.3 ms median | M | **P0** | protocol tests incl. clamping; UI gesture tests; e2e |
 | Split / join / lift / extract / replace | All NLEs | — | **VERIFIED** (split, lift, extract) / **IMPLEMENTED** (join, replace) | razor / ⌘K, ⌫, ⇧⌫ in UI; join and replace reachable by protocol only | FE join/replace gestures | nle.* | — | — | S | **P0** | `linked_edits.rs`, e2e |
 | Snapping | All NLEs | Cuts, markers, playhead; zoom-independent | **PARTIAL** | UI snaps drags to runtime-composed cut points and the playhead (8 px); markers not targets; engine `snap` unused | FE marker targets | — | — | — | S | P0 | `edit.test.ts` |
@@ -124,7 +124,8 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Multicam | Resolve, Premiere, Avid | Sync by TC/audio, angle switching live | **PLANNED** | R16 §A.7 | BE · FE · M multi-decode | multicam clip | — | 4 angles live | L | P1 | switch cut accuracy |
 | Nested / compound sequences | All NLEs | Sequences as clips | **MISSING** | OTIO stacks exist | BE · FE | nle.stack | — | — | M | P1 | — |
 | Keyframes & effects | All NLEs | Opacity, position, speed, audio levels; curves | **MISSING** | — | BE · FE · G | animated params | — | — | L | P1 | — |
-| Retiming / speed ramps | All NLEs | Retime as a function, not a scalar | **PLANNED** | R16 §A.6 | BE · M · G | retime curve | — | — | M | P2 | — |
+| Retiming — constant speed | All NLEs | Speed changes, freeze frames, reverse | **VERIFIED** (constant) / **MISSING** (ramps) | a retime is an exact pair — the media consumed and the track time it takes — never a float scalar; composition, the OTIO file (with `LinearTimeWarp` for other tools), the graph, the flattened picture list, `picture_at`, the EDL's `M2` record and fit-to-fill all carry it; trims/rolls/joins refuse a retimed clip rather than guess; reverse is modelled and the decoder says it cannot play it yet | speed *ramps* need a curve, not a constant | `nle.retime_played` | — | — | M | P2 | 12 unit + 1 protocol test |
+| Retiming — speed ramps | All NLEs | Retime as a function, not a scalar | **PLANNED** | R16 §A.6 | BE · M · G | retime curve | — | — | M | P2 | — |
 | Captions & subtitles | Resolve, Premiere, subtitle tools | SRT/TTML/IMSC/SCC authoring, burn-in | **MISSING** | — | BE · FE | caption track | — | — | M | P1 | IMSC validator |
 | Proxy editing & conform | All NLEs | Cut on proxies, conform to originals exactly | **PARTIAL** | multiple refs preserved; proxy never becomes original | BE proxy gen · FE toggle | media refs | — | — | M | P1 | proxy/original round-trip (tested) |
 | Relink / offline media | All NLEs | Relink by content, name, TC | **VERIFIED** (engine) / **IMPLEMENTED** (UI) | content-hash relink | FE relink dialog | asset.media | — | — | S | P1 | relink tests |
@@ -270,11 +271,11 @@ separate process costs weeks and is legally clean.
 
 ## Summary counts
 
-Counted from the tables above (153 rows; where a row has two states, the first is counted):
+Counted from the tables above (154 rows; where a row has two states, the first is counted):
 
 | Status | Count |
 |---|---:|
-| VERIFIED | 19 |
+| VERIFIED | 20 |
 | IMPLEMENTED | 5 |
 | PARTIAL | 50 |
 | PROTOTYPE | 3 |

@@ -28,17 +28,17 @@
 //! * refuse, naming the difference ([`Mismatch::Refuse`], the default);
 //! * keep the timeline marks and take less of the source
 //!   ([`Mismatch::TrimSourceTail`], [`Mismatch::TrimSourceHead`]);
-//! * keep the source and move the record out ([`Mismatch::HonourSource`]).
+//! * keep the source and move the record out ([`Mismatch::HonourSource`]);
+//! * keep both and change the speed ([`Mismatch::FitToFill`]).
 //!
-//! The fourth thing an NLE offers — *fit to fill*, which changes the clip's
-//! speed so the source stretches to the marks — is **not** here, because this
-//! model has no time effect to carry the speed. [`plan`] names it as the
-//! option it does not have rather than approximating it with a trim, which
-//! would be a different edit wearing its name.
+//! Fit to fill is the interesting one, and it is exact: the plan carries a
+//! [`Retime`] whose length is the timeline marks and whose media is the source
+//! marks, so "48 frames over 24" is a retime of exactly 2, not a `time_scalar`
+//! of 2.0000001.
 
 use crate::edit::{insert, overwrite};
 use crate::error::{Error, Result};
-use crate::otio::{Clip, Item, Track};
+use crate::otio::{Clip, Item, Retime, Track};
 use ucg_core::{RationalTime, TimeRange};
 
 /// An in point, an out point, or one of each. Either may be unset.
@@ -112,6 +112,9 @@ pub enum Mismatch {
     TrimSourceHead,
     /// Keep the source. Move whichever record point was not the anchor.
     HonourSource,
+    /// Keep both, and change the clip's speed so the marked media fills the
+    /// marked time exactly.
+    FitToFill,
 }
 
 /// A resolved edit: exactly what media plays and exactly where it lands.
@@ -122,6 +125,8 @@ pub struct Plan {
     /// Where it lands, in track time.
     pub record: TimeRange,
     pub kind: EditKind,
+    /// The speed change the edit needs, when the marks asked for one.
+    pub retime: Option<Retime>,
     /// Whether the record in was derived from the record out. A backtimed
     /// edit ends where it was marked; a forward one starts where it was.
     pub backtimed: bool,
@@ -255,6 +260,7 @@ pub fn plan(
 
     // Four points: do the two durations agree?
     let mut reconciled = None;
+    let mut retime = None;
     if let Some(rd) = record_duration.filter(|_| source.count() == 2) {
         if rd != src_duration {
             let difference = src_duration.checked_sub(&rd).to_frames();
@@ -263,9 +269,8 @@ pub fn plan(
                 Mismatch::Refuse => {
                     return Err(Error::Edit(format!(
                         "four marks disagree: the source is {} frames {longer} than the timeline \
-                         marks. Fit to fill would change the clip's speed, which this model has no \
-                         time effect to carry; trim the source, move a mark, or choose how to \
-                         reconcile",
+                         marks. Trim the source at either end, keep its length and move a \
+                         timeline mark, or fit to fill and change the clip's speed",
                         difference.abs()
                     )));
                 }
@@ -302,10 +307,31 @@ pub fn plan(
                         difference.abs()
                     ));
                 }
+                Mismatch::FitToFill => {
+                    retime = Some(Retime {
+                        played: rd,
+                        reversed: false,
+                    });
+                    let speed = Retime {
+                        played: rd,
+                        reversed: false,
+                    }
+                    .speed_of(src_duration);
+                    reconciled = Some(format!(
+                        "fit to fill: {} media frames over {} on the timeline, a speed of {}/{}",
+                        src_duration.to_frames(),
+                        rd.to_frames(),
+                        speed.0,
+                        speed.1,
+                    ));
+                }
             }
         }
     }
 
+    // What the clip occupies on the track: its own length, unless a retime
+    // says otherwise.
+    let played = retime.map(|r| r.played).unwrap_or(src_duration);
     if src_duration <= RationalTime::zero(src_duration.rate_exact()) {
         return Err(Error::Edit(
             "the edit has no length: the out point is at or before the in point".into(),
@@ -337,8 +363,9 @@ pub fn plan(
 
     Ok(Plan {
         source: TimeRange::new(src_start, src_duration),
-        record: TimeRange::new(rec_start, src_duration),
+        record: TimeRange::new(rec_start, played),
         kind,
+        retime,
         backtimed,
         derived,
         reconciled,
@@ -353,6 +380,7 @@ pub fn plan(
 pub fn perform(track: &mut Track, clip: Clip, plan: &Plan) -> Result<usize> {
     let mut clip = clip;
     clip.source_range = Some(plan.source);
+    clip.retime = plan.retime;
     let item = Item::Clip(clip);
     match plan.kind {
         EditKind::Insert => insert(track, plan.record.start_time, item),

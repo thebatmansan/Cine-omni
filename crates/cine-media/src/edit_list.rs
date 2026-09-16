@@ -14,6 +14,11 @@
 //! file presents at that media time — [`VideoReader::index_at`], an exact search
 //! over the sample table. Nothing is rounded through seconds.
 //!
+//! A retimed entry carries a [`Speed`], and the offset into it is carried into
+//! media time by that speed rather than one for one. The arithmetic is
+//! [`Speed::media_offset`], the same function the editorial model and the
+//! browser's record monitor use, so all three name the same picture.
+//!
 //! ## What is shown where there is no picture
 //!
 //! A gap in the cut is black: that is what the cut shows. An entry whose media
@@ -35,7 +40,7 @@ use crate::video::VideoReader;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use ucg_core::{Rate, RationalTime, Rounding, TimeRange};
+use ucg_core::{Rate, RationalTime, Rounding, Speed, TimeRange};
 
 /// One stretch of the sequence.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +54,8 @@ pub struct EditEntry {
     pub offset: Option<RationalTime>,
     /// Why the entry cannot be played, when it cannot.
     pub unplayable: Option<String>,
+    /// How fast the media runs here. `None` is real time.
+    pub speed: Option<Speed>,
     /// For display.
     pub name: String,
 }
@@ -113,9 +120,13 @@ impl EditListSource {
                 path.display()
             )));
         };
-        let media_t = first
-            .checked_add(&offset)
-            .checked_add(&t.checked_sub(&entry.record.start_time));
+        let into = t.checked_sub(&entry.record.start_time);
+        let media_t = first.checked_add(&offset).checked_add(&match entry.speed {
+            // The grid is the media's own frame rate: there is no picture
+            // between two pictures, so the offset floors onto one.
+            Some(speed) => speed.media_offset(into, first.rate_exact()),
+            None => into,
+        });
         let Some(index) = reader.index_at(media_t) else {
             return Ok(None);
         };

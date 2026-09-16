@@ -84,6 +84,34 @@ fn available_range(item: &Item) -> Option<TimeRange> {
     item.as_clip().and_then(Clip::available_range)
 }
 
+/// Refuse an operation that would have to guess what a retime means.
+///
+/// Trimming a retimed clip is genuinely ambiguous: pulling its tail out by
+/// twelve frames either keeps the speed and needs twelve *track* frames' worth
+/// of extra media — which at 2.5× is thirty media frames, and at 1.3× is not a
+/// whole number of them — or keeps the media and changes the speed. Editors
+/// that guess pick one and are wrong half the time. This refuses and says what
+/// the two choices are; setting the retime again expresses either of them
+/// exactly.
+///
+/// Slipping is not here, because sliding the media under a retime changes
+/// neither the speed nor the length.
+fn ensure_not_retimed(track: &Track, index: usize, what: &str) -> Result<()> {
+    let Some(clip) = track.children.get(index).and_then(Item::as_clip) else {
+        return Ok(());
+    };
+    let Some(((num, den), reversed)) = clip.speed() else {
+        return Ok(());
+    };
+    Err(Error::Edit(format!(
+        "`{}` is retimed to {num}/{den}{}, and a {what} would have to either change that speed \
+         or move the media by a fraction of a frame. Set the retime again with the length you \
+         want, or remove it first",
+        clip.name,
+        if reversed { " reversed" } else { "" },
+    )))
+}
+
 /// Largest transition offset that the item at `index` must keep covering:
 /// the `out_offset` of a transition before it, the `in_offset` of one after.
 fn transition_floor(track: &Track, index: usize, zero: RationalTime) -> RationalTime {
@@ -196,6 +224,7 @@ pub fn ripple_trim(
     delta: RationalTime,
 ) -> Result<RationalTime> {
     commit(track, |t| {
+        ensure_not_retimed(t, index, "trim")?;
         let (lo, hi, tr) = match edge {
             Edge::Head => head_bounds(t, index)?,
             Edge::Tail => tail_bounds(t, index)?,
@@ -236,6 +265,8 @@ fn right_of_cut(track: &Track, left: usize) -> Result<usize> {
 pub fn roll(track: &mut Track, cut: usize, delta: RationalTime) -> Result<RationalTime> {
     commit(track, |t| {
         let right = right_of_cut(t, cut)?;
+        ensure_not_retimed(t, cut, "roll")?;
+        ensure_not_retimed(t, right, "roll")?;
         let (llo, lhi, ltr) = tail_bounds(t, cut)?;
         let (rlo, rhi, rtr) = head_bounds(t, right)?;
         // The two items may be at different rates. `d` is a duration, and
@@ -297,6 +328,7 @@ pub fn slide(track: &mut Track, index: usize, delta: RationalTime) -> Result<Rat
             if t.children[p].is_transition() {
                 return Err(Error::NotAnItem(p));
             }
+            ensure_not_retimed(t, p, "slide")?;
             let (plo, phi, _) = tail_bounds(t, p)?;
             lo = tighter(lo, plo, RationalTime::max);
             hi = tighter(hi, phi, RationalTime::min);
@@ -312,6 +344,7 @@ pub fn slide(track: &mut Track, index: usize, delta: RationalTime) -> Result<Rat
             if t.children[next].is_transition() {
                 return Err(Error::NotAnItem(next));
             }
+            ensure_not_retimed(t, next, "slide")?;
             let (nlo, nhi, _) = head_bounds(t, next)?;
             lo = tighter(lo, nlo, RationalTime::max);
             hi = tighter(hi, nhi, RationalTime::min);
@@ -375,7 +408,7 @@ fn split_in_place(t: &mut Track, time: RationalTime) -> Result<usize> {
         let dur = t.children[i].duration();
         let end = start.checked_add(&dur);
         if time > start && time < end {
-            let second = split_item(&mut t.children[i], time.checked_sub(&start));
+            let second = split_item(&mut t.children[i], time.checked_sub(&start))?;
             t.children.insert(i + 1, second);
             return Ok(i + 1);
         }
@@ -390,26 +423,90 @@ fn split_in_place(t: &mut Track, time: RationalTime) -> Result<usize> {
     Ok(t.children.len())
 }
 
-/// Split `item` at `offset` from its head; returns the second half and
-/// shrinks `item` to the first half. Markers stay with the half whose media
-/// range contains them; the `ucg_id` stays with the first half only.
-fn split_item(item: &mut Item, offset: RationalTime) -> Item {
+/// Split `item` at `offset` from its head, in **track** time; returns the
+/// second half and shrinks `item` to the first half. Markers stay with the
+/// half whose media range contains them; the `ucg_id` stays with the first
+/// half only.
+///
+/// A retimed clip is cut where the split instant actually lands in its media,
+/// which [`Clip::media_time_at`] answers exactly. The two halves keep their
+/// track lengths exactly — `offset` and the rest — and divide the media
+/// between them with nothing lost, so together they still consume the same
+/// frames over the same time. Each half's own speed can differ from the
+/// original by less than one media frame over its length, because the cut has
+/// to land on a picture: there is no frame between two frames. A split that
+/// would leave a half with no media at all is refused rather than made.
+fn split_item(item: &mut Item, offset: RationalTime) -> Result<Item> {
     let tr = item.trimmed_range().unwrap_or_default();
-    let first = TimeRange::new(tr.start_time, offset);
-    let second = TimeRange::new(
-        tr.start_time.checked_add(&offset),
-        tr.duration.checked_sub(&offset),
-    );
+    let (first, second) = match item.as_clip().and_then(|c| c.retime.map(|r| (c, r))) {
+        None => (
+            TimeRange::new(tr.start_time, offset),
+            TimeRange::new(
+                tr.start_time.checked_add(&offset),
+                tr.duration.checked_sub(&offset),
+            ),
+        ),
+        Some((clip, retime)) => {
+            let zero = RationalTime::zero(offset.rate_exact());
+            let at = clip
+                .media_time_at(zero, offset)
+                .ok_or_else(|| Error::Edit("the split is outside the clip".into()))?;
+            // Reversed, the clip plays from the end down, so the *first* half
+            // is the later media and the boundary is one frame the other side.
+            let cut = if retime.reversed {
+                at.checked_add(&RationalTime::exact(1, at.rate_exact()))
+            } else {
+                at
+            };
+            let (a, b) = (
+                TimeRange::from_start_end(tr.start_time, cut),
+                TimeRange::from_start_end(cut, tr.end_time_exclusive()),
+            );
+            let zero_media = RationalTime::zero(tr.duration.rate_exact());
+            if a.duration <= zero_media || b.duration <= zero_media {
+                return Err(Error::Edit(format!(
+                    "`{}` is retimed so hard that a cut {} into it leaves one side with no \
+                     picture at all",
+                    clip.name,
+                    offset.to_timecode()
+                )));
+            }
+            if retime.reversed {
+                (b, a)
+            } else {
+                (a, b)
+            }
+        }
+    };
     let mut other = item.clone();
     item.set_source_range(first);
     other.set_source_range(second);
     other.metadata_mut().shift_remove(UCG_ID_KEY);
     if let (Item::Clip(a), Item::Clip(b)) = (&mut *item, &mut other) {
-        let cut = second.start_time;
-        a.markers.retain(|m| m.marked_range.start_time < cut);
-        b.markers.retain(|m| m.marked_range.start_time >= cut);
+        // Each half keeps its own track length; the retime follows it.
+        if let (Some(ra), Some(rb)) = (a.retime.as_mut(), b.retime.as_mut()) {
+            let whole = ra.played;
+            ra.played = offset;
+            rb.played = whole.checked_sub(&offset);
+        }
+        // Markers are in media time and stay with the half whose media range
+        // contains them. Which half that is depends on the direction of play:
+        // reversed, the *first* half on the track holds the later media.
+        let boundary = first.start_time.max(second.start_time);
+        let first_is_early = first.start_time <= second.start_time;
+        let keep = |markers: &mut Vec<Marker>, early: bool| {
+            markers.retain(|m| {
+                if early {
+                    m.marked_range.start_time < boundary
+                } else {
+                    m.marked_range.start_time >= boundary
+                }
+            })
+        };
+        keep(&mut a.markers, first_is_early);
+        keep(&mut b.markers, !first_is_early);
     }
-    other
+    Ok(other)
 }
 
 /// Join the clips (or gaps) at `index` and `index + 1` when the second
@@ -421,6 +518,13 @@ pub fn join(track: &mut Track, index: usize) -> Result<()> {
         let (Some(ra), Some(rb)) = (a.trimmed_range(), b.trimmed_range()) else {
             return Err(Error::NotContinuous(index, index + 1));
         };
+        if a.as_clip().is_some_and(|c| c.retime.is_some())
+            || b.as_clip().is_some_and(|c| c.retime.is_some())
+        {
+            return Err(Error::Edit(
+                "a retimed clip cannot be joined: two speeds do not add up to one".into(),
+            ));
+        }
         let joinable = match (&a, &b) {
             (Item::Clip(ca), Item::Clip(cb)) => {
                 ca.media_reference.same_media(&cb.media_reference)
@@ -525,10 +629,20 @@ pub fn overwrite(track: &mut Track, at_time: RationalTime, item: Item) -> Result
 /// be worse than saying no.
 pub fn replace(track: &mut Track, index: usize, item: Item) -> Result<()> {
     commit(track, |t| {
-        let wanted = timed_item(t, index)?
+        let item_replaced = timed_item(t, index)?;
+        item_replaced
             .source_range()
-            .ok_or_else(|| Error::Edit("the item being replaced has no duration".into()))?
-            .duration;
+            .ok_or_else(|| Error::Edit("the item being replaced has no duration".into()))?;
+        // The hole is in track time, which a retime on the outgoing clip
+        // changes; the incoming clip has to fill that, not its media length.
+        let wanted = item_replaced.duration();
+        if item.as_clip().is_some_and(|c| c.retime.is_some()) {
+            return Err(Error::Edit(
+                "a retimed clip cannot be dropped into a replace: its length on the track is \
+                 decided by its retime, not by the hole"
+                    .into(),
+            ));
+        }
         let mut replacement = item;
         let source = replacement
             .source_range()

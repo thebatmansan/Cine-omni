@@ -13,9 +13,24 @@
 //! way so a caller can say so. Rendering a dissolve needs two decodes and a mix
 //! on the GPU, which is a separate capability, not something to fake here.
 
-use crate::otio::{Item, Timeline, TrackKind};
+use crate::otio::{Clip, Item, Timeline, TrackKind};
 use crate::session::{any_solo_of, is_audible, is_visible};
 use ucg_core::{EntityId, RationalTime, TimeRange};
+
+/// How fast media time runs against record time on one segment.
+///
+/// [`ucg_core::Speed`]: the same type the player uses, so there is one answer
+/// to "which picture is showing" rather than two that can drift apart.
+pub use ucg_core::Speed;
+
+fn speed_of(clip: &Clip) -> Option<Speed> {
+    let ((media, track), reversed) = clip.speed()?;
+    Some(Speed {
+        media,
+        track,
+        reversed,
+    })
+}
 
 /// One stretch of record time showing one clip.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +46,9 @@ pub struct PictureSegment {
     /// The media time shown at `record.start_time`, in the clip's source
     /// coordinates (the same coordinates as its `source_range`).
     pub source_start: RationalTime,
+    /// How fast the media runs here. `None` is real time — the overwhelmingly
+    /// common case, and a player that ignores this field is then still right.
+    pub speed: Option<Speed>,
 }
 
 /// The flattened picture of a sequence.
@@ -51,8 +69,8 @@ pub fn picture_segments(timeline: &Timeline) -> PictureList {
     let solo = any_solo_of(timeline, TrackKind::Video);
     let mut transitions = 0usize;
     let mut end: Option<RationalTime> = None;
-    // (track index, item index, span, trimmed source start)
-    let mut clips: Vec<(usize, usize, TimeRange, RationalTime, Option<EntityId>)> = Vec::new();
+    // (track index, item index, span, the clip itself, its entity id)
+    let mut clips: Vec<(usize, usize, TimeRange, &Clip, Option<EntityId>)> = Vec::new();
     for (ti, track) in timeline.tracks().enumerate() {
         if track.kind != TrackKind::Video || !track.enabled || !is_visible(track, solo) {
             continue;
@@ -63,13 +81,13 @@ pub fn picture_segments(timeline: &Timeline) -> PictureList {
             match item {
                 Item::Transition(_) => transitions += 1,
                 Item::Clip(c) if c.enabled => {
-                    let (Some(span), Some(source)) = (track.range_of_child(ii), c.trimmed_range())
+                    let (Some(span), Some(_)) = (track.range_of_child(ii), c.trimmed_range())
                     else {
                         continue;
                     };
                     let zero = RationalTime::zero(span.duration.rate_exact());
                     if span.duration > zero {
-                        clips.push((ti, ii, span, source.start_time, item.ucg_id()));
+                        clips.push((ti, ii, span, c, item.ucg_id()));
                     }
                 }
                 _ => {}
@@ -94,10 +112,19 @@ pub fn picture_segments(timeline: &Timeline) -> PictureList {
                 span.start_time <= from && from < span.end_time_exclusive()
             })
             .max_by_key(|(ti, _, _, _, _)| *ti);
-        let Some((ti, ii, span, source, clip)) = winner else {
+        let Some((ti, ii, span, media, clip)) = winner else {
             continue;
         };
-        let source_start = source.checked_add(&from.checked_sub(&span.start_time));
+        // Where this instant lands in the clip's media — through the retime
+        // when there is one, which is the clip's own arithmetic, not a copy.
+        let source_start = media
+            .media_time_at(span.start_time, from)
+            .unwrap_or_else(|| {
+                media
+                    .trimmed_range()
+                    .map(|r| r.start_time)
+                    .unwrap_or_else(|| RationalTime::zero(from.rate_exact()))
+            });
         let duration = to.checked_sub(&from);
         // Continue the previous segment when it is the same clip, contiguous.
         if let Some(last) = segments.last_mut() {
@@ -115,6 +142,7 @@ pub fn picture_segments(timeline: &Timeline) -> PictureList {
             item: *ii,
             clip: *clip,
             source_start,
+            speed: speed_of(media),
         });
     }
     PictureList {
@@ -134,6 +162,10 @@ pub struct SoundSegment {
     pub clip: Option<EntityId>,
     /// Media time heard at `record.start_time`, in source coordinates.
     pub source_start: RationalTime,
+    /// How fast the media runs. Sound at a speed other than real time needs
+    /// resampling, which the mixer does not do; it is reported so that a
+    /// caller refuses rather than plays it at the wrong pitch.
+    pub speed: Option<Speed>,
 }
 
 /// Every enabled clip on every audible sound track, in track then time order.
@@ -159,6 +191,7 @@ pub fn sound_segments(timeline: &Timeline) -> Vec<SoundSegment> {
                 item: ii,
                 clip: item.ucg_id(),
                 source_start: source.start_time,
+                speed: speed_of(c),
             });
         }
     }

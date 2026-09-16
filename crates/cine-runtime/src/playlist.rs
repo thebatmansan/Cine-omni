@@ -28,10 +28,18 @@ pub struct Entry {
     /// it shows then cannot be known, and the entry is not playable.
     pub offset: Option<RationalTime>,
     pub online: Option<bool>,
+    /// How fast the media runs against record time here. `None` is real time.
+    pub speed: Option<cine_timeline::Speed>,
 }
 
 impl Entry {
     /// Why this entry cannot be played, if it cannot.
+    ///
+    /// A reversed clip is *not* unplayable: the picture it should show is
+    /// exact, and the decoder will produce it. It will produce it slowly —
+    /// each successive picture is earlier in the file, so every one costs a
+    /// walk from the preceding keyframe — and the scheduler reports that as
+    /// `Degraded` rather than this pretending the clip is broken.
     pub fn unplayable(&self) -> Option<&'static str> {
         if self.asset.is_none() || self.path.is_none() {
             Some("the clip is bound to no media asset")
@@ -84,7 +92,8 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                    track: usize,
                    item: usize,
                    clip: Option<EntityId>,
-                   source_start: RationalTime| {
+                   source_start: RationalTime,
+                   speed: Option<cine_timeline::Speed>| {
         let name = tracks
             .get(track)
             .and_then(|t| t.children.get(item))
@@ -106,16 +115,17 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                 .map(PathBuf::from),
             offset: available.map(|a| source_start.checked_sub(&a.start_time)),
             online: node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
+            speed,
         }
     };
     let sound = cine_timeline::sound_segments(&composed)
         .iter()
-        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start))
+        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start, s.speed))
         .collect();
     let entries = flat
         .segments
         .iter()
-        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start))
+        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start, s.speed))
         .collect();
     Ok(EditList {
         timeline,

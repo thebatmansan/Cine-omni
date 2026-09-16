@@ -272,7 +272,11 @@ impl Track {
                 let start = start - t.in_offset;
                 Some(TimeRange::new(start, t.duration()))
             }
-            Item::Clip(c) => Some(TimeRange::new(start, c.trimmed_range()?.duration)),
+            Item::Clip(c) => {
+                // The clip's length on the track, which a retime changes.
+                c.trimmed_range()?;
+                Some(TimeRange::new(start, c.duration()))
+            }
             Item::Gap(g) => Some(TimeRange::new(start, g.source_range.duration)),
         }
     }
@@ -422,6 +426,14 @@ impl Track {
 // ---------------------------------------------------------------------------
 
 /// A child of a [`Track`].
+///
+/// A clip is much larger than a gap or a transition, and boxing it would be
+/// the usual answer. It is not taken here: `Item` lives in `Vec<Item>` and
+/// composition walks those children for every range query, every flatten and
+/// every edit, so an indirection on the common variant would be paid on the
+/// hottest path to save a few hundred bytes on the rare ones. A track with ten
+/// thousand items costs single-digit megabytes either way.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Item {
     Clip(Clip),
@@ -559,6 +571,57 @@ impl From<Transition> for Item {
 /// The key OTIO uses for a clip's primary media reference.
 pub const DEFAULT_MEDIA_KEY: &str = "DEFAULT_MEDIA";
 
+/// A constant speed change on a clip.
+///
+/// **Not a floating-point scalar.** A retime is two exact durations — the
+/// media the clip consumes and the track time it takes to consume it — because
+/// that is what an editor actually asks for ("these 48 frames, over 24") and
+/// because it is exactly representable. OTIO's `LinearTimeWarp` stores a
+/// `time_scalar` as a float, and a third at 0.333333 is not a third; the
+/// writer emits that float for other tools and this pair is what the model
+/// believes.
+///
+/// [`Retime::played`] is the clip's duration *on the track*. The media it
+/// consumes stays in `Clip::source_range`, so an editor can always see which
+/// frames are being used as well as how long they take.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Retime {
+    /// How long the clip's media plays for on the track.
+    pub played: RationalTime,
+    /// Play the media backwards: the last frame of the source range first.
+    #[serde(default)]
+    pub reversed: bool,
+}
+
+impl Retime {
+    /// A retime that plays `source` worth of media over `played` of track.
+    pub fn new(played: RationalTime, reversed: bool) -> Retime {
+        Retime { played, reversed }
+    }
+
+    /// Speed as a ratio of media time to track time, reduced: `(2, 1)` is
+    /// double speed, `(1, 2)` is half. The sign is not carried here — reverse
+    /// is [`Retime::reversed`] — because a ratio of durations cannot be
+    /// negative when both durations are positive.
+    pub fn speed_of(&self, media: RationalTime) -> (i64, i64) {
+        // media_seconds / played_seconds, cross-multiplied and reduced.
+        let (mr, pr) = (media.rate_exact(), self.played.rate_exact());
+        let num = i128::from(media.ticks()) * i128::from(mr.den()) * i128::from(pr.num());
+        let den = i128::from(self.played.ticks()) * i128::from(pr.den()) * i128::from(mr.num());
+        let g = gcd(num.unsigned_abs(), den.unsigned_abs()).max(1) as i128;
+        ((num / g) as i64, (den / g) as i64)
+    }
+}
+
+fn gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
 /// A clip plays a range of a media reference.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
@@ -583,7 +646,13 @@ pub struct Clip {
     pub alternate_media_references: BTreeMap<String, MediaReference>,
     /// Range inside the media that is played. `None` means the whole
     /// available range.
+    ///
+    /// With a [`Retime`] this is still the *media* consumed; how long that
+    /// takes on the track is [`Clip::played_duration`].
     pub source_range: Option<TimeRange>,
+    /// A constant speed change, when the clip is not playing in real time.
+    #[serde(default)]
+    pub retime: Option<Retime>,
     /// Markers in the clip's media time coordinates.
     pub markers: Vec<Marker>,
     pub metadata: Metadata,
@@ -598,6 +667,7 @@ impl Default for Clip {
             active_media_reference_key: DEFAULT_MEDIA_KEY.to_string(),
             alternate_media_references: BTreeMap::new(),
             source_range: None,
+            retime: None,
             markers: Vec::new(),
             metadata: Metadata::new(),
             enabled: true,
@@ -685,26 +755,76 @@ impl Clip {
         self.source_range.or_else(|| self.available_range())
     }
 
-    /// Trimmed duration (zero when the clip has no range at all).
-    pub fn duration(&self) -> RationalTime {
+    /// Duration of the media the clip consumes (zero when it has no range).
+    pub fn media_duration(&self) -> RationalTime {
         self.trimmed_range()
             .map(|r| r.duration)
             .unwrap_or(RationalTime::new(0.0, 24.0))
     }
 
+    /// How long the clip takes on its track: the retime's length when there
+    /// is one, otherwise the media it consumes.
+    pub fn duration(&self) -> RationalTime {
+        match self.retime {
+            Some(r) => r.played,
+            None => self.media_duration(),
+        }
+    }
+
+    /// Speed as a reduced ratio of media time to track time, and whether it
+    /// runs backwards. `None` when the clip plays in real time.
+    pub fn speed(&self) -> Option<((i64, i64), bool)> {
+        let r = self.retime?;
+        Some((r.speed_of(self.media_duration()), r.reversed))
+    }
+
     /// The media time that plays at `track_time` when the clip starts at
     /// `track_start` on its track; `None` outside the clip.
+    ///
+    /// All of this is exact. The offset into the clip is scaled by the ratio
+    /// of media to track time in `i128` and floored onto the media's own tick
+    /// grid, which is what a player does: there is no picture between two
+    /// pictures, so it shows the one that has started.
     pub fn media_time_at(
         &self,
         track_start: RationalTime,
         track_time: RationalTime,
     ) -> Option<RationalTime> {
         let tr = self.trimmed_range()?;
-        let offset = track_time - track_start;
-        if offset.value() < 0.0 || offset.to_seconds() >= tr.duration.to_seconds() {
+        let offset = track_time.checked_sub(&track_start);
+        let played = self.duration();
+        let zero = RationalTime::zero(offset.rate_exact());
+        if offset < zero || offset >= played {
             return None;
         }
-        Some(tr.start_time + offset)
+        let Some(retime) = self.retime else {
+            return Some(tr.start_time.checked_add(&offset));
+        };
+        // media_ticks = media_duration_ticks * (offset / played), floored.
+        let (or, pr, mr) = (
+            offset.rate_exact(),
+            played.rate_exact(),
+            tr.duration.rate_exact(),
+        );
+        let num = i128::from(tr.duration.ticks())
+            * i128::from(offset.ticks())
+            * i128::from(or.den())
+            * i128::from(pr.num());
+        let den = i128::from(played.ticks()) * i128::from(pr.den()) * i128::from(or.num());
+        if den == 0 {
+            return None;
+        }
+        // Floor division, correct for negative numerators too.
+        let mut ticks = num.div_euclid(den);
+        if retime.reversed {
+            // The last media frame first: offset 0 shows the final picture.
+            ticks = i128::from(tr.duration.ticks()) - 1 - ticks;
+            if ticks < 0 {
+                ticks = 0;
+            }
+        }
+        let ticks = i64::try_from(ticks).ok()?;
+        Some(tr.start_time.checked_add(&RationalTime::exact(ticks, mr)))
     }
 
     /// The `ucg_id` stored in metadata, if any.

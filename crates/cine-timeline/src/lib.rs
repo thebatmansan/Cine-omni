@@ -55,13 +55,16 @@ pub use edit::{
     slip, split_at, Change, ChangeKind, Edge,
 };
 pub use error::{Error, Result};
-pub use flatten::{picture_segments, sound_segments, PictureList, PictureSegment, SoundSegment};
+pub use flatten::{
+    picture_segments, sound_segments, PictureList, PictureSegment, SoundSegment, Speed,
+};
 pub use graph::{
     apply_edit, bind_clip_to_scene, clear_conform, clip_track_range, clips_synced_to,
     export_timeline, export_track, flag_conform, import_timeline, media_of_clip, perform_edit,
     ClipSpec, EditOp, GraphEditOutcome,
 };
 pub use linked::{apply_linked, EditOutcome, TrackEdit};
+pub use otio::Retime;
 pub use otio::{
     Clip, Composable, Gap, Item, Marker, MediaReference, Metadata, Stack, Timeline, Track,
     TrackKind, Transition, TransitionType, UCG_ID_KEY,

@@ -149,6 +149,79 @@ fn opt_range(v: Option<&J>) -> Result<Option<TimeRange>> {
     }
 }
 
+/// A clip's constant retime, from its `effects` list.
+///
+/// Two sources, in that order of trust. A file written here carries the exact
+/// pair in `metadata.cine`, and a round trip loses nothing. A file from
+/// anywhere else carries only OTIO's floating-point `time_scalar`, and the
+/// model's retime is exact, so the played length is rounded onto the media's
+/// own frame grid **here** rather than leaving a float to be compared against
+/// exact time forever afterwards.
+///
+/// A `FreezeFrame` is a clip that shows one picture for its whole length, so
+/// it is read as a retime *and* a source range narrowed to that one picture —
+/// which is what a freeze is, spelled in this model's terms.
+fn read_retime(
+    v: Option<&J>,
+    media: Option<TimeRange>,
+    source_range: &mut Option<TimeRange>,
+) -> Result<Option<Retime>> {
+    let Some(J::Array(list)) = v else {
+        return Ok(None);
+    };
+    for effect in list {
+        let Ok((schema, obj)) = schema_of(effect) else {
+            continue;
+        };
+        if schema != "LinearTimeWarp" && schema != "FreezeFrame" {
+            continue;
+        }
+        if let Some(exact) = obj.get("metadata").and_then(|m| m.get("cine")) {
+            if let Some(played) = exact.get("played") {
+                return Ok(Some(Retime {
+                    played: read_time(played)?,
+                    reversed: exact.get("reversed").and_then(J::as_bool).unwrap_or(false),
+                }));
+            }
+        }
+        let Some(media) = media else {
+            return Err(Error::Otio(
+                "a retimed clip with no source or available range: there is no media length to \
+                 scale, so the speed cannot be turned into a duration"
+                    .into(),
+            ));
+        };
+        if schema == "FreezeFrame" {
+            let one = RationalTime::exact(1, media.duration.rate_exact());
+            *source_range = Some(TimeRange::new(media.start_time, one));
+            return Ok(Some(Retime {
+                played: media.duration,
+                reversed: false,
+            }));
+        }
+        let scalar = obj.get("time_scalar").and_then(J::as_f64).unwrap_or(1.0);
+        if scalar == 0.0 || !scalar.is_finite() {
+            return Err(Error::Otio(format!(
+                "a time_scalar of {scalar} is not a speed"
+            )));
+        }
+        let ticks = (f64::from(i32::try_from(media.duration.ticks()).unwrap_or(i32::MAX))
+            / scalar.abs())
+        .round();
+        if !(1.0..=f64::from(i32::MAX)).contains(&ticks) {
+            return Err(Error::Otio(format!(
+                "a time_scalar of {scalar} over {} frames is not a length this can hold",
+                media.duration.ticks()
+            )));
+        }
+        return Ok(Some(Retime {
+            played: RationalTime::exact(ticks as i64, media.duration.rate_exact()),
+            reversed: scalar < 0.0,
+        }));
+    }
+    Ok(None)
+}
+
 fn read_markers(v: Option<&J>) -> Result<Vec<Marker>> {
     let Some(J::Array(list)) = v else {
         return Ok(Vec::new());
@@ -284,12 +357,20 @@ pub fn read_item(v: &J) -> Result<Item> {
                         _ => MediaReference::Missing,
                     }
                 };
+            let mut source_range = opt_range(obj.get("source_range"))?;
+            let available = media_reference.available_range();
+            let retime = read_retime(
+                obj.get("effects"),
+                source_range.or(available),
+                &mut source_range,
+            )?;
             Ok(Item::Clip(Clip {
                 name: str_field(obj, "name"),
                 media_reference,
                 active_media_reference_key: active_key,
                 alternate_media_references: alternates,
-                source_range: opt_range(obj.get("source_range"))?,
+                source_range,
+                retime,
                 markers: read_markers(obj.get("markers"))?,
                 metadata: metadata(obj.get("metadata")),
                 enabled: bool_field(obj, "enabled", true),
@@ -360,6 +441,27 @@ pub fn timeline_value(t: &Timeline) -> J {
         "global_start_time": t.global_start_time.map(time_value),
         "tracks": stack_value(&t.tracks),
     })
+}
+
+/// A clip's effects list. Only a constant retime is modelled, and it is
+/// written twice on purpose: OTIO's own `time_scalar` so that another tool
+/// sees the speed, and the exact pair under `metadata.cine` so that a round
+/// trip through this writer is lossless.
+fn effects_value(c: &Clip) -> J {
+    let Some(retime) = c.retime else {
+        return json!([]);
+    };
+    let (num, den) = retime.speed_of(c.media_duration());
+    let scalar = num as f64 / den as f64;
+    json!([{
+        "OTIO_SCHEMA": "LinearTimeWarp.1",
+        "name": "retime",
+        "effect_name": "LinearTimeWarp",
+        "metadata": {
+            "cine": { "played": time_value(retime.played), "reversed": retime.reversed }
+        },
+        "time_scalar": if retime.reversed { -scalar } else { scalar },
+    }])
 }
 
 fn metadata_value(m: &Metadata) -> J {
@@ -441,7 +543,7 @@ pub fn item_value(item: &Item) -> J {
             "metadata": metadata_value(&c.metadata),
             "name": c.name,
             "source_range": opt_range_value(c.source_range),
-            "effects": [],
+            "effects": effects_value(c),
             "markers": markers_value(&c.markers),
             "enabled": c.enabled,
             "media_references": media_references_value(c),

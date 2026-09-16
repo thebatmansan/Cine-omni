@@ -48,6 +48,7 @@ fn each_sequence_picture_is_the_picture_the_edit_list_names() {
             path: Some(a.clone()),
             offset: Some(offset_of(&ra, 10)),
             unplayable: None,
+            speed: None,
             name: "A".into(),
         },
         EditEntry {
@@ -55,6 +56,7 @@ fn each_sequence_picture_is_the_picture_the_edit_list_names() {
             path: Some(b.clone()),
             offset: Some(offset_of(&rb, 40)),
             unplayable: None,
+            speed: None,
             name: "B".into(),
         },
     ];
@@ -115,6 +117,7 @@ fn an_unplayable_entry_is_black_and_says_why() {
             path: Some(a.clone()),
             offset: Some(offset_of(&ra, 0)),
             unplayable: None,
+            speed: None,
             name: "A".into(),
         },
         EditEntry {
@@ -122,6 +125,7 @@ fn an_unplayable_entry_is_black_and_says_why() {
             path: None,
             offset: None,
             unplayable: Some("the media is offline".into()),
+            speed: None,
             name: "Missing".into(),
         },
     ];
@@ -147,6 +151,7 @@ fn the_scheduler_plays_a_cut_across_its_edit_points() {
             path: Some(a),
             offset: Some(offset_of(&ra, 0)),
             unplayable: None,
+            speed: None,
             name: "A".into(),
         },
         EditEntry {
@@ -154,6 +159,7 @@ fn the_scheduler_plays_a_cut_across_its_edit_points() {
             path: Some(b),
             offset: Some(offset_of(&rb, 0)),
             unplayable: None,
+            speed: None,
             name: "B".into(),
         },
     ];

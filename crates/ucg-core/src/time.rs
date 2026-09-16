@@ -742,4 +742,35 @@ mod tests {
         assert!(RationalTime::from_timecode("00:01:00;02", 29.97).is_none());
         assert!(RationalTime::from_timecode("00:01:00:02", 29.97).is_some());
     }
+
+    /// A speed is a ratio, and the picture it names is floored onto real
+    /// frames: there is no picture between two pictures.
+    #[test]
+    fn a_speed_floors_onto_the_media_frame_grid() {
+        use crate::Speed;
+        let f = |n: i64| RationalTime::exact(n, Rate::whole(24).unwrap());
+        let grid = Rate::whole(24).unwrap();
+        let double = Speed::new(2, 1, false);
+        assert_eq!(double.media_offset(f(0), grid), f(0));
+        assert_eq!(double.media_offset(f(10), grid), f(20));
+
+        // 8/5 is not a whole number of frames per frame, and it does not
+        // become one by rounding early.
+        let odd = Speed::new(8, 5, false);
+        assert_eq!(odd.media_offset(f(1), grid), f(1), "1.6 floors to 1");
+        assert_eq!(
+            odd.media_offset(f(5), grid),
+            f(8),
+            "and five frames is exactly eight"
+        );
+        assert_eq!(odd.media_offset(f(100), grid), f(160));
+
+        // Backwards, the offset runs the other way.
+        assert_eq!(Speed::new(1, 1, true).media_offset(f(7), grid), f(-7));
+
+        // Across rates, with no float anywhere: half a second of 30000/1001
+        // record time at real time is twelve pictures of 24 fps media.
+        let ntsc = RationalTime::exact(15, Rate::new(30000, 1001).unwrap());
+        assert_eq!(Speed::new(1, 1, false).media_offset(ntsc, grid), f(12));
+    }
 }

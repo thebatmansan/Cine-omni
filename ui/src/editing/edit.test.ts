@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Time, TimelineItem, TimelineTrack } from "../rpc/client";
-import { editFor, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel } from "./edit";
+import { canTrim, editFor, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel } from "./edit";
 
 const R24 = { num: 24, den: 1 };
 const NTSC = { num: 24000, den: 1001 };
@@ -28,6 +28,7 @@ function item(index: number, start: number, dur: number, kind: TimelineItem["kin
     available_range: null,
     handles: null,
     link: null,
+    speed: null,
     needs_conform: false,
     conform_reason: null,
     scenes: [],
@@ -151,5 +152,39 @@ describe("record marks", () => {
     // second of time, and the band has to sit where the frames are.
     const ntsc = { num: 30000, den: 1001 };
     expect(markSecondsOf({ in: 0, out: 29 }, ntsc).out).toBeCloseTo((30 * 1001) / 30000, 12);
+  });
+});
+
+describe("trim handles", () => {
+  const video: TimelineTrack = {
+    index: 0,
+    id: "t0",
+    name: "V1",
+    kind: "video",
+    enabled: true,
+    locked: false,
+    muted: false,
+    solo: false,
+    targeted: true,
+    duration: t(0),
+    items: [],
+    markers: [],
+  };
+
+  it("are offered on an ordinary clip with a trimming tool", () => {
+    expect(canTrim(item(0, 0, 24), video, "select")).toBe(true);
+    expect(canTrim(item(0, 0, 24), video, "roll")).toBe(true);
+    expect(canTrim(item(0, 0, 24), video, "razor")).toBe(false);
+  });
+
+  it("are withheld from a retimed clip, because the runtime refuses the edit", () => {
+    const retimed = { ...item(0, 0, 24), speed: { media: 2, track: 1, reversed: false, label: "2x" } };
+    expect(canTrim(retimed, video, "select")).toBe(false);
+    expect(canTrim(retimed, video, "ripple")).toBe(false);
+  });
+
+  it("are withheld from transitions and locked tracks", () => {
+    expect(canTrim(item(0, 0, 24, "transition"), video, "select")).toBe(false);
+    expect(canTrim(item(0, 0, 24), { ...video, locked: true }, "select")).toBe(false);
   });
 });

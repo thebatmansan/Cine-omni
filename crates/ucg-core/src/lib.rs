@@ -29,7 +29,7 @@ pub mod value;
 
 pub use engine::{ChangeSet, Engine, EngineLimits, EngineStats, History, Plan, Reactor, UndoGroup};
 pub use error::{Result, UcgError};
-pub use exact_time::{Rate, Rounding};
+pub use exact_time::{Rate, Rounding, Speed};
 pub use graph::Graph;
 pub use id::EntityId;
 pub use node::{Edge, EdgeKind, Node, NodeKind};

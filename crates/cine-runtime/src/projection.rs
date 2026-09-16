@@ -35,6 +35,21 @@ pub fn time(t: RationalTime) -> J {
     })
 }
 
+/// A clip's speed: the exact ratio, and a label for a badge.
+///
+/// The label is display only — `2x`, `-1x`, `0.3333x` — and the ratio beside
+/// it is the number. Nothing computes from the label.
+fn speed_json(((media, track), reversed): ((i64, i64), bool)) -> J {
+    let n = format!("{:.4}", media as f64 / track as f64);
+    let n = n.trim_end_matches('0').trim_end_matches('.');
+    json!({
+        "media": media,
+        "track": track,
+        "reversed": reversed,
+        "label": format!("{}{n}x", if reversed { "-" } else { "" }),
+    })
+}
+
 pub fn range(r: TimeRange) -> J {
     json!({
         "start": time(r.start_time),
@@ -124,6 +139,7 @@ pub fn timeline(graph: &Graph, id: EntityId) -> Result<J, String> {
                     .and_then(cine_timeline::session::handles)
                     .map(|(head, tail)| json!({ "head": time(head), "tail": time(tail) })),
                 "link": clip.and_then(cine_timeline::session::link_of),
+                "speed": clip.and_then(|c| c.speed()).map(speed_json),
                 "needs_conform": item.ucg_id().and_then(|c| graph.node(c))
                     .and_then(|n| n.get_bool(attrs::NEEDS_CONFORM)).unwrap_or(false),
                 "conform_reason": item.ucg_id().and_then(|c| graph.node(c))
@@ -303,14 +319,23 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
     let Some(entry) = list.at(at) else {
         return Ok(json!({ "black": true }));
     };
-    let offset = entry
-        .offset
-        .map(|o| o.checked_add(&at.checked_sub(&entry.record.start_time)));
     let available = entry
         .asset
         .and_then(|a| graph.node(a))
         .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
         .and_then(ucg_core::Value::as_range);
+    // How far into the entry this instant is, carried into media time through
+    // the retime when there is one. The speed's own arithmetic is exact and
+    // floors onto the asset's frame grid, so this never invents a picture
+    // between two pictures.
+    let into = at.checked_sub(&entry.record.start_time);
+    let offset = entry.offset.map(|o| {
+        let media = match (entry.speed, available) {
+            (Some(s), Some(a)) => s.media_offset(into, a.start_time.rate_exact()),
+            _ => into,
+        };
+        o.checked_add(&media)
+    });
     let index = offset.zip(available).map(|(o, a)| {
         // Pictures are counted at the rate the asset declares its range in.
         let (t, _) = o.rescale_checked(a.start_time.rate_exact(), Rounding::Floor);
@@ -326,6 +351,11 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
         "name": entry.name,
         "asset": entry.asset,
         "online": entry.online,
+        "speed": entry.speed.map(|s| json!({
+            "media": s.media, "track": s.track, "reversed": s.reversed,
+        })),
+        "playable": entry.unplayable().is_none(),
+        "why_not": entry.unplayable(),
         "source": offset.zip(available).map(|(o, a)| time(a.start_time.checked_add(&o))),
         "index": index.filter(|i| *i >= 0),
     }))
@@ -347,6 +377,9 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<J, String> {
             "name": e.name,
             "asset": e.asset,
             "offset": e.offset.map(time),
+            "speed": e.speed.map(|s| json!({
+                "media": s.media, "track": s.track, "reversed": s.reversed,
+            })),
             "playable": e.unplayable().is_none(),
             "why_not": e.unplayable(),
         })).collect::<Vec<_>>(),

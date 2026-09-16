@@ -636,3 +636,87 @@ fn marks_decide_the_edit_and_the_plan_says_which_point_was_derived() {
         .expect_err("the media is not that long");
     assert!(e.contains("past the end of the media"), "{e}");
 }
+
+/// Retiming over the protocol: a clip plays at a speed, everything after it
+/// moves, the record monitor shows the right picture, and undo puts it back.
+#[test]
+fn a_clip_can_be_retimed_and_the_cut_follows() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Speed", "rate_num": 24, "rate_den": 1 }),
+    );
+    let tl = made["id"].as_str().unwrap().to_string();
+    let v1 = c.call("timeline", json!({ "id": tl }))["tracks"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let media = c.call("media", json!({}));
+    let asset = media
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"].as_str().is_some_and(|n| n.contains("A001_C003")))
+        .expect("the fixture's asset")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Two 48-frame clips end to end.
+    for at in [0, 48] {
+        c.call(
+            "three_point",
+            json!({ "tracks": [v1], "media": asset, "mode": "overwrite",
+                    "source": { "in": frames(0), "out": frames(48) },
+                    "record": { "in": frames(at) } }),
+        );
+    }
+    let seq = c.call("timeline", json!({ "id": tl }));
+    assert_eq!(seq["duration"]["ticks"], 96);
+    let clip = seq["tracks"][0]["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Double speed: 48 frames of media over 24 of timeline.
+    c.call("retime", json!({ "clip": clip, "played": frames(24) }));
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let first = &seq["tracks"][0]["items"][0];
+    assert_eq!(first["at"]["duration"]["ticks"], 24);
+    assert_eq!(first["speed"]["media"], 2);
+    assert_eq!(first["speed"]["track"], 1);
+    assert_eq!(first["speed"]["label"], "2x");
+    assert_eq!(
+        seq["tracks"][0]["items"][1]["at"]["start"]["ticks"], 24,
+        "the clip after it moved up"
+    );
+    assert_eq!(seq["duration"]["ticks"], 72);
+
+    // The record monitor shows the picture the speed says: ten frames in is
+    // twenty media frames in.
+    let shown = c.call("picture_at", json!({ "timeline": tl, "time": frames(10) }));
+    assert_eq!(shown["black"], false);
+    assert_eq!(shown["speed"]["media"], 2);
+    assert_eq!(shown["index"], 20);
+
+    // And taking the retime off puts the cut back.
+    c.call("retime", json!({ "clip": clip, "played": Value::Null }));
+    let seq = c.call("timeline", json!({ "id": tl }));
+    assert_eq!(seq["duration"]["ticks"], 96);
+    assert!(seq["tracks"][0]["items"][0]["speed"].is_null());
+
+    // Fit to fill settles four marks by changing the speed instead.
+    let r = c.call(
+        "three_point",
+        json!({ "tracks": [v1], "media": asset, "mode": "overwrite",
+                "source": { "in": frames(0), "out": frames(48) },
+                "record": { "in": frames(0), "out": frames(24) },
+                "mismatch": "fit_to_fill" }),
+    );
+    assert_eq!(r["plan"]["retime"]["played"]["ticks"], 24);
+    assert!(r["plan"]["reconciled"]
+        .as_str()
+        .unwrap()
+        .contains("a speed of 2/1"));
+}

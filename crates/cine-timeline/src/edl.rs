@@ -13,12 +13,22 @@
 //!   record timecode at the timeline's rate;
 //! * `V`, `A`, or `A2` channel codes from the track's kind and index;
 //! * `* FROM CLIP NAME:` comments, which every NLE reads back;
-//! * `C` (cut) transitions only.
+//! * `C` (cut) transitions only;
+//! * an `M2` motion record for a retimed clip, giving the speed in frames per
+//!   second (negative when the media runs backwards).
 //!
 //! What it refuses rather than approximates, in [`EdlReport::left_behind`]:
 //! transitions other than cuts, more than one video track, clips with no
 //! source range, and anything the format has no column for. The report is
 //! returned with the text so a caller can say what the EDL is not.
+//!
+//! One ambiguity is worth naming because no amount of care removes it. For a
+//! retimed event, readers disagree about whether the source columns hold the
+//! *media consumed* or the *record length*. This writes the media consumed,
+//! which is what the event actually plays, and the `M2` record carries the
+//! speed that reconciles the two. A reader that assumes the other convention
+//! will place the media correctly and get the speed from `M2` anyway, but the
+//! report says so rather than leaving it to be discovered in a grade.
 
 use crate::otio::{Item, Timeline, TrackKind};
 use ucg_core::{RationalTime, TimeRange};
@@ -117,8 +127,36 @@ pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (Strin
                     continue;
                 };
                 number += 1;
-                let record = TimeRange::new(at, source.duration);
+                // The record columns are the clip's length on the track and
+                // the source columns are the media it consumes. Without a
+                // retime these are the same number; with one they are not,
+                // and writing the same number twice would be the bug.
+                let played = clip.duration();
+                let record = TimeRange::new(at, played);
                 let reel = reel_name(&clip.name);
+                if let Some(((num, den), reversed)) = clip.speed() {
+                    let fps = source.duration.rate_hz() * num as f64 / den as f64;
+                    let fps = if reversed { -fps } else { fps };
+                    // The first picture the event shows, which for a reversed
+                    // clip is the last frame of the range.
+                    let first = clip
+                        .media_time_at(
+                            RationalTime::zero(played.rate_exact()),
+                            RationalTime::zero(played.rate_exact()),
+                        )
+                        .unwrap_or(source.start_time);
+                    out.push_str(&format!(
+                        "M2   {reel:<8}       {fps:>8.2} {}\n",
+                        first.to_timecode()
+                    ));
+                    report.left_behind.push(format!(
+                        "`{}` is retimed to {num}/{den}{}: the speed is in an M2 record, and \
+                         readers differ on whether a retimed event's source columns are the \
+                         media or the record length — these are the media",
+                        clip.name,
+                        if reversed { " reversed" } else { "" },
+                    ));
+                }
                 out.push_str(&format!(
                     "{number:03}  {reel:<8} {channel:<4} C        {} {} {} {}\n",
                     source.start_time.to_timecode(),
@@ -128,7 +166,7 @@ pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (Strin
                     channel = channel.code(),
                 ));
                 out.push_str(&format!("* FROM CLIP NAME: {}\n", clip.name.to_uppercase()));
-                at = at.checked_add(&source.duration);
+                at = at.checked_add(&played);
                 report.events += 1;
             }
         }

@@ -460,6 +460,10 @@ fn plan_json(plan: &cine_timeline::Plan) -> J {
         "source": crate::projection::range(plan.source),
         "record": crate::projection::range(plan.record),
         "backtimed": plan.backtimed,
+        "retime": plan.retime.map(|r| json!({
+            "played": crate::projection::time(r.played),
+            "reversed": r.reversed,
+        })),
         "derived": plan.derived,
         "reconciled": plan.reconciled,
         "description": plan.describe(),
@@ -687,6 +691,7 @@ pub fn dispatch_with(
                 Some("trim_tail") => cine_timeline::Mismatch::TrimSourceTail,
                 Some("trim_head") => cine_timeline::Mismatch::TrimSourceHead,
                 Some("honour_source") => cine_timeline::Mismatch::HonourSource,
+                Some("fit_to_fill") => cine_timeline::Mismatch::FitToFill,
                 _ => cine_timeline::Mismatch::Refuse,
             };
             let label = match kind {
@@ -717,6 +722,34 @@ pub fn dispatch_with(
             out["clips"] = json!(placed);
             out["plan"] = plan_json(&plan);
             out
+        }
+        "retime" => {
+            let clip = entity(params, "clip")?;
+            // A `played` of null takes the retime off and the clip plays in
+            // real time again.
+            let retime = match params.get("played") {
+                None | Some(J::Null) => None,
+                Some(v) => Some(cine_timeline::Retime {
+                    played: serde_json::from_value(v.clone())
+                        .map_err(|e| format!("invalid played length: {e}"))?,
+                    reversed: params.get("reversed").and_then(J::as_bool).unwrap_or(false),
+                }),
+            };
+            let group = p
+                .engine
+                .transact(
+                    if retime.is_some() {
+                        "retime clip"
+                    } else {
+                        "clip plays in real time"
+                    },
+                    |tx| {
+                        cine_timeline::graph::set_clip_retime(tx, clip, retime)
+                            .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                    },
+                )
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
         }
         "jobs" => {
             let jobs = p

@@ -1004,6 +1004,9 @@ impl App {
             seq.rate.num(),
             seq.rate.den()
         );
+        for why in &seq.sound_not_played {
+            println!("sound not played — {why}");
+        }
         let source = EditListSource::new(seq.rate, seq.end, seq.entries.clone());
         let Some((start, end)) = source.extent() else {
             self.sequence = Some(seq);

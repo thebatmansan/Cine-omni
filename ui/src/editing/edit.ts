@@ -63,6 +63,20 @@ export function framesIn(s: number, rate: Rate): number {
   return Math.round((s * rate.num) / rate.den);
 }
 
+/**
+ * Whether a clip offers trim handles.
+ *
+ * A retimed clip does not: the runtime refuses trims, rolls and joins on one
+ * rather than guess whether the editor meant to keep the speed or the media,
+ * and a grip that always fails is worse than no grip. Transitions and locked
+ * tracks are the older reasons.
+ */
+export function canTrim(item: TimelineItem, track: TimelineTrack, tool: Tool): boolean {
+  if (item.kind === "transition" || track.locked) return false;
+  if (item.speed) return false;
+  return tool === "select" || tool === "ripple" || tool === "roll";
+}
+
 /** A pair of marks in whole frames at some rate. `null` is unmarked. */
 export interface FrameMarks {
   in: number | null;

@@ -514,6 +514,17 @@ demonstrably runs. `ShellCapabilities::PLAYBACK` is now `Degraded`, naming the
 * **Cold seek into a long GOP costs the walk** — 4.8 s for picture 110. Nothing
   avoids that yet.
 * **No parallel decode.** Two physical cores; one decode worker.
+* **A retimed entry is decoded by random access.** The picture a retimed clip
+  shows is exact — the offset into the entry is carried into media time by
+  `Speed::media_offset`, the same function the editorial model and the browser's
+  record monitor use — but a reversed clip asks for an *earlier* picture each
+  time, which costs a walk from the preceding keyframe for every one. That is
+  reported as `Degraded`; it is not smoothed over and it is not called
+  unplayable.
+* **Retimed sound is not played at all.** Keeping its pitch needs resampling,
+  which the mixer does not do, so the sequence plan lists it under
+  `sound_not_played` with the reason and the window plays silence there rather
+  than something at the wrong pitch.
 * **Edit lists are not parsed.** The reference asset presents from 1024/12288
   rather than 0, and nothing compensates. Anything that assumes media starts at
   zero is wrong on this file.

@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { useState } from "react";
-import { MediaView, ScriptView, TimelineItem, TimelineTrack, TimelineView } from "../rpc/client";
+import { ExactTime, MediaView, ScriptView, TimelineItem, TimelineTrack, TimelineView } from "../rpc/client";
 
 /** Whatever is selected, in detail. Values come from the projection unchanged. */
 export function Inspector({
@@ -12,6 +12,7 @@ export function Inspector({
   onBind,
   onUnbind,
   onJob,
+  onRetime,
 }: {
   timeline: TimelineView | null;
   selection: { item: TimelineItem; track: TimelineTrack } | null;
@@ -21,6 +22,7 @@ export function Inspector({
   onBind?(clip: string, scene: string): void;
   onUnbind?(clip: string, scene: string): void;
   onJob?(kind: string, params: Record<string, unknown>): void;
+  onRetime?(clip: string, played: ExactTime | null, reversed: boolean): void;
 }) {
   return (
     <div className="inspector">
@@ -28,6 +30,9 @@ export function Inspector({
         {selection && (
           <>
             <ClipDetail item={selection.item} track={selection.track} />
+            {selection.item.kind === "clip" && selection.item.id && onRetime && (
+              <Speed item={selection.item} clip={selection.item.id} onRetime={onRetime} />
+            )}
             {selection.item.kind === "clip" && selection.item.id && (
               <Context
                 item={selection.item}
@@ -59,6 +64,82 @@ export function Inspector({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A clip's speed.
+ *
+ * The control asks for a *length*, not a percentage, because a length is what
+ * a retime exactly is: this many frames of media, over that many of timeline.
+ * A percentage would have to become a length anyway, and the rounding would
+ * happen somewhere nobody could see it. The speed shown beside it is the
+ * runtime's own ratio.
+ */
+function Speed({
+  item,
+  clip,
+  onRetime,
+}: {
+  item: TimelineItem;
+  clip: string;
+  onRetime(clip: string, played: ExactTime | null, reversed: boolean): void;
+}) {
+  const [frames, setFrames] = useState("");
+  if (!item.source_range) return null;
+  const rate = { num: item.at.duration.rate_num, den: item.at.duration.rate_den };
+  const current = item.at.duration.ticks;
+  const media = item.source_range.duration;
+  const wanted = Number(frames);
+
+  return (
+    <>
+      <div className="section-title">Speed</div>
+      <dl className="props">
+        <dt>plays</dt>
+        <dd>{item.speed ? item.speed.label : "real time"}</dd>
+        <dt>media</dt>
+        <dd>
+          {media.ticks} frames @ {media.rate_num}/{media.rate_den}
+        </dd>
+        <dt>on the cut</dt>
+        <dd>{current} frames</dd>
+      </dl>
+      <div className="row">
+        <input
+          type="number"
+          min={1}
+          placeholder={String(current)}
+          value={frames}
+          aria-label="length on the timeline in frames"
+          onChange={(e) => setFrames(e.target.value)}
+        />
+        <button
+          disabled={!Number.isInteger(wanted) || wanted < 1}
+          onClick={() => {
+            onRetime(clip, { ticks: wanted, rate_num: rate.num, rate_den: rate.den }, false);
+            setFrames("");
+          }}
+        >
+          Fit to length
+        </button>
+        <button
+          title="Play the media backwards over the same length"
+          onClick={() => onRetime(clip, item.at.duration, !(item.speed?.reversed ?? false))}
+        >
+          {item.speed?.reversed ? "Forwards" : "Backwards"}
+        </button>
+        <button disabled={!item.speed} onClick={() => onRetime(clip, null, false)}>
+          Real time
+        </button>
+      </div>
+      {item.speed && (
+        <div className="note">
+          Trims, rolls and joins refuse a retimed clip rather than guess whether you meant
+          to keep the speed or the media. Set the length again instead.
+        </div>
+      )}
+    </>
   );
 }
 

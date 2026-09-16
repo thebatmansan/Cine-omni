@@ -41,6 +41,9 @@ pub mod nle_attrs {
     pub const MEDIA_REF: &str = "nle.media_ref";
     pub const MARKER_COLOR: &str = "nle.color";
     pub const MARKER_COMMENT: &str = "nle.comment";
+    /// A retimed clip's length on the track. Absent means real time.
+    pub const RETIME_PLAYED: &str = "nle.retime_played";
+    pub const RETIME_REVERSED: &str = "nle.retime_reversed";
 }
 
 /// An edit applied to a track node by [`apply_edit`]. See [`crate::edit`]
@@ -463,6 +466,22 @@ fn write_item(
         Item::Clip(clip) => {
             tx.set(id, nle_attrs::ENABLED, clip.enabled)?;
             set_opt(tx, id, attrs::SOURCE_RANGE, clip.source_range)?;
+            // The retime is the pair, stored exactly. `ClipRef::source_range`
+            // below stays the media consumed, and `attrs::RANGE` above is
+            // already the clip's length on the track, so a reader that knows
+            // nothing about retiming still composes the cut correctly.
+            set_opt(
+                tx,
+                id,
+                nle_attrs::RETIME_PLAYED,
+                clip.retime.map(|r| r.played),
+            )?;
+            set_opt(
+                tx,
+                id,
+                nle_attrs::RETIME_REVERSED,
+                clip.retime.map(|r| r.reversed),
+            )?;
             let media = write_media_reference(tx, id, &clip.media_reference)?;
             let clip_ref = ClipRef {
                 media,
@@ -729,6 +748,13 @@ pub fn export_item(graph: &Graph, id: EntityId) -> Result<Item> {
                 name,
                 media_reference,
                 source_range: node.get(attrs::SOURCE_RANGE).and_then(Value::as_range),
+                retime: node
+                    .get(nle_attrs::RETIME_PLAYED)
+                    .and_then(Value::as_time)
+                    .map(|played| Retime {
+                        played,
+                        reversed: node.get_bool(nle_attrs::RETIME_REVERSED).unwrap_or(false),
+                    }),
                 markers,
                 metadata,
                 enabled: node.get_bool(nle_attrs::ENABLED).unwrap_or(true),
@@ -1063,6 +1089,55 @@ pub fn place_material(
         }
     }
     Ok(placed)
+}
+
+/// Set or clear a clip's retime.
+///
+/// A retime changes how long the clip takes on its track, so everything after
+/// it moves: this is a ripple, not an attribute set, and it goes through the
+/// track's own writer for the same reason every other edit does — the ranges
+/// of the items after it have to be rewritten, and one place should do that.
+///
+/// Refused when the clip has no source range (there is no media length to
+/// play at a speed), when the new length is not positive, or when the clip
+/// would end up consuming no picture at all.
+pub fn set_clip_retime(tx: &mut Tx, clip: EntityId, retime: Option<Retime>) -> Result<()> {
+    require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;
+    let track = tx.graph().parent(clip).ok_or(Error::MissingAttr {
+        id: clip,
+        attr: "a track",
+    })?;
+    let mut t = export_track(tx.graph(), track)?;
+    let index = t
+        .children
+        .iter()
+        .position(|i| i.ucg_id() == Some(clip))
+        .ok_or(Error::MissingAttr {
+            id: clip,
+            attr: "a place on its track",
+        })?;
+    crate::session::ensure_unlocked(&t)?;
+    let Item::Clip(c) = &mut t.children[index] else {
+        return Err(Error::NotAnItem(index));
+    };
+    if let Some(r) = retime {
+        let media = c.source_range.ok_or_else(|| {
+            Error::Edit("a clip with no source range has no media to play at a speed".into())
+        })?;
+        if r.played <= RationalTime::zero(r.played.rate_exact()) {
+            return Err(Error::Edit(
+                "a retime has to leave the clip some length on the track".into(),
+            ));
+        }
+        if media.duration <= RationalTime::zero(media.duration.rate_exact()) {
+            return Err(Error::Edit("the clip plays no media".into()));
+        }
+    }
+    c.retime = retime;
+    t.validate()?;
+    let prefix = item_key_prefix(tx.graph(), track);
+    let ids = assign_item_ids(tx.graph(), track, &t, &prefix, true);
+    write_track_items(tx, track, &t, &ids)
 }
 
 /// Put a clip into a link group (or take it out with `None`).

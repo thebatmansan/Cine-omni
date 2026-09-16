@@ -286,18 +286,56 @@ in frames rather than discovered at playback.
 Four marks are a different question, and the interface makes the editor answer
 it rather than answering quietly: when the two durations disagree the edit is
 refused by default, naming the difference, and the `4-pt` control chooses
-between trimming the source at the head or the tail and keeping the source's
-length by moving a timeline point.
+between trimming the source at the head or the tail, keeping the source's
+length by moving a timeline point, and *fit to fill* — which keeps both and
+changes the clip's speed.
+
+### Speed
+
+A retimed clip plays its media over a different length of track. The model
+holds that as two exact durations rather than a floating-point scalar: 48
+frames of media over 24 of timeline is a speed of exactly two, where a
+`time_scalar` of 2.0 and one of 1.9999999 put a picture either side of a frame
+boundary after a few minutes. The inspector asks for the length for the
+same reason — a percentage would have to become a length anyway, and the
+rounding would happen where nobody could see it.
+
+Everything downstream carries it. The cut recomposes, because a retime is a
+ripple; the clip shows its speed as a badge; the record monitor resolves the
+right picture, floored onto the media's own frames because there is no picture
+between two pictures; the EDL writes an `M2` motion record with the play rate;
+and the OTIO file carries both the exact pair and a `LinearTimeWarp` for other
+tools.
+
+A retimed clip can still be cut. The two halves keep their track lengths
+exactly and divide the media between them with nothing lost, so together they
+consume the same frames over the same time; each half's own speed can differ
+from the original by less than one media frame over its length, because the cut
+has to land on a picture. A cut so fine that one side would hold no picture at
+all is refused rather than made.
+
+What a retimed clip will not do is be trimmed, rolled or joined. Pulling the
+tail of a clip playing at 1.3× either keeps the speed — and then needs a
+fraction of a media frame — or keeps the media and changes the speed, and an
+editor that picks one silently is wrong half the time. Those edits refuse and
+say what the two choices are; setting the length again expresses either of them
+exactly. Slipping is allowed, because sliding the media under a retime changes
+neither the speed nor the length.
 
 ## What remains
 
 * **No multi-select, no linked selection, no sync-break indicator.** Edits follow
   links; the interface does not yet draw a broken sync.
-* **Fit-to-fill is not on offer.** Four marks that disagree can be settled by
-  trimming the source at either end or by keeping the source's length and
-  moving a timeline point; changing the clip's *speed* to stretch it onto the
-  marks would need a time effect the model does not have, and the refusal says
-  so rather than doing a trim under that name.
+* **Speed ramps do not exist.** A retime is one constant speed for the whole
+  clip. A ramp is a curve, and nothing in the model carries a curve yet.
+* **Retimed sound is not resampled.** The mixer plays sound at real time; a
+  retimed sound clip is reported with its speed so that a caller refuses it
+  rather than playing it at the wrong pitch.
+* **Reverse plays, slowly.** A reversed clip composes, exports and resolves the
+  right picture; but each successive picture is *earlier* in the file, so every
+  one costs a walk from the preceding keyframe. The scheduler reports that as
+  `Degraded` — it is not pretended to be smooth, and it is not pretended to be
+  broken either.
 * **Join and replace are protocol-only**; no gesture reaches them.
 * **Placing material assumes the sequence can hold it**: a clip at 30 fps in a
   24 fps sequence is placed with its exact duration, which is not a whole number

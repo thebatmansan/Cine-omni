@@ -170,6 +170,7 @@ impl ProjectLink for RuntimeLink {
                 path: e.path.clone(),
                 offset: e.offset,
                 unplayable: e.unplayable().map(str::to_string),
+                speed: e.speed,
                 name: e.name.clone(),
             })
             .collect();
@@ -178,13 +179,30 @@ impl ProjectLink for RuntimeLink {
             .iter()
             .map(|e| SoundEntry {
                 record: e.record,
-                path: e.unplayable().is_none().then(|| e.path.clone()).flatten(),
+                // Retimed sound would have to be resampled to keep its pitch,
+                // which the mixer does not do, so it is not handed to it: the
+                // sequence plan says why below rather than playing it wrong.
+                path: (e.unplayable().is_none() && e.speed.is_none())
+                    .then(|| e.path.clone())
+                    .flatten(),
                 offset: e.offset,
                 name: e.name.clone(),
             })
             .collect();
+        let sound_not_played = list
+            .sound
+            .iter()
+            .filter(|e| e.speed.is_some())
+            .map(|e| {
+                format!(
+                    "{}: retimed sound would have to be resampled to keep its pitch",
+                    e.name
+                )
+            })
+            .collect();
         Some(SequencePlan {
             sound,
+            sound_not_played,
             id,
             name: list.name.clone(),
             rate: list.rate,

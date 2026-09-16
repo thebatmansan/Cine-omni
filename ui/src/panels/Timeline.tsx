@@ -10,6 +10,7 @@ import type {
 import {
   TOOLS,
   Tool,
+  canTrim,
   editFor,
   frameLabel,
   framesIn,
@@ -215,6 +216,7 @@ export function Timeline({
               <option value="trim_tail">trim source tail</option>
               <option value="trim_head">trim source head</option>
               <option value="honour_source">keep source length</option>
+            <option value="fit_to_fill">fit to fill (change speed)</option>
             </select>
           </label>
         </div>
@@ -432,12 +434,15 @@ function Clip({
   const kindClass =
     item.kind === "clip" ? track.kind : item.kind === "gap" ? "gap" : "transition";
   const editable = item.kind !== "transition" && !track.locked;
-  const edges = editable && width > 10 && (tool === "select" || tool === "ripple" || tool === "roll");
+  const edges = canTrim(item, track, tool) && width > 10;
   const title = [
     `${item.name} · ${item.at.start.timecode} → ${item.at.end.timecode}`,
     item.needs_conform ? `Needs conform: ${item.conform_reason ?? "source changed"}` : null,
     item.link ? `Linked: ${item.link}` : null,
     item.scenes.length ? `Bound to ${item.scenes.length} scene(s)` : null,
+    item.speed
+      ? `Retimed: ${item.speed.media}/${item.speed.track}${item.speed.reversed ? " reversed" : ""}`
+      : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -470,6 +475,7 @@ function Clip({
           {item.needs_conform && <span className="glyph conform-glyph">!</span>}
           {item.link && <span className="glyph">∞</span>}
           {item.scenes.length > 0 && <span className="glyph">SC</span>}
+          {item.speed && <span className="glyph speed-glyph">{item.speed.label}</span>}
           {item.name}
         </div>
       )}
