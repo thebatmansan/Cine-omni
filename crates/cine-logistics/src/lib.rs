@@ -49,7 +49,9 @@ pub mod pdf;
 pub mod schedule;
 pub mod shotlist;
 
-pub use breakdown::{breakdown_document, breakdown_scene, SceneBreakdown};
+pub use breakdown::{
+    breakdown_document, breakdown_scene, SceneBreakdown, SceneTags, ATTR_BREAKDOWN_TAGS,
+};
 pub use callsheet::{build_call_sheet, CallSheet, CallSheetScene, CastCall, CastRoster, CrewCall};
 pub use date::{Date, DateRange, Time, Weekday};
 pub use dood::{day_out_of_days, CastRow, DayOutOfDays, Status};

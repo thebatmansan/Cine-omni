@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CallSheetView, LDate, LTime, ProductionView, ScheduleConstraints, Strip } from "../rpc/client";
+import type {
+  CallSheetView,
+  LDate,
+  LTime,
+  ProductionView,
+  SceneBreakdown,
+  ScheduleConstraints,
+  Strip,
+} from "../rpc/client";
 
 /**
  * The production office: the stripboard, the constraints it was built under,
@@ -23,11 +31,14 @@ export function Production({
   production,
   onConstraints,
   onMoveStrip,
+  onTag,
 }: {
   production: ProductionView | null;
   onConstraints(document: string, c: ScheduleConstraints): void;
   /** Put a scene on a day, or `null` to release it back to the scheduler. */
   onMoveStrip?(document: string, scene: string, day: number | null): void;
+  /** Tag or untag a breakdown element; `present` undefined reverts to the script. */
+  onTag?(scene: string, category: string, value: string, present?: boolean): void;
 }) {
   const [scene, setScene] = useState<string | null>(null);
   const [day, setDay] = useState<number>(1);
@@ -240,19 +251,53 @@ export function Production({
                   <dd>{eighths(breakdown.page_eighths)}</dd>
                   <dt>est. screen time</dt>
                   <dd>{breakdown.est_minutes.toFixed(1)} min</dd>
-                  <dt>cast</dt>
-                  <dd>{breakdown.cast.join(", ") || "—"}</dd>
-                  <dt>props</dt>
-                  <dd>{breakdown.props.join(", ") || "—"}</dd>
                   <dt>extras</dt>
                   <dd>{breakdown.extras_hint ?? "—"}</dd>
-                  <dt>flags</dt>
-                  <dd>
-                    {[breakdown.vehicles && "vehicles", breakdown.animals && "animals", breakdown.sfx && "SFX", breakdown.vfx && "VFX"]
-                      .filter(Boolean)
-                      .join(" · ") || "—"}
-                  </dd>
                 </dl>
+                <Tagged
+                  label="cast"
+                  category="cast"
+                  breakdown={breakdown}
+                  items={breakdown.cast}
+                  added={breakdown.tags?.cast_added ?? []}
+                  onTag={onTag}
+                />
+                <Tagged
+                  label="props"
+                  category="prop"
+                  breakdown={breakdown}
+                  items={breakdown.props}
+                  added={breakdown.tags?.props_added ?? []}
+                  onTag={onTag}
+                />
+                <div className="section-title">Flags</div>
+                <div className="flags">
+                  {([
+                    ["vehicles", breakdown.vehicles, breakdown.tags?.vehicles],
+                    ["animals", breakdown.animals, breakdown.tags?.animals],
+                    ["sfx", breakdown.sfx, breakdown.tags?.sfx],
+                    ["vfx", breakdown.vfx, breakdown.tags?.vfx],
+                  ] as [string, boolean, boolean | null | undefined][]).map(([name, on, override]) => (
+                    <label key={name} className={override != null ? "tagged" : ""}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={!onTag}
+                        onChange={(e) => onTag?.(breakdown.scene, name, "", e.target.checked)}
+                      />
+                      {name}
+                      {override != null && (
+                        <button
+                          className="revert"
+                          title="Let the script decide again"
+                          onClick={() => onTag?.(breakdown.scene, name, "", undefined)}
+                        >
+                          ↺
+                        </button>
+                      )}
+                    </label>
+                  ))}
+                </div>
                 <div className="section-title">Shots</div>
                 {shots.length === 0 && <div className="hint">No shots: this scene has no previs cameras yet.</div>}
                 {shots.map((sh) => (
@@ -418,3 +463,74 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const isoDate = (d: LDate) => `${d.year}-${pad(d.month)}-${pad(d.day)}`;
 const dateLabel = (d: LDate) => isoDate(d);
 const timeLabel = (t: LTime) => `${pad(t.hour)}:${pad(t.minute)}`;
+
+/**
+ * One breakdown list, showing what the script said and what a person added.
+ *
+ * A tag is marked, because the difference matters on the day: the script is
+ * evidence, a tag is somebody's judgement, and the department reading it is
+ * entitled to know which it is looking at.
+ */
+function Tagged({
+  label,
+  category,
+  breakdown,
+  items,
+  added,
+  onTag,
+}: {
+  label: string;
+  category: string;
+  breakdown: SceneBreakdown;
+  items: string[];
+  added: string[];
+  onTag?(scene: string, category: string, value: string, present?: boolean): void;
+}) {
+  const [draft, setDraft] = useState("");
+  const isTagged = (v: string) => added.some((a) => a.toLowerCase() === v.toLowerCase());
+  return (
+    <>
+      <div className="section-title">{label}</div>
+      <div className="chips">
+        {items.length === 0 && <span className="hint">—</span>}
+        {items.map((item) => (
+          <span key={item} className={`chip${isTagged(item) ? " tagged" : ""}`}>
+            {item}
+            {isTagged(item) && <span className="mark" title="tagged by hand">•</span>}
+            {onTag && (
+              <button
+                aria-label={`Remove ${item} from ${label}`}
+                title={isTagged(item) ? "Remove this tag" : "Say this is not in the scene"}
+                onClick={() => onTag(breakdown.scene, category, item, false)}
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+      {onTag && (
+        <form
+          className="chip-add"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const value = draft.trim();
+            if (!value) return;
+            onTag(breakdown.scene, category, value, true);
+            setDraft("");
+          }}
+        >
+          <input
+            value={draft}
+            placeholder={`add ${label}…`}
+            aria-label={`Add to ${label}`}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button type="submit" disabled={!draft.trim()}>
+            +
+          </button>
+        </form>
+      )}
+    </>
+  );
+}

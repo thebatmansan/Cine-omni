@@ -5,7 +5,7 @@
 mod common;
 
 use common::Harness;
-use serde_json::{json, Value};
+use serde_json::{json, Value, Value as J};
 
 fn day_count(p: &Value) -> usize {
     p["schedule"]["days"].as_array().map(Vec::len).unwrap_or(0)
@@ -318,4 +318,118 @@ fn the_call_sheet_is_served_as_a_pdf_a_reader_can_open() {
         }
         std::fs::remove_dir_all(&dir).ok();
     }
+}
+
+/// Tagging a breakdown by hand, and the thing that makes it worth having: a
+/// rewrite re-derives the breakdown and the tags are still there.
+#[test]
+fn a_hand_tagged_element_survives_a_rewrite_of_the_scene() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let start = c.call("production", json!({}));
+    let scene = start["breakdowns"][0]["scene"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let props_of = |p: &Value| -> Vec<String> {
+        p["breakdowns"][0]["props"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    let before = props_of(&start);
+
+    // The first assistant adds something the script never mentions.
+    let tagged = c.call(
+        "tag_breakdown",
+        json!({ "scene": scene, "category": "prop", "value": "storm lantern", "present": true }),
+    );
+    assert!(!tagged["impact"]["departments"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let after = c.call("production", json!({}));
+    assert!(
+        props_of(&after).contains(&"storm lantern".to_string()),
+        "{:?}",
+        props_of(&after)
+    );
+    assert_eq!(
+        after["breakdowns"][0]["tags"]["props_added"][0],
+        json!("storm lantern"),
+        "and it says a person put it there"
+    );
+
+    // Rewrite the scene's dialogue: the breakdown is derived again.
+    let script = c.call("script", json!({}));
+    let line = script["documents"][0]["scenes"][0]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "dialogue")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    c.call(
+        "edit_dialogue",
+        json!({ "line": line, "text": "The lantern is out. We go by the sound of the bell." }),
+    );
+    let rewritten = c.call("production", json!({}));
+    assert!(
+        props_of(&rewritten).contains(&"storm lantern".to_string()),
+        "the rewrite did not take the tag with it: {:?}",
+        props_of(&rewritten)
+    );
+
+    // A script-derived element can be taken off, and the flags overruled.
+    if let Some(derived) = before.first() {
+        c.call(
+            "tag_breakdown",
+            json!({ "scene": scene, "category": "prop", "value": derived, "present": false }),
+        );
+        let pruned = c.call("production", json!({}));
+        assert!(
+            !props_of(&pruned).contains(derived),
+            "{derived} was taken off: {:?}",
+            props_of(&pruned)
+        );
+    }
+    c.call(
+        "tag_breakdown",
+        json!({ "scene": scene, "category": "vehicles", "present": true }),
+    );
+    assert_eq!(
+        c.call("production", json!({}))["breakdowns"][0]["vehicles"],
+        json!(true)
+    );
+    // Clearing hands the category back to the script.
+    c.call(
+        "tag_breakdown",
+        json!({ "scene": scene, "category": "vehicles" }),
+    );
+    assert_eq!(
+        c.call("production", json!({}))["breakdowns"][0]["tags"]["vehicles"],
+        J::Null
+    );
+
+    // A category that does not exist is refused with the ones that do.
+    let refused = c
+        .call_result(
+            "tag_breakdown",
+            json!({ "scene": scene, "category": "weather", "value": "rain", "present": true }),
+        )
+        .unwrap_err();
+    assert!(
+        refused.contains("vehicles") && refused.contains("sfx"),
+        "{refused}"
+    );
+
+    // And undo takes the tag off again.
+    c.call("undo", json!({}));
+    c.call("undo", json!({}));
+    let undone = c.call("production", json!({}));
+    assert_eq!(undone["breakdowns"][0]["vehicles"], json!(false));
 }

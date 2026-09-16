@@ -849,3 +849,33 @@ button.danger { background: #6b2a22; border-color: var(--bad); }
   padding: 0 5px;
 }
 .pdf-link:hover { color: var(--text); border-color: var(--accent); }
+
+/* ---- breakdown tagging ------------------------------------------------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--text-dim);
+}
+.chip.tagged { border-color: var(--accent-dim); color: var(--text); }
+.chip .mark { color: var(--accent); }
+.chip button, .flags .revert {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0 1px;
+  font-size: 10px;
+}
+.chip button:hover, .flags .revert:hover { color: var(--warn); }
+.chip-add { display: flex; gap: 4px; margin-bottom: 8px; }
+.chip-add input { flex: 1 1 auto; min-width: 0; font-size: 10px; }
+.flags { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--text-dim); }
+.flags label { display: inline-flex; align-items: center; gap: 3px; }
+.flags label.tagged { color: var(--text); }

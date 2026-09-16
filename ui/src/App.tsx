@@ -365,6 +365,9 @@ export function App() {
             onMoveStrip={(doc, scene, day) =>
               void session.run("move strip", () => client.moveStrip(doc, scene, day))
             }
+            onTag={(scene, category, value, present) =>
+              void session.run("tag breakdown", () => client.tagBreakdown(scene, category, value, present))
+            }
           />
           {impact}
         </div>

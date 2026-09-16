@@ -34,6 +34,107 @@ pub struct SceneBreakdown {
     pub animals: bool,
     pub sfx: bool,
     pub vfx: bool,
+    /// What a person tagged by hand, as they tagged it.
+    ///
+    /// The lists above are the merged result — what the department actually
+    /// needs — and this is how it got there, so an interface can show which
+    /// elements came out of the script and which a first assistant added.
+    #[serde(default)]
+    pub tags: SceneTags,
+}
+
+/// A person's corrections to what the script implies.
+///
+/// Breakdown elements are derived: the script says a prop, or a keyword in the
+/// heading suggests a vehicle. Derivation is re-run whenever the script
+/// changes, so a correction cannot live in the derived data — it lives here,
+/// on the scene, and is applied every time the breakdown is read. A rewrite
+/// therefore never silently loses what somebody tagged.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SceneTags {
+    /// Elements a person added that the script does not mention.
+    #[serde(default)]
+    pub props_added: Vec<String>,
+    /// Script-derived elements a person says do not belong.
+    #[serde(default)]
+    pub props_removed: Vec<String>,
+    #[serde(default)]
+    pub cast_added: Vec<String>,
+    #[serde(default)]
+    pub cast_removed: Vec<String>,
+    /// `None` leaves the keyword search to decide; `Some` overrules it.
+    #[serde(default)]
+    pub vehicles: Option<bool>,
+    #[serde(default)]
+    pub animals: Option<bool>,
+    #[serde(default)]
+    pub sfx: Option<bool>,
+    #[serde(default)]
+    pub vfx: Option<bool>,
+}
+
+impl SceneTags {
+    /// Whether a person has touched this scene's breakdown at all.
+    pub fn is_empty(&self) -> bool {
+        self == &SceneTags::default()
+    }
+
+    /// Apply an addition or a removal to one list.
+    fn set(added: &mut Vec<String>, removed: &mut Vec<String>, value: &str, present: bool) {
+        let same = |a: &String| a.eq_ignore_ascii_case(value);
+        added.retain(|a| !same(a));
+        removed.retain(|a| !same(a));
+        if present {
+            added.push(value.to_string());
+        } else {
+            removed.push(value.to_string());
+        }
+    }
+
+    /// Tag or untag an element. `category` is `prop`, `cast`, `vehicles`,
+    /// `animals`, `sfx` or `vfx`; the flags take no value.
+    pub fn tag(&mut self, category: &str, value: &str, present: bool) -> Result<(), String> {
+        match category {
+            "prop" => Self::set(
+                &mut self.props_added,
+                &mut self.props_removed,
+                value,
+                present,
+            ),
+            "cast" => Self::set(&mut self.cast_added, &mut self.cast_removed, value, present),
+            "vehicles" => self.vehicles = Some(present),
+            "animals" => self.animals = Some(present),
+            "sfx" => self.sfx = Some(present),
+            "vfx" => self.vfx = Some(present),
+            other => {
+                return Err(format!(
+                    "`{other}` is not a breakdown category; there are prop, cast, vehicles, \
+                     animals, sfx and vfx"
+                ))
+            }
+        }
+        Ok(())
+    }
+
+    /// Hand a category back to the script.
+    pub fn clear(&mut self, category: &str) {
+        match category {
+            "vehicles" => self.vehicles = None,
+            "animals" => self.animals = None,
+            "sfx" => self.sfx = None,
+            "vfx" => self.vfx = None,
+            _ => {}
+        }
+    }
+
+    fn apply(&self, list: &mut Vec<String>, added: &[String], removed: &[String]) {
+        list.retain(|a| !removed.iter().any(|r| r.eq_ignore_ascii_case(a)));
+        for value in added {
+            if !list.iter().any(|a| a.eq_ignore_ascii_case(value)) {
+                list.push(value.clone());
+            }
+        }
+    }
 }
 
 impl SceneBreakdown {
@@ -56,6 +157,7 @@ impl SceneBreakdown {
             animals: false,
             sfx: false,
             vfx: false,
+            tags: SceneTags::default(),
         }
     }
 
@@ -295,6 +397,14 @@ pub fn breakdown_scene(graph: &Graph, scene: EntityId) -> SceneBreakdown {
         parsed.location.clone()
     };
 
+    // What a person tagged, applied over what the script implies.
+    let tags: SceneTags = node
+        .get(ATTR_BREAKDOWN_TAGS)
+        .and_then(|v| v.to_serde().ok())
+        .unwrap_or_default();
+    tags.apply(&mut props, &tags.props_added, &tags.props_removed);
+    tags.apply(&mut cast, &tags.cast_added, &tags.cast_removed);
+
     SceneBreakdown {
         scene,
         number,
@@ -307,12 +417,24 @@ pub fn breakdown_scene(graph: &Graph, scene: EntityId) -> SceneBreakdown {
         extras_hint,
         page_eighths,
         est_minutes,
-        vehicles: has_keyword(&hay, VEHICLE_KEYWORDS).is_some(),
-        animals: has_keyword(&hay, ANIMAL_KEYWORDS).is_some(),
-        sfx: has_keyword(&hay, SFX_KEYWORDS).is_some(),
-        vfx: has_keyword(&hay, VFX_KEYWORDS).is_some(),
+        vehicles: tags
+            .vehicles
+            .unwrap_or_else(|| has_keyword(&hay, VEHICLE_KEYWORDS).is_some()),
+        animals: tags
+            .animals
+            .unwrap_or_else(|| has_keyword(&hay, ANIMAL_KEYWORDS).is_some()),
+        sfx: tags
+            .sfx
+            .unwrap_or_else(|| has_keyword(&hay, SFX_KEYWORDS).is_some()),
+        vfx: tags
+            .vfx
+            .unwrap_or_else(|| has_keyword(&hay, VFX_KEYWORDS).is_some()),
+        tags,
     }
 }
+
+/// Attribute on a `script.scene` holding [`SceneTags`].
+pub const ATTR_BREAKDOWN_TAGS: &str = "breakdown_tags";
 
 /// Breakdowns for every `script.scene` contained in `document`, in `order`.
 pub fn breakdown_document(graph: &Graph, document: EntityId) -> Vec<SceneBreakdown> {

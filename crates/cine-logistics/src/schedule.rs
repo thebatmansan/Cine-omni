@@ -718,6 +718,7 @@ mod tests {
             animals: false,
             sfx: false,
             vfx: false,
+            tags: Default::default(),
         }
     }
 

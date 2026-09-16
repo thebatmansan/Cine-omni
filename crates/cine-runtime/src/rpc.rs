@@ -734,6 +734,58 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "tag_breakdown" => {
+            // A first assistant's correction to what the script implies. It is
+            // stored on the scene, not in the derived breakdown, so a rewrite
+            // re-derives around it instead of losing it.
+            let scene = entity(params, "scene")?;
+            let category = str_param(params, "category")?.to_string();
+            let value = params
+                .get("value")
+                .and_then(J::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let present = params.get("present").and_then(J::as_bool);
+            let is_list = matches!(category.as_str(), "prop" | "cast");
+            if is_list && value.is_empty() {
+                return Err(format!("tagging a {category} needs a `value`"));
+            }
+            {
+                let g = p.engine.read();
+                if !g
+                    .node(scene)
+                    .is_some_and(|n| n.kind.as_str() == kinds::SCRIPT_SCENE)
+                {
+                    return Err(format!("{scene} is not a scene in this project"));
+                }
+            }
+            let group = p
+                .engine
+                .transact("tag breakdown", |tx| {
+                    let mut tags: cine_logistics::SceneTags = tx
+                        .graph()
+                        .attr(scene, cine_logistics::ATTR_BREAKDOWN_TAGS)
+                        .and_then(|v| v.to_serde().ok())
+                        .unwrap_or_default();
+                    match present {
+                        Some(present) => tags
+                            .tag(&category, &value, present)
+                            .map_err(ucg_core::UcgError::Aborted)?,
+                        // No `present`: hand the category back to the script.
+                        None => tags.clear(&category),
+                    }
+                    if tags.is_empty() {
+                        tx.remove_attr(scene, cine_logistics::ATTR_BREAKDOWN_TAGS)
+                    } else {
+                        let value = Value::from_serde(&tags)
+                            .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                        tx.set(scene, cine_logistics::ATTR_BREAKDOWN_TAGS, value)
+                    }
+                })
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
         "move_strip" => {
             // Put a scene on a day, or let the scheduler decide again
             // (`day: null`). A pin is a constraint like any other, so it is

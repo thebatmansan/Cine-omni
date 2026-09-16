@@ -198,9 +198,16 @@ because the pin is stored with the constraints. Releasing it hands the decision
 back. A pin that overfills a day is kept and warned about — the person looking
 at the board can see what this cannot.
 
-Strips are moved with buttons rather than dragged, breakdown elements cannot be
-tagged by hand, there is no travel or drop/pickup on the DOOD and no budget; the
-capability says so.
+The breakdown can be corrected. A first assistant adds a prop the script never
+mentions, strikes one that is not really there, or overrules a flag the keyword
+search guessed; each element shows whether the script said it or a person did.
+The corrections live on the scene rather than in the derived sheet, so a
+rewrite re-derives the breakdown *around* them — which is the only reason
+tagging is worth doing in a system where the breakdown is derived at all.
+
+Strips are moved with buttons rather than dragged, there is no wardrobe,
+make-up or stunt category, no travel or drop/pickup on the DOOD and no budget;
+the capability says so.
 
 ## Colour, and what a view changes
 

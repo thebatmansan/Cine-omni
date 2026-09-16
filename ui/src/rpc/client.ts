@@ -178,6 +178,21 @@ export interface SceneBreakdown {
   animals: boolean;
   sfx: boolean;
   vfx: boolean;
+  /** What a person tagged by hand; the lists above are the merged result. */
+  tags: SceneTags;
+}
+
+/** A person's corrections to what the script implies. Survives a rewrite. */
+export interface SceneTags {
+  props_added: string[];
+  props_removed: string[];
+  cast_added: string[];
+  cast_removed: string[];
+  /** `null` leaves the keyword search to decide; a boolean overrules it. */
+  vehicles: boolean | null;
+  animals: boolean | null;
+  sfx: boolean | null;
+  vfx: boolean | null;
 }
 
 export interface CallSheetView {
@@ -643,6 +658,14 @@ export class RpcClient {
   }
   scheduleConstraints(document: string, constraints: ScheduleConstraints) {
     return this.call<CascadeResult>("schedule_constraints", { document, constraints });
+  }
+  /**
+   * Tag a breakdown element by hand: `category` is `prop`, `cast`, `vehicles`,
+   * `animals`, `sfx` or `vfx`. `present` undefined hands the category back to
+   * the script.
+   */
+  tagBreakdown(scene: string, category: string, value: string, present?: boolean) {
+    return this.call<CascadeResult>("tag_breakdown", { scene, category, value, present });
   }
   /** Put a scene on a shooting day, or `null` to let the scheduler decide again. */
   moveStrip(document: string, scene: string, day: number | null) {
