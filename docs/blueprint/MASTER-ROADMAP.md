@@ -48,7 +48,16 @@ since the audit, each with its evidence in the named document or test:
 | Phase 4 — manual strip moves | a scene pinned to a day stays there; the scheduler fills around it, a pin that overfills a day is honoured and warned about, and undo releases it | `schedule.rs` pin tests, `ui/e2e/production.mjs` |
 | Phase 4 — day out of days | the cast side of the stripboard: SW/W/H/WF/SWF per actor per day, work and hold totals, in the workspace, the protocol and an export | `dood.rs`, `production_protocol.rs` |
 | Phase 8 — sound (pulled forward) | ALSA device via runtime-loaded libasound; the cut's sound decoded, mixed and played in the native window, pacing the picture | `AV-SYNC.md` |
-| Wrong-direction corrections | takes owned by the production log, not shots (migrated at open); compositing data window; a failed cascade stays undoable; zero rate refused; same-length rewording reaches the cut; TCP_NODELAY | commits since `6d8fd67` |
+| Wrong-direction corrections | takes owned by the production log, not shots (migrated at open); compositing data windows, union merges and windowed transforms; one GPU device for compute and presentation; a failed cascade stays undoable; zero rate refused; same-length rewording reaches the cut; TCP_NODELAY | commits since `6d8fd67` |
+| Claims corrected on inspection | display-referred view transforms were parsed as empty (a whole view rendered wrong, silently); Rec.2100 PQ/HLG clamped where OpenColorIO mirrors; `ExponentTransform` styles ignored; Canon adapted with Bradford instead of CAT02; the shell's capability list still said colour was unverified and sound absent | the commits that fixed each |
+
+### What is not here
+
+The measurements on this page were taken with H.264 test media that is no
+longer on this machine, so the playback, A/V and colour end-to-end numbers are
+the recorded ones and cannot currently be re-run. Everything else — the
+colour oracles, the compositor, the production office, the offload, the EDL —
+is tested without media and runs on any machine.
 
 The audit's "OCIO parallel parser" item is decided as research 13 §7
 recommends: the native parser stays, the rendering is ported from the Academy's
