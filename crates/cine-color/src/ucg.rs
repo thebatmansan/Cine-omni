@@ -297,6 +297,71 @@ pub fn load_config(graph: &Graph, config: EntityId) -> Result<Config> {
     Config::parse(text)
 }
 
+/// The grade on a clip: the CDL stored on its `color.grade` entity.
+///
+/// `None` when the clip has no grade yet, which is not the same as a neutral
+/// one — a caller can then leave the grade out of the chain entirely rather
+/// than multiplying by an identity nobody asked for.
+pub fn grade_of_clip(graph: &Graph, clip: EntityId) -> Option<ucg_schema::Cdl> {
+    let grade = EntityId::derived(clip, kinds::COLOR_GRADE);
+    let meta = ColorMeta::read_from(graph, grade)?;
+    (!cdl_is_identity(&meta.cdl)).then_some(meta.cdl)
+}
+
+/// Set the CDL on a clip's grade, creating the grade if it does not exist.
+///
+/// Idempotent: setting the same values again produces no ops.
+pub fn set_clip_cdl(tx: &mut Tx, clip: EntityId, cdl: &ucg_schema::Cdl) -> Result<EntityId> {
+    let grade = ensure_grade_for_clip(tx, clip)?;
+    let mut meta = ColorMeta::read_from(tx.graph(), grade).unwrap_or_default();
+    if &meta.cdl == cdl {
+        return Ok(grade);
+    }
+    meta.cdl = cdl.clone();
+    meta.write(tx, grade)?;
+    Ok(grade)
+}
+
+/// The transform a viewer applies to one clip: its input colorspace to the
+/// working space, the grade, then the working space through `display`/`view`.
+///
+/// The grade sits in the working space — where a colourist works — rather than
+/// on code values, which is the difference between grading a picture and
+/// tinting one.
+pub fn viewing_processor(
+    config: &Config,
+    input: &str,
+    working: &str,
+    cdl: Option<&ucg_schema::Cdl>,
+    display: &str,
+    view: &str,
+) -> Result<Processor> {
+    let mut ops: Vec<Op> = Vec::new();
+    match cdl {
+        None => {
+            // Nothing to grade: one processor, exactly as an ungraded clip is
+            // shown, so a clip with no grade is not paying for a round trip
+            // through the working space.
+            return config.display_processor(input, display, view);
+        }
+        Some(cdl) => {
+            ops.extend(config.processor(input, working)?.ops().iter().cloned());
+            ops.push(Op::Cdl {
+                cdl: cdl.clone(),
+                direction: Direction::Forward,
+            });
+            ops.extend(
+                config
+                    .display_processor(working, display, view)?
+                    .ops()
+                    .iter()
+                    .cloned(),
+            );
+        }
+    }
+    Ok(Processor::new(ops))
+}
+
 /// The full display processor for a clip from its [`ColorMeta`]:
 /// `input_colorspace → working_colorspace`, the CDL and look LUT (if any) in
 /// the working space, then `working → display`. `display` may be a display

@@ -88,3 +88,54 @@ fn the_lattice_is_closest_where_the_picture_is() {
     );
     assert!(worst_legal < 0.01, "{worst_legal}");
 }
+
+/// A grade is part of the transform the viewer bakes, not something applied
+/// afterwards: the lattice itself moves, and by the amount the CDL says.
+#[test]
+fn a_grade_changes_the_lattice_the_viewer_interpolates() {
+    use cine_color::ucg::viewing_processor;
+    use ucg_schema::Cdl;
+
+    let config = Config::parse(cine_color::ucg::BUNDLED_CONFIG).unwrap();
+    let (input, display, view) = (
+        "Rec.1886 Rec.709 - Display",
+        "sRGB - Display",
+        "ACES 2.0 - SDR 100 nits (Rec.709)",
+    );
+    let plain = viewing_processor(&config, input, "ACEScg", None, display, view).unwrap();
+    let warm = Cdl {
+        slope: [1.2, 1.0, 0.8],
+        offset: [0.0; 3],
+        power: [1.0; 3],
+        saturation: 1.0,
+    };
+    let graded = viewing_processor(&config, input, "ACEScg", Some(&warm), display, view).unwrap();
+
+    // A mid grey through both: warmer, and by a visible amount.
+    let grey = [0.5f32; 3];
+    let (a, b) = (plain.apply_rgb(&grey), graded.apply_rgb(&grey));
+    println!("MEASURED mid grey ungraded {a:?} → graded {b:?}");
+    assert!(b[0] > a[0] + 0.02, "the red lift is visible: {a:?} → {b:?}");
+    assert!(b[2] < a[2] - 0.02, "and the blue pull-down: {a:?} → {b:?}");
+
+    // Baked, the lattice carries it and stays as close to its own transform as
+    // the ungraded one does.
+    let mut lut = Lut3D::bake_domain(&graded, 33, [DOMAIN.0; 3], [DOMAIN.1; 3]);
+    lut.interpolation = Interpolation::Trilinear;
+    let error = lut.worst_error(&graded, 4096);
+    println!(
+        "MEASURED graded lattice: worst {error:.4} of full scale ({:.1} of 255)",
+        error * 255.0
+    );
+    assert!(error < 0.02, "{error}");
+
+    // A neutral grade is not a grade: the chain is the ungraded one.
+    let neutral = Cdl::default();
+    let same = viewing_processor(&config, input, "ACEScg", Some(&neutral), display, view).unwrap();
+    for x in [[0.1f32; 3], [0.5; 3], [0.9, 0.2, 0.4]] {
+        let (p, s) = (plain.apply_rgb(&x), same.apply_rgb(&x));
+        for c in 0..3 {
+            assert!((p[c] - s[c]).abs() < 1e-5, "{p:?} vs {s:?}");
+        }
+    }
+}

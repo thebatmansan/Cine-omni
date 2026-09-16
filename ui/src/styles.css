@@ -908,3 +908,12 @@ button.danger { background: #6b2a22; border-color: var(--bad); }
 .el.revised { position: relative; }
 .el .mark { position: absolute; left: -12px; color: var(--warn); font-weight: bold; }
 .page { position: relative; }
+
+/* ---- grade ------------------------------------------------------------- */
+
+.cdl { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+.cdl-row { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.cdl-row .label { flex: 0 0 44px; color: var(--text-dim); }
+.cdl-row input { width: 62px; font-size: 11px; }
+.cdl-row button { font-size: 10px; }
+.chip[aria-selected="true"] { border-color: var(--accent); color: var(--text); }

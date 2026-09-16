@@ -252,7 +252,14 @@ way — and are measured while the panels redraw rather than per picture, becaus
 playback's budget belongs to playback. The pane says both: how many samples,
 and what they cost.
 
-There is no grading — no wheels, curves, qualifiers or windows — no parade,
+A clip can be graded: an ASC CDL — slope, offset, power and saturation — set
+in the Colour workspace and applied *in the working space*, which is the
+difference between grading a picture and tinting one. The grade is baked into
+the same lattice the window is already interpolating, so grading and viewing
+are one chain rather than two that can disagree, and the lattice is re-baked
+only for the clips whose grade changed.
+
+There are no wheels, curves, qualifiers or windows — no parade,
 histogram or HDR scope in the interface, no scopes at all in the browser, and
 no analytic transform on the GPU: the lattice is an approximation, and its size
 is the measured number above rather than a matter of taste. A 65³ lattice would

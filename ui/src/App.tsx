@@ -384,6 +384,7 @@ export function App() {
             onInputColorspace={(media, colorspace) =>
               void session.run("input colorspace", () => client.setInputColorspace(media, colorspace))
             }
+            onGrade={(clip, cdl) => void session.run("grade", () => client.setGrade(clip, cdl))}
           />
           <Viewer media={media} capabilities={session.capabilities} index={picture} onIndex={setPicture} />
           {impact}

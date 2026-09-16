@@ -154,3 +154,78 @@ fn someone_can_say_what_a_file_really_is_and_undo_it() {
     assert_eq!(row["input_colorspace"], json!(was));
     assert!(row["source"].as_str().unwrap().starts_with("rule:"));
 }
+
+/// Grading a clip: the numbers go in, the projection says the clip is graded,
+/// and a refusal is a refusal rather than a flat frame.
+#[test]
+fn a_clip_can_be_graded_and_the_grade_is_part_of_what_it_is() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let colour = c.call("color", json!({}));
+    let clips = colour["clips"].as_array().expect("clips");
+    if clips.is_empty() {
+        eprintln!("SKIP: the fixture timeline has no clips bound to media");
+        return;
+    }
+    let clip = clips[0]["clip"].as_str().unwrap().to_string();
+    assert_eq!(clips[0]["graded"], json!(false), "nothing is graded yet");
+
+    let graded = c.call(
+        "set_grade",
+        json!({
+            "clip": clip,
+            "slope": [1.1, 1.0, 0.9],
+            "offset": [0.0, 0.0, 0.02],
+            "power": [1.0, 1.0, 1.0],
+            "saturation": 0.9
+        }),
+    );
+    let departments: Vec<String> = graded["impact"]["departments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["department"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        departments
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case("colour") || d.eq_ignore_ascii_case("color")),
+        "a grade is colour work: {departments:?}"
+    );
+
+    let after = c.call("color", json!({}));
+    let row = after["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["clip"] == json!(clip))
+        .unwrap()
+        .clone();
+    assert_eq!(row["graded"], json!(true));
+    assert_eq!(row["cdl"]["slope"][0], json!(1.1));
+    assert_eq!(row["cdl"]["saturation"], json!(0.9));
+
+    // A power of zero is a flat frame, not a grade.
+    assert!(c
+        .call_result(
+            "set_grade",
+            json!({ "clip": clip, "power": [0.0, 1.0, 1.0] })
+        )
+        .is_err());
+    // And so is a value that is not a number.
+    assert!(c
+        .call_result("set_grade", json!({ "clip": clip, "slope": [1.0, 1.0] }))
+        .is_err());
+
+    // Undo takes the grade off.
+    c.call("undo", json!({}));
+    let undone = c.call("color", json!({}));
+    let row = undone["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["clip"] == json!(clip))
+        .unwrap()
+        .clone();
+    assert_eq!(row["graded"], json!(false));
+}

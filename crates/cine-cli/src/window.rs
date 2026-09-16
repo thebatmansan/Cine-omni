@@ -36,6 +36,16 @@ type Waker = Arc<dyn Fn() + Send + Sync>;
 
 type Lattice = Option<(Arc<Lut3D>, f32, String)>;
 
+/// What a lattice is wanted for: one clip's colorspace and grade, through one
+/// display and view.
+struct Wanted<'a> {
+    input: &'a str,
+    working: &'a str,
+    cdl: Option<&'a ucg_schema::Cdl>,
+    display: &'a str,
+    view: &'a str,
+}
+
 pub struct RuntimeLink {
     runtime: Arc<Runtime>,
     address: Option<String>,
@@ -74,24 +84,17 @@ impl RuntimeLink {
 
     /// The transform for one input colorspace through one display and view,
     /// baked and measured. Cached: playback asks for the same few, per picture.
-    fn lattice(
-        &self,
-        config: &Config,
-        config_key: u64,
-        input: &str,
-        display: &str,
-        view: &str,
-    ) -> Option<(Arc<Lut3D>, f32, String)> {
+    fn lattice(&self, config: &Config, config_key: u64, want: &Wanted<'_>) -> Lattice {
         let key = (
             config_key,
-            input.to_string(),
-            display.to_string(),
-            view.to_string(),
+            format!("{}|{}|{}", want.input, want.working, fingerprint(want.cdl)),
+            want.display.to_string(),
+            want.view.to_string(),
         );
         if let Some(hit) = self.lattices.lock().get(&key) {
             return hit.clone();
         }
-        let baked = bake(config, input, display, view);
+        let baked = bake(config, want);
         self.lattices.lock().insert(key, baked.clone());
         baked
     }
@@ -212,6 +215,7 @@ impl ProjectLink for RuntimeLink {
         let id = current_timeline(&graph, self.runtime.project.session.focus())?;
         let list = cine_runtime::playlist::edit_list(&graph, id).ok()?;
         let inputs = input_colorspaces(&graph);
+        let working = config.role("scene_linear").unwrap_or("ACEScg").to_string();
         let mut luts = Vec::with_capacity(list.entries.len());
         let mut describe: Vec<String> = Vec::new();
         let mut worst = 0.0f32;
@@ -220,8 +224,23 @@ impl ProjectLink for RuntimeLink {
                 .path
                 .as_ref()
                 .and_then(|p| inputs.get(&p.display().to_string()));
-            let baked =
-                input.and_then(|input| self.lattice(&config, config_key, input, &display, &view));
+            // The clip's own grade, when it has one.
+            let cdl = entry
+                .clip
+                .and_then(|clip| cine_color::ucg::grade_of_clip(&graph, clip));
+            let baked = input.and_then(|input| {
+                self.lattice(
+                    &config,
+                    config_key,
+                    &Wanted {
+                        input,
+                        working: &working,
+                        cdl: cdl.as_ref(),
+                        display: &display,
+                        view: &view,
+                    },
+                )
+            });
             match baked {
                 Some((lut, error, what)) => {
                     worst = worst.max(error);
@@ -308,7 +327,9 @@ fn input_colorspaces(graph: &Graph) -> HashMap<String, String> {
 /// when the input colorspace is scene-linear: a lattice over code values would
 /// be wrong for unbounded scene light, and showing the picture untransformed
 /// while claiming a view is worse than showing it plainly.
-fn bake(config: &Config, input: &str, display: &str, view: &str) -> Lattice {
+fn bake(config: &Config, want: &Wanted<'_>) -> Lattice {
+    let (input, working, cdl, display, view) =
+        (want.input, want.working, want.cdl, want.display, want.view);
     let encoding = config
         .colorspace(input)
         .map(|c| c.encoding.to_lowercase())
@@ -319,7 +340,8 @@ fn bake(config: &Config, input: &str, display: &str, view: &str) -> Lattice {
     ) {
         return None;
     }
-    let processor = config.display_processor(input, display, view).ok()?;
+    let processor =
+        cine_color::ucg::viewing_processor(config, input, working, cdl, display, view).ok()?;
     let mut lut = Lut3D::bake_domain(
         &processor,
         LATTICE_SIZE,
@@ -330,6 +352,29 @@ fn bake(config: &Config, input: &str, display: &str, view: &str) -> Lattice {
     // error would be measuring an interpolation nobody performs.
     lut.interpolation = cine_color::lut::Interpolation::Trilinear;
     let error = lut.worst_error(&processor, 4096);
-    let what = format!("{input} → {display} / {view}");
+    let what = match cdl {
+        Some(_) => format!("{input} → grade → {display} / {view}"),
+        None => format!("{input} → {display} / {view}"),
+    };
     Some((Arc::new(lut), error, what))
+}
+
+/// A short, stable name for a grade, so the lattice cache can tell two grades
+/// apart without holding the grade itself.
+fn fingerprint(cdl: Option<&ucg_schema::Cdl>) -> String {
+    let Some(cdl) = cdl else {
+        return "ungraded".into();
+    };
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for v in cdl
+        .slope
+        .iter()
+        .chain(&cdl.offset)
+        .chain(&cdl.power)
+        .chain(std::iter::once(&cdl.saturation))
+    {
+        v.to_bits().hash(&mut h);
+    }
+    format!("{:016x}", h.finish())
 }

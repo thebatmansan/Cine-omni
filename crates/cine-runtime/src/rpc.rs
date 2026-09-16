@@ -753,6 +753,67 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "set_grade" => {
+            // A CDL on a clip. The viewer bakes it into the transform it is
+            // already applying, so grading and viewing are one chain rather
+            // than two that can disagree.
+            let clip = entity(params, "clip")?;
+            let triplet = |key: &str, default: [f64; 3]| -> std::result::Result<[f64; 3], String> {
+                let Some(v) = params.get(key) else {
+                    return Ok(default);
+                };
+                let list = v
+                    .as_array()
+                    .ok_or(format!("`{key}` must be three numbers"))?;
+                if list.len() != 3 {
+                    return Err(format!("`{key}` must be three numbers"));
+                }
+                let mut out = [0.0; 3];
+                for (i, value) in list.iter().enumerate() {
+                    out[i] = value
+                        .as_f64()
+                        .filter(|f| f.is_finite())
+                        .ok_or(format!("`{key}` must be three finite numbers"))?;
+                }
+                Ok(out)
+            };
+            let cdl = ucg_schema::Cdl {
+                slope: triplet("slope", [1.0; 3])?,
+                offset: triplet("offset", [0.0; 3])?,
+                power: triplet("power", [1.0; 3])?,
+                saturation: params
+                    .get("saturation")
+                    .map(|v| {
+                        v.as_f64()
+                            .filter(|f| f.is_finite() && *f >= 0.0)
+                            .ok_or("`saturation` must be a finite number, 0 or more")
+                    })
+                    .transpose()?
+                    .unwrap_or(1.0),
+            };
+            // A power of zero is not a grade, it is a flat frame.
+            if cdl.power.iter().any(|p| *p <= 0.0) {
+                return Err("`power` must be greater than zero on every channel".into());
+            }
+            {
+                let g = p.engine.read();
+                if !g
+                    .node(clip)
+                    .is_some_and(|n| n.kind.as_str() == kinds::NLE_CLIP)
+                {
+                    return Err(format!("{clip} is not a clip in this project"));
+                }
+            }
+            let group = p
+                .engine
+                .transact("grade", |tx| {
+                    cine_color::ucg::set_clip_cdl(tx, clip, &cdl)
+                        .map(|_| ())
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                })
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
         "issue_revision" => {
             // Pages go out: record what the script says now, so everything
             // after it can be marked against this.

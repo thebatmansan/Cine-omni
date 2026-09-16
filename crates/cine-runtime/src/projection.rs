@@ -645,6 +645,43 @@ pub fn color(
             })
         })
         .collect();
+    // The clips of the open sequence, with what each is in and how it is
+    // graded: what a colour workspace needs to show and to change.
+    let clips: Vec<J> = session
+        .focus()
+        .or_else(|| {
+            graph
+                .of_kind(kinds::NLE_TIMELINE)
+                .first()
+                .map(|n| n.id)
+        })
+        .and_then(|timeline| crate::playlist::edit_list(graph, timeline).ok())
+        .map(|list| {
+            list.entries
+                .iter()
+                .filter_map(|entry| {
+                    let clip = entry.clip?;
+                    let meta = <ucg_schema::ColorMeta as ucg_schema::Component>::read_from(
+                        graph,
+                        EntityId::derived(clip, kinds::COLOR_GRADE),
+                    );
+                    let cdl = meta.as_ref().map(|m| &m.cdl);
+                    Some(json!({
+                        "clip": clip,
+                        "name": entry.name,
+                        "input_colorspace": meta.as_ref().map(|m| m.input_colorspace.clone()),
+                        "graded": cdl.map(|c| !cine_color::grade::cdl_is_identity(c)).unwrap_or(false),
+                        "cdl": cdl.map(|c| json!({
+                            "slope": c.slope,
+                            "offset": c.offset,
+                            "power": c.power,
+                            "saturation": c.saturation,
+                        })),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let selected = session.view();
     Ok(json!({
         "config": {
@@ -656,5 +693,6 @@ pub fn color(
         "displays": displays,
         "colorspaces": colorspaces,
         "media": media,
+        "clips": clips,
     }))
 }

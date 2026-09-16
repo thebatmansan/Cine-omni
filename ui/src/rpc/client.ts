@@ -253,6 +253,25 @@ export interface ColorView {
     isdata: boolean;
   }[];
   media: ColorMediaView[];
+  /** The clips of the open sequence, with how each one is graded. */
+  clips: ColorClipView[];
+}
+
+/** One clip of the sequence, as the colour workspace sees it. */
+export interface ColorClipView {
+  clip: string;
+  name: string;
+  input_colorspace: string | null;
+  graded: boolean;
+  cdl: Cdl | null;
+}
+
+/** ASC CDL: slope, offset and power per channel, then saturation. */
+export interface Cdl {
+  slope: [number, number, number];
+  offset: [number, number, number];
+  power: [number, number, number];
+  saturation: number;
 }
 
 export interface ViewSelection {
@@ -667,6 +686,16 @@ export class RpcClient {
     return this.call<ColorView>("color_view", {
       display: selection?.display ?? null,
       view: selection?.view ?? null,
+    });
+  }
+  /** Grade a clip. The viewer bakes it into the transform it already applies. */
+  setGrade(clip: string, cdl: Cdl) {
+    return this.call<CascadeResult>("set_grade", {
+      clip,
+      slope: cdl.slope,
+      offset: cdl.offset,
+      power: cdl.power,
+      saturation: cdl.saturation,
     });
   }
   /** Say what a file really is. Undoable, like any other edit. */
