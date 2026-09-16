@@ -152,7 +152,7 @@ impl ShellCapabilities {
     pub const COLOUR_MANAGEMENT: Availability = Availability::Degraded(
         "the picture is shown through the project's config and says which view and how far \
          the lattice is from the transform; a clip with no colorspace gets none. No grading, \
-         no scopes, and no analytic transform on the GPU",
+         and no analytic transform on the GPU — the shader interpolates a lattice",
     );
     pub const HDR_OUTPUT: Availability =
         Availability::Unavailable("no HDR surface configuration yet");
