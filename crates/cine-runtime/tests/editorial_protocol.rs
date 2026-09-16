@@ -535,3 +535,104 @@ fn the_cut_exports_as_an_edl_that_says_what_it_left_behind() {
         events.len()
     );
 }
+
+/// Three-point editing over the protocol: the marks go out, the plan comes
+/// back, and the clip on the track is the media the marks chose.
+///
+/// The fixture's assets declare their own available ranges, so this needs no
+/// file on disk: what is being tested is the arithmetic and the refusals, not
+/// a decoder.
+#[test]
+fn marks_decide_the_edit_and_the_plan_says_which_point_was_derived() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Marks", "rate_num": 24, "rate_den": 1 }),
+    );
+    let tl = made["id"].as_str().unwrap().to_string();
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let v1 = seq["tracks"][0]["id"].as_str().unwrap().to_string();
+
+    // An asset the fixture already brought in, with its own available range.
+    let media = c.call("media", json!({}));
+    let asset = media
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"].as_str().is_some_and(|n| n.contains("A001_C003")))
+        .expect("the fixture's asset")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Three points: source in and out, record in. The fourth is arithmetic.
+    let r = c.call(
+        "three_point",
+        json!({ "tracks": [v1], "media": asset, "mode": "insert",
+                "source": { "in": frames(48), "out": frames(96) },
+                "record": { "in": frames(0) } }),
+    );
+    assert_eq!(r["plan"]["source"]["start"]["ticks"], 48);
+    assert_eq!(r["plan"]["record"]["duration"]["ticks"], 48);
+    assert_eq!(r["plan"]["backtimed"], false);
+    assert!(
+        r["plan"]["derived"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d.as_str().unwrap().contains("timeline out")),
+        "{}",
+        r["plan"]["derived"]
+    );
+    let seq = c.call("timeline", json!({ "id": tl }));
+    assert_eq!(seq["tracks"][0]["items"][0]["at"]["duration"]["ticks"], 48);
+
+    // Backtimed: marked by where it has to end, and it ends there.
+    let r = c.call(
+        "three_point",
+        json!({ "tracks": [v1], "media": asset, "mode": "overwrite",
+                "source": { "in": frames(0), "out": frames(24) },
+                "record": { "out": frames(48) } }),
+    );
+    assert_eq!(r["plan"]["backtimed"], true);
+    assert_eq!(r["plan"]["record"]["start"]["ticks"], 24);
+    assert_eq!(r["plan"]["record"]["end"]["ticks"], 48);
+
+    // Four marks that disagree are refused by name, not settled quietly.
+    let e = c
+        .call_result(
+            "three_point",
+            json!({ "tracks": [v1], "media": asset, "mode": "overwrite",
+                    "source": { "in": frames(0), "out": frames(48) },
+                    "record": { "in": frames(0), "out": frames(24) } }),
+        )
+        .expect_err("four marks disagree");
+    assert!(e.contains("24 frames longer"), "{e}");
+    assert!(e.contains("speed"), "fit to fill is named, not done: {e}");
+
+    // And settled when the editor says how.
+    let r = c.call(
+        "three_point",
+        json!({ "tracks": [v1], "media": asset, "mode": "overwrite",
+                "source": { "in": frames(0), "out": frames(48) },
+                "record": { "in": frames(0), "out": frames(24) },
+                "mismatch": "trim_tail" }),
+    );
+    assert_eq!(r["plan"]["record"]["duration"]["ticks"], 24);
+    assert!(r["plan"]["reconciled"]
+        .as_str()
+        .unwrap()
+        .contains("trimmed"));
+
+    // Media that does not exist is refused with the shortfall.
+    let e = c
+        .call_result(
+            "three_point",
+            json!({ "tracks": [v1], "media": asset, "mode": "insert",
+                    "source": { "in": frames(230) },
+                    "record": { "in": frames(0), "out": frames(48) } }),
+        )
+        .expect_err("the media is not that long");
+    assert!(e.contains("past the end of the media"), "{e}");
+}

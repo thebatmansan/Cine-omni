@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Time, TimelineItem, TimelineTrack } from "../rpc/client";
-import { editFor, frameAt, framesIn, leftOfCut, snap, frameLabel } from "./edit";
+import { editFor, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel } from "./edit";
 
 const R24 = { num: 24, den: 1 };
 const NTSC = { num: 24000, den: 1001 };
@@ -130,5 +130,26 @@ describe("gesture to edit", () => {
   it("labels deltas as frames", () => {
     expect(frameLabel(12)).toBe("+12f");
     expect(frameLabel(-3)).toBe("−3f");
+  });
+});
+
+describe("record marks", () => {
+  const rate = { num: 24, den: 1 };
+
+  it("covers the picture the out mark is on", () => {
+    // Marked in on 0 and out on 47: 48 pictures, two seconds at 24 fps.
+    expect(markSecondsOf({ in: 0, out: 47 }, rate)).toEqual({ in: 0, out: 2 });
+  });
+
+  it("leaves an unmarked end unmarked rather than guessing one", () => {
+    expect(markSecondsOf({ in: 24, out: null }, rate)).toEqual({ in: 1, out: null });
+    expect(markSecondsOf({ in: null, out: null }, rate)).toEqual({ in: null, out: null });
+  });
+
+  it("is exact at NTSC rates", () => {
+    // 29.97 is 30000/1001, never 29.97: one second of pictures is not one
+    // second of time, and the band has to sit where the frames are.
+    const ntsc = { num: 30000, den: 1001 };
+    expect(markSecondsOf({ in: 0, out: 29 }, ntsc).out).toBeCloseTo((30 * 1001) / 30000, 12);
   });
 });

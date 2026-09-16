@@ -63,6 +63,25 @@ export function framesIn(s: number, rate: Rate): number {
   return Math.round((s * rate.num) / rate.den);
 }
 
+/** A pair of marks in whole frames at some rate. `null` is unmarked. */
+export interface FrameMarks {
+  in: number | null;
+  out: number | null;
+}
+
+/**
+ * Marks turned into seconds for the band that draws them.
+ *
+ * The out mark is *on* a picture, and that picture is part of the edit, so
+ * the band runs to the end of it. Getting this wrong by one frame is the
+ * classic off-by-one of every editing interface: the band would stop short of
+ * the frame the editor marked and the edit would still include it.
+ */
+export function markSecondsOf(marks: FrameMarks, rate: Rate): { in: number | null; out: number | null } {
+  const at = (frames: number | null) => (frames == null ? null : (frames * rate.den) / rate.num);
+  return { in: at(marks.in), out: at(marks.out == null ? null : marks.out + 1) };
+}
+
 /** Every cut point on screen, in seconds, for snapping. */
 export function snapTargets(timeline: TimelineView, playhead?: number): number[] {
   const out = new Set<number>();

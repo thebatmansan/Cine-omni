@@ -10,6 +10,9 @@
 //! * [`otio_json`] — lossless `.otio` reader/writer (OTIO 0.15+ schema).
 //! * [`edit`] — frame-exact editing operations with media-bound clamping and
 //!   invariant validation, plus a timeline diff.
+//! * [`three_point`] — source and record marks: give any three of the four
+//!   points and the fourth is arithmetic, with four-point disagreements
+//!   reconciled explicitly rather than quietly.
 //! * [`sync`] — FFT cross-correlation of RMS envelopes to align external
 //!   audio with camera scratch tracks.
 //! * [`graph`] — `import_timeline` / `export_timeline`, clip queries and the
@@ -45,6 +48,7 @@ pub mod otio;
 pub mod otio_json;
 pub mod session;
 pub mod sync;
+pub mod three_point;
 
 pub use edit::{
     diff, diff_tracks, extract, insert, join, lift, overwrite, replace, ripple_trim, roll, slide,
@@ -68,6 +72,7 @@ pub use session::{
     linked_positions, set_link, snap, snap_targets, snapped, targeted_tracks, TrackState,
 };
 pub use sync::{align_clip, find_offset, sync_clips, SyncResult};
+pub use three_point::{EditKind, Marks, Mismatch, Plan};
 
 /// Everything most callers need.
 pub mod prelude {
@@ -86,5 +91,6 @@ pub mod prelude {
     };
     pub use crate::otio_json::{read_otio, write_otio};
     pub use crate::sync::{align_clip, find_offset, sync_clips, SyncResult};
+    pub use crate::three_point::{EditKind, Marks, Mismatch, Plan};
     pub use ucg_core::{RationalTime, TimeRange};
 }

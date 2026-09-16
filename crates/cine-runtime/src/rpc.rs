@@ -438,6 +438,34 @@ fn group_from_log(p: &OmniProject, revision: u64) -> Option<UndoGroup> {
     })
 }
 
+/// An in/out pair as the wire carries it: `{"in": <time>|null, "out": ...}`.
+fn marks(params: &J, which: &str) -> std::result::Result<cine_timeline::Marks, String> {
+    let obj = params.get(which);
+    let point = |key: &str| -> std::result::Result<Option<RationalTime>, String> {
+        match obj.and_then(|o| o.get(key)) {
+            None | Some(J::Null) => Ok(None),
+            Some(v) => serde_json::from_value(v.clone())
+                .map(Some)
+                .map_err(|e| format!("invalid {which} {key} mark: {e}")),
+        }
+    };
+    Ok(cine_timeline::Marks {
+        in_point: point("in")?,
+        out_point: point("out")?,
+    })
+}
+
+fn plan_json(plan: &cine_timeline::Plan) -> J {
+    json!({
+        "source": crate::projection::range(plan.source),
+        "record": crate::projection::range(plan.record),
+        "backtimed": plan.backtimed,
+        "derived": plan.derived,
+        "reconciled": plan.reconciled,
+        "description": plan.describe(),
+    })
+}
+
 fn op_label(op: &cine_timeline::EditOp) -> &'static str {
     use cine_timeline::EditOp as E;
     match op {
@@ -634,6 +662,60 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             let mut out = with_impact(p, &group);
             out["clips"] = json!(placed);
+            out
+        }
+        "three_point" => {
+            let tracks: Vec<EntityId> = params
+                .get("tracks")
+                .and_then(J::as_array)
+                .ok_or("missing param `tracks`")?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .and_then(EntityId::parse)
+                        .ok_or("`tracks` must be entity ids")
+                })
+                .collect::<std::result::Result<_, _>>()?;
+            let media = entity(params, "media")?;
+            let source = marks(params, "source")?;
+            let record = marks(params, "record")?;
+            let kind = match params.get("mode").and_then(J::as_str) {
+                Some("overwrite") => cine_timeline::EditKind::Overwrite,
+                _ => cine_timeline::EditKind::Insert,
+            };
+            let on_mismatch = match params.get("mismatch").and_then(J::as_str) {
+                Some("trim_tail") => cine_timeline::Mismatch::TrimSourceTail,
+                Some("trim_head") => cine_timeline::Mismatch::TrimSourceHead,
+                Some("honour_source") => cine_timeline::Mismatch::HonourSource,
+                _ => cine_timeline::Mismatch::Refuse,
+            };
+            let label = match kind {
+                cine_timeline::EditKind::Overwrite => "edit: overwrite",
+                cine_timeline::EditKind::Insert => "edit: insert",
+            };
+            let mut done = None;
+            let group = p
+                .engine
+                .transact(label, |tx| {
+                    done = Some(
+                        cine_timeline::graph::three_point_edit(
+                            tx,
+                            &tracks,
+                            media,
+                            source,
+                            record,
+                            kind,
+                            on_mismatch,
+                        )
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?,
+                    );
+                    Ok(())
+                })
+                .map_err(|x| x.to_string())?;
+            let (plan, placed) = done.ok_or("the edit did not run")?;
+            let mut out = with_impact(p, &group);
+            out["clips"] = json!(placed);
+            out["plan"] = plan_json(&plan);
             out
         }
         "jobs" => {

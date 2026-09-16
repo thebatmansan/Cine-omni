@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EditOp, TimelineItem, TimelineTrack, TimelineView, TrackStateKey } from "../rpc/client";
+import type {
+  EditOp,
+  MarkMismatch,
+  TimelineItem,
+  TimelineTrack,
+  TimelineView,
+  TrackStateKey,
+} from "../rpc/client";
 import {
   TOOLS,
   Tool,
@@ -23,6 +30,12 @@ import { tickPositions } from "./geometry";
  * that is gesture feedback, not project state. On release the gesture becomes
  * one edit, the runtime applies it (clamped to real media, carried to linked
  * material) and the redraw that follows is the runtime's answer.
+ *
+ * The record marks live here too. They are *marks*, not an edit: they say
+ * where the next three-point edit lands and how long it is, and the band in
+ * the ruler is the only thing drawn from them. What the marks mean — which
+ * point is derived, whether the edit is backtimed, what happens when all four
+ * disagree — is the runtime's arithmetic, not the browser's.
  */
 export function Timeline({
   timeline,
@@ -39,6 +52,10 @@ export function Timeline({
   linked,
   onLinked,
   lastApplied,
+  marks,
+  onMark,
+  mismatch,
+  onMismatch,
 }: {
   timeline: TimelineView | null;
   selected: string | null;
@@ -54,6 +71,11 @@ export function Timeline({
   linked: boolean;
   onLinked(on: boolean): void;
   lastApplied: string | null;
+  /** Record in/out in seconds, for the band; `null` is unmarked. */
+  marks: { in: number | null; out: number | null };
+  onMark(which: "in" | "out" | "clear"): void;
+  mismatch: MarkMismatch;
+  onMismatch(next: MarkMismatch): void;
 }) {
   const [pxPerSecond, setPxPerSecond] = useState(90);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -164,6 +186,37 @@ export function Timeline({
           >
             Linked
           </button>
+          <span className="sep" />
+          <button
+            aria-pressed={marks.in != null}
+            title="Mark the record in at the playhead (I)"
+            onClick={() => onMark("in")}
+          >
+            Mark in
+          </button>
+          <button
+            aria-pressed={marks.out != null}
+            title="Mark the record out at the playhead (O): the edit is backtimed to end there"
+            onClick={() => onMark("out")}
+          >
+            Mark out
+          </button>
+          <button
+            title="Clear the record marks (⇧I)"
+            disabled={marks.in == null && marks.out == null}
+            onClick={() => onMark("clear")}
+          >
+            Clear
+          </button>
+          <label className="mismatch" title="What to do when all four marks are set and disagree">
+            4-pt
+            <select value={mismatch} onChange={(e) => onMismatch(e.target.value as MarkMismatch)}>
+              <option value="refuse">refuse</option>
+              <option value="trim_tail">trim source tail</option>
+              <option value="trim_head">trim source head</option>
+              <option value="honour_source">keep source length</option>
+            </select>
+          </label>
         </div>
         <span className="spacer" />
         {drag && (
@@ -189,6 +242,7 @@ export function Timeline({
                   </div>
                 </div>
               ))}
+              {markBand(marks, duration, pxPerSecond)}
               <div className="playhead" style={{ left: playheadSeconds * pxPerSecond }} />
             </div>
           </div>
@@ -223,6 +277,34 @@ export function Timeline({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The band between the record marks.
+ *
+ * One mark alone still means something: an in with no out runs to the end of
+ * the sequence, an out with no in runs back to its start, because that is the
+ * span the edit will be measured against once the other point arrives.
+ */
+function markBand(
+  marks: { in: number | null; out: number | null },
+  duration: number,
+  pxPerSecond: number,
+) {
+  if (marks.in == null && marks.out == null) return null;
+  const from = marks.in ?? 0;
+  const to = marks.out ?? duration;
+  return (
+    <>
+      <div
+        className="mark-band"
+        aria-label="record marks"
+        style={{ left: from * pxPerSecond, width: Math.max(1, (to - from) * pxPerSecond) }}
+      />
+      {marks.in != null && <div className="mark mark-in" style={{ left: marks.in * pxPerSecond }} />}
+      {marks.out != null && <div className="mark mark-out" style={{ left: marks.out * pxPerSecond }} />}
+    </>
   );
 }
 

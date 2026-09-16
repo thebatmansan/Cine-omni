@@ -113,7 +113,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Timeline view | Resolve, Premiere, Avid | Tracks, clips, transitions, markers, ruler, playhead, zoom | **VERIFIED** | browser + native, from graph | — | nle.* | — | 60 fps redraw | — | P0 | projection tests + e2e |
 | Track state: lock/mute/solo/target | All NLEs | Exactly these, with solo ≠ mute | **VERIFIED** | commits through graph, live across clients | — | OTIO metadata | — | — | — | P0 | 19 tests + live-sync test |
 | Insert / overwrite | All NLEs | Source → record with targeting | **VERIFIED** | `EditOp` + `place` (picture and sound placed linked, to targeted tracks); UI `,` / `.` from marked source; binds the project's asset, never a second identity | — | nle.* | — | commit 1.7 ms median (e2e) | S | **P0** | `editorial_protocol.rs`, `ui/e2e/editor.mjs` |
-| Three-point / four-point editing | Avid, Premiere | In/out on source and record, fit-to-fill | **PARTIAL** | source in/out + record playhead; no record in/out, no fit-to-fill, no backtiming | FE record marks · BE | marks are editor state | — | — | M | **P0** | Avid semantics table (R16) |
+| Three-point / four-point editing | Avid, Premiere | In/out on source and record, fit-to-fill | **VERIFIED** (three-point, backtiming) / **MISSING** (fit-to-fill) | `three_point` resolves any three of four marks and returns the plan: derived points named, backtimed edits flagged, checked against the asset's available range before committing; `I`/`O` mark whichever monitor is active and the ruler draws the band; four marks that disagree are refused with the difference in frames unless the editor picks how to settle them (trim head, trim tail, keep source length) | fit-to-fill needs a time effect in the model | marks are editor state | — | — | M | **P0** | 12 unit + 5 graph + 1 protocol test; `edit.test.ts` |
 | Ripple / roll / slip / slide / trim | All NLEs | Handle-bounded, reports applied delta, mixed rate | **VERIFIED** | drag tools with frame readout; runtime clamps and reports requested vs applied; one undo step | — | nle.* | — | edit → other client refetched 5.3 ms median | M | **P0** | protocol tests incl. clamping; UI gesture tests; e2e |
 | Split / join / lift / extract / replace | All NLEs | — | **VERIFIED** (split, lift, extract) / **IMPLEMENTED** (join, replace) | razor / ⌘K, ⌫, ⇧⌫ in UI; join and replace reachable by protocol only | FE join/replace gestures | nle.* | — | — | S | **P0** | `linked_edits.rs`, e2e |
 | Snapping | All NLEs | Cuts, markers, playhead; zoom-independent | **PARTIAL** | UI snaps drags to runtime-composed cut points and the playhead (8 px); markers not targets; engine `snap` unused | FE marker targets | — | — | — | S | P0 | `edit.test.ts` |
@@ -274,9 +274,9 @@ Counted from the tables above (153 rows; where a row has two states, the first i
 
 | Status | Count |
 |---|---:|
-| VERIFIED | 18 |
+| VERIFIED | 19 |
 | IMPLEMENTED | 5 |
-| PARTIAL | 51 |
+| PARTIAL | 50 |
 | PROTOTYPE | 3 |
 | PLANNED | 6 |
 | MISSING | 53 |

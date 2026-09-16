@@ -37,6 +37,34 @@ export interface ClipSpec {
   name?: string;
 }
 
+/** An in point, an out point, or one of each. `null` means unmarked. */
+export interface EditMarks {
+  in: ExactTime | null;
+  out: ExactTime | null;
+}
+
+/**
+ * What to do when all four marks are set and the two durations disagree.
+ *
+ * Fit-to-fill is deliberately absent: it changes the clip's speed, and the
+ * runtime has no time effect to carry the speed, so it says so rather than
+ * offering a button that does a trim under another name.
+ */
+export type MarkMismatch = "refuse" | "trim_tail" | "trim_head" | "honour_source";
+
+/** A resolved three- or four-point edit, as the runtime worked it out. */
+export interface EditPlan {
+  source: Span;
+  record: Span;
+  /** The record in was derived from the record out: the edit ends on its mark. */
+  backtimed: boolean;
+  /** Which points were arithmetic rather than marked. */
+  derived: string[];
+  /** How a four-point disagreement was settled, if there was one. */
+  reconciled: string | null;
+  description: string;
+}
+
 /** An edit, exactly as `cine_timeline::EditOp` deserializes it. */
 export type EditOp =
   | { op: "ripple_trim"; index: number; edge: Edge; delta: ExactTime }
@@ -658,6 +686,23 @@ export class RpcClient {
   }
   place(tracks: string[], time: ExactTime, clip: ClipSpec, mode: "insert" | "overwrite") {
     return this.call<CascadeResult & { clips: string[] }>("place", { tracks, time, clip, mode });
+  }
+  threePoint(
+    tracks: string[],
+    media: string,
+    source: EditMarks,
+    record: EditMarks,
+    mode: "insert" | "overwrite",
+    mismatch: MarkMismatch = "refuse",
+  ) {
+    return this.call<CascadeResult & { clips: string[]; plan: EditPlan }>("three_point", {
+      tracks,
+      media,
+      source,
+      record,
+      mode,
+      mismatch,
+    });
   }
   newTimeline(name: string, rate_num: number, rate_den: number) {
     return this.call<CascadeResult & { id: string }>("new_timeline", { name, rate_num, rate_den });

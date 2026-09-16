@@ -1142,3 +1142,36 @@ pub fn write_track(tx: &mut Tx, track_id: EntityId, track: &Track) -> Result<()>
     let ids = assign_item_ids(tx.graph(), track_id, track, &prefix, true);
     write_track_items(tx, track_id, track, &ids)
 }
+
+/// Plan a three- or four-point edit against a media asset and carry it out.
+///
+/// The asset's own available range is what the plan is checked against, so an
+/// edit that would run off the end of the shot is refused here rather than
+/// discovered at playback. The plan is returned with the clips so a caller can
+/// say which point was arithmetic — an editor who backtimed an edit needs to
+/// see that it was backtimed.
+pub fn three_point_edit(
+    tx: &mut Tx,
+    tracks: &[EntityId],
+    media: EntityId,
+    source: crate::three_point::Marks,
+    record: crate::three_point::Marks,
+    kind: crate::three_point::EditKind,
+    on_mismatch: crate::three_point::Mismatch,
+) -> Result<(crate::three_point::Plan, Vec<EntityId>)> {
+    require_kind(tx.graph(), media, kinds::ASSET_MEDIA)?;
+    let available = tx
+        .graph()
+        .require(media)?
+        .get(attrs::AVAILABLE_RANGE)
+        .and_then(Value::as_range);
+    let plan = crate::three_point::plan(available, source, record, kind, on_mismatch)?;
+    let spec = ClipSpec {
+        media,
+        source_range: plan.source,
+        name: None,
+    };
+    let overwrite = kind == crate::three_point::EditKind::Overwrite;
+    let placed = place_material(tx, tracks, plan.record.start_time, &spec, overwrite)?;
+    Ok((plan, placed))
+}

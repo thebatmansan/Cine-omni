@@ -11,13 +11,34 @@ import { Script } from "./panels/Script";
 import { Writer } from "./panels/Writer";
 import { Timeline, itemKey } from "./panels/Timeline";
 import { Viewer } from "./panels/Viewer";
-import type { EditOp, ExactTime, MediaView, TimelineItem, TimelineTrack, TimelineView } from "./rpc/client";
-import { Tool, TOOLS, exact, frameAt, frameLabel, sequenceRate, seconds, spanOf } from "./editing/edit";
+import type {
+  EditMarks,
+  EditOp,
+  ExactTime,
+  MarkMismatch,
+  MediaView,
+  TimelineItem,
+  TimelineTrack,
+  TimelineView,
+} from "./rpc/client";
+import {
+  Tool,
+  TOOLS,
+  exact,
+  frameAt,
+  frameLabel,
+  markSecondsOf,
+  sequenceRate,
+  seconds,
+  spanOf,
+} from "./editing/edit";
 import { useSession } from "./state/session";
 import { WORKSPACES, canOpen, workspaceReason, workspaceState } from "./workspaces";
 
 type Selection = { item: TimelineItem; track: TimelineTrack } | null;
 type Dialog = null | "sequence" | "media" | "screenplay";
+
+const NO_MARKS = { in: null, out: null };
 
 /**
  * The application shell.
@@ -38,6 +59,11 @@ export function App() {
   const [mediaId, setMediaId] = useState<string | null>(null);
   const [picture, setPicture] = useState(0);
   const [marks, setMarks] = useState<Record<string, { in: number | null; out: number | null }>>({});
+  // Record marks, per sequence, in ticks at that sequence's rate. They are
+  // marks, not project state: nobody else's cut depends on where this editor
+  // is about to put something.
+  const [recordMarks, setRecordMarks] = useState<Record<string, { in: number | null; out: number | null }>>({});
+  const [mismatch, setMismatch] = useState<MarkMismatch>("refuse");
   const [playheadTicks, setPlayheadTicks] = useState(0);
   const [tool, setTool] = useState<Tool>("select");
   const [snapping, setSnapping] = useState(true);
@@ -88,6 +114,15 @@ export function App() {
     [client, linked, session],
   );
 
+  /**
+   * A three-point edit: send the marks, let the runtime do the arithmetic.
+   *
+   * The browser decides nothing here. Which point is derived, whether the
+   * edit is backtimed, whether four marks can be reconciled and how far the
+   * playhead then moves all come back in the plan, because all of them are
+   * exact rational time and computing them here would be a second, drifting
+   * implementation of the same arithmetic.
+   */
   const place = useCallback(
     async (mode: "insert" | "overwrite") => {
       if (!timeline || !media?.video || !playhead) return;
@@ -97,30 +132,35 @@ export function App() {
         session.run(mode, () => Promise.reject(new Error("the media declares no frame rate")));
         return;
       }
-      const first = m.in ?? 0;
-      const last = m.out ?? (media.video.frames ?? 1) - 1;
-      if (last < first) {
-        session.run(mode, () => Promise.reject(new Error("the out mark is before the in mark")));
-        return;
-      }
       const tracks = destinationTracks(timeline, media);
       if (tracks.length === 0) {
         session.run(mode, () => Promise.reject(new Error("no unlocked track to place material on")));
         return;
       }
-      const clip = {
-        media: media.id,
-        source_range: { start_time: exact(first, mediaRate), duration: exact(last - first + 1, mediaRate) },
+      // A mark is the picture the editor is looking at; an out point is one
+      // past the last picture they want, which is where the two models meet.
+      const source: EditMarks = {
+        in: m.in == null ? null : exact(m.in, mediaRate),
+        out: m.out == null ? null : exact(m.out + 1, mediaRate),
       };
-      const r = await session.run(mode, () => client.place(tracks, playhead, clip, mode));
+      const rm = recordMarks[timeline.id] ?? { in: null, out: null };
+      const record: EditMarks =
+        rm.in == null && rm.out == null
+          ? { in: playhead, out: null }
+          : {
+              in: rm.in == null ? null : exact(rm.in, rate),
+              out: rm.out == null ? null : exact(rm.out + 1, rate),
+            };
+      const r = await session.run(mode, () =>
+        client.threePoint(tracks, media.id, source, record, mode, mismatch),
+      );
       if (!r) return;
-      setLastApplied(`${mode} · ${last - first + 1} pictures of ${media.name} on ${tracks.length} track(s)`);
+      setLastApplied(`${r.plan.description} · ${media.name} on ${tracks.length} track(s)`);
       // As in every editor, the playhead moves to the end of what was placed.
-      const durationSeconds = ((last - first + 1) * mediaRate.den) / mediaRate.num;
-      setPlayheadTicks((t) => t + Math.round((durationSeconds * rate.num) / rate.den));
+      setPlayheadTicks(frameAt(r.plan.record.end.seconds, rate));
       if (r.clips[0]) setSelectionKey(r.clips[0]);
     },
-    [client, marks, media, playhead, rate.den, rate.num, session, timeline],
+    [client, marks, media, mismatch, playhead, rate, recordMarks, session, timeline],
   );
 
   const removeSelected = useCallback(
@@ -138,8 +178,22 @@ export function App() {
     if (track) void edit(track, { op: "split_at", time: playhead });
   }, [edit, playhead, selection, timeline]);
 
+  /**
+   * I, O and clear apply to whichever monitor is active — the source viewer
+   * marks pictures of the media, the record monitor marks the sequence. That
+   * is what those keys have meant in every cutting room since tape.
+   */
   const mark = useCallback(
     (which: "in" | "out" | "clear") => {
+      if (monitor === "record") {
+        if (!timeline) return;
+        setRecordMarks((all) => {
+          const cur = all[timeline.id] ?? { in: null, out: null };
+          const next = which === "clear" ? { in: null, out: null } : { ...cur, [which]: playheadTicks };
+          return { ...all, [timeline.id]: next };
+        });
+        return;
+      }
       if (!media) return;
       setMarks((all) => {
         const cur = all[media.id] ?? { in: null, out: null };
@@ -147,7 +201,7 @@ export function App() {
         return { ...all, [media.id]: next };
       });
     },
-    [media, picture],
+    [media, monitor, picture, playheadTicks, timeline],
   );
 
   const stepRecord = useCallback(
@@ -182,6 +236,12 @@ export function App() {
   );
 
   const revision = session.project?.revision ?? 0;
+
+  // The band the timeline draws. Ticks are the number; seconds are layout.
+  const recordMarkSeconds = useMemo(
+    () => markSecondsOf(timeline ? (recordMarks[timeline.id] ?? NO_MARKS) : NO_MARKS, rate),
+    [rate, recordMarks, timeline],
+  );
 
   const browser = (
     <Browser
@@ -315,6 +375,21 @@ export function App() {
             linked={linked}
             onLinked={setLinked}
             lastApplied={lastApplied}
+            marks={recordMarkSeconds}
+            onMark={(which) => {
+              setMonitor("record");
+              if (which === "clear") {
+                if (timeline) setRecordMarks((all) => ({ ...all, [timeline.id]: { in: null, out: null } }));
+                return;
+              }
+              if (!timeline) return;
+              setRecordMarks((all) => {
+                const cur = all[timeline.id] ?? { in: null, out: null };
+                return { ...all, [timeline.id]: { ...cur, [which]: playheadTicks } };
+              });
+            }}
+            mismatch={mismatch}
+            onMismatch={setMismatch}
           />
         </div>
       )}

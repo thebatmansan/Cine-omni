@@ -265,12 +265,39 @@ no analytic transform on the GPU: the lattice is an approximation, and its size
 is the measured number above rather than a matter of taste. A 65³ lattice would
 halve the error at 558 ms to bake.
 
+### Marks decide the edit
+
+The source viewer and the record monitor both take `I` and `O`, and the keys
+apply to whichever is active — the source marks pictures of the media, the
+record marks the sequence, and a band in the ruler shows the span. Then any
+three of the four points is an edit: mark the source in and out and put the
+playhead where it goes, or mark the timeline in and out and mark only where in
+the shot to start, and the fourth point is arithmetic.
+
+The arithmetic is the runtime's, not the browser's. `three_point` returns the
+plan it resolved — the source range, the record range, whether the edit was
+*backtimed* (marked by where it must end, so the record in was derived
+backwards) and which points were derived — and the interface reports that
+sentence rather than computing a second, drifting copy of it. The edit is
+checked against the asset's own available range before anything is committed,
+so an edit that would run off the end of the shot is refused with the shortfall
+in frames rather than discovered at playback.
+
+Four marks are a different question, and the interface makes the editor answer
+it rather than answering quietly: when the two durations disagree the edit is
+refused by default, naming the difference, and the `4-pt` control chooses
+between trimming the source at the head or the tail and keeping the source's
+length by moving a timeline point.
+
 ## What remains
 
 * **No multi-select, no linked selection, no sync-break indicator.** Edits follow
   links; the interface does not yet draw a broken sync.
-* **Three-point editing is source in/out plus the playhead.** No record in/out,
-  fit-to-fill or backtiming.
+* **Fit-to-fill is not on offer.** Four marks that disagree can be settled by
+  trimming the source at either end or by keeping the source's length and
+  moving a timeline point; changing the clip's *speed* to stretch it onto the
+  marks would need a time effect the model does not have, and the refusal says
+  so rather than doing a trim under that name.
 * **Join and replace are protocol-only**; no gesture reaches them.
 * **Placing material assumes the sequence can hold it**: a clip at 30 fps in a
   24 fps sequence is placed with its exact duration, which is not a whole number
