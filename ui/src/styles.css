@@ -840,3 +840,12 @@ button.danger { background: #6b2a22; border-color: var(--bad); }
 }
 .strip-move button:disabled { opacity: 0.3; cursor: default; }
 .strip-move button:hover:not(:disabled) { color: var(--text); border-color: var(--accent-dim); }
+.pdf-link {
+  font-size: 10px;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent-dim);
+  border-radius: 2px;
+  padding: 0 5px;
+}
+.pdf-link:hover { color: var(--text); border-color: var(--accent); }

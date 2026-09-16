@@ -6,6 +6,7 @@
 //! cine import <dir> <file.fountain|.fdx|.otio> import a document (re-import syncs)
 //! cine report <dir>                            print every derived artifact per scene
 //! cine export <dir> <fountain|fdx|usda|otio|breakdown|schedule|dood|callsheets> [--scene N] [--out FILE]
+//! cine export <dir> callsheet-pdf --day N --out FILE   one day's call sheet, printable
 //! cine edit <dir> <scene-index> <line-index> "new text"   edit a dialogue line (runs the cascade)
 //! cine undo <dir> | cine redo <dir>
 //! cine stats <dir>
@@ -100,6 +101,17 @@ fn run(args: &[String]) -> CliResult {
             let dir = args.get(1).ok_or("missing <dir>")?;
             let what = args.get(2).ok_or("missing export kind")?;
             let p = OmniProject::open(dir)?;
+            // The one export that is not text.
+            if what == "callsheet-pdf" {
+                let day = flag(args, "--day")
+                    .and_then(|d| d.parse().ok())
+                    .unwrap_or(1usize);
+                let bytes = rpc::call_sheet_pdf(&p, day)?;
+                let out = flag(args, "--out").ok_or("a PDF needs --out <file>")?;
+                std::fs::write(out, &bytes)?;
+                println!("wrote {out} ({} bytes, day {day})", bytes.len());
+                return Ok(());
+            }
             let text = rpc::export(&p, what, flag(args, "--scene").and_then(|s| s.parse().ok()))?;
             match flag(args, "--out") {
                 Some(path) => {

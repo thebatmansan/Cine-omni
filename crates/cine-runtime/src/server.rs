@@ -1,6 +1,6 @@
 //! The listening runtime: accept connections, serve the UI, carry RPC.
 
-use crate::http::{content_type_for, read_request, resolve_static, respond};
+use crate::http::{content_type_for, read_request, resolve_static, respond, respond_with};
 use crate::rpc::{self, Request};
 use crate::session::Runtime;
 use crate::ws::{self, Frame};
@@ -184,6 +184,7 @@ fn handle_connection(
     match route {
         "/frame" => serve_frame(&mut stream, &runtime, query),
         "/thumbnail" => serve_thumbnail(&mut stream, &runtime, query),
+        "/callsheet" => serve_call_sheet(&mut stream, &runtime, query),
         "/health" => {
             let body = serde_json::json!({
                 "status": "ok",
@@ -296,6 +297,35 @@ fn serve_websocket(
     runtime.disconnect(client_id);
     let _ = writer_thread.join();
     result
+}
+
+/// One day's call sheet, as the PDF that gets printed and taped to a wall.
+///
+/// Built on request: it is a page of text derived from state the runtime
+/// already holds, which is not the same kind of work as decoding a picture.
+fn serve_call_sheet(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
+    let day = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("day="))
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1);
+    match crate::rpc::call_sheet_pdf(&runtime.project, day) {
+        Ok(bytes) => respond_with(
+            stream,
+            "200 OK",
+            "application/pdf",
+            &[&format!(
+                "Content-Disposition: inline; filename=\"call-sheet-day-{day}.pdf\""
+            )],
+            &bytes,
+        ),
+        Err(why) => respond(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            why.as_bytes(),
+        ),
+    }
 }
 
 /// A thumbnail from the project's cache, if one has been made.

@@ -307,6 +307,187 @@ impl CallSheet {
     }
 }
 
+/// The call sheet as a printable PDF page.
+///
+/// One page, US Letter, laid out the way a call sheet is read on set: the day
+/// and the general call at the top, then what is being shot, then who is
+/// needed and when, then the departments, then the notes. Everything on it
+/// comes from the sheet; nothing is invented to fill a box, and a box with
+/// nothing behind it says so rather than being left to look complete.
+pub fn call_sheet_pdf(sheet: &CallSheet, production: &str) -> Vec<u8> {
+    use crate::pdf::{Font, PageSize, Pdf};
+
+    let size = PageSize::LETTER;
+    let (left, right) = (48.0, size.width - 48.0);
+    // ASCII in the metadata: a standard font has no em dash, and a title that
+    // reads "Untitled ? day 1" in every reader is worse than a hyphen.
+    let mut pdf = Pdf::new(format!("{production} - day {}", sheet.day));
+    let page = pdf.page(size);
+    let mut y = size.height - 56.0;
+
+    // Banner: the production, and the day it is.
+    page.rect(left, y - 6.0, right - left, 30.0, 0.12);
+    page.text(left + 8.0, y + 6.0, 15.0, Font::HelveticaBold, production);
+    page.text_right(
+        right - 8.0,
+        y + 6.0,
+        13.0,
+        Font::HelveticaBold,
+        &format!("DAY {}  ·  {}", sheet.day, sheet.date),
+    );
+    y -= 28.0;
+    page.text(
+        left,
+        y,
+        11.0,
+        Font::HelveticaBold,
+        &format!("GENERAL CALL  {}", sheet.general_call),
+    );
+    page.text_right(
+        right,
+        y,
+        10.0,
+        Font::Helvetica,
+        &if sheet.locations.is_empty() {
+            "location not set".to_string()
+        } else {
+            sheet.locations.join("  ·  ")
+        },
+    );
+    y -= 10.0;
+    page.line(left, y, right, y, 1.0, 0.4);
+    y -= 18.0;
+
+    // What is being shot.
+    let heading = |page: &mut crate::pdf::Page, y: &mut f32, text: &str| {
+        page.text(left, *y, 10.0, Font::HelveticaBold, text);
+        *y -= 12.0;
+    };
+    heading(page, &mut y, "SCENES");
+    page.text(left, y, 8.0, Font::HelveticaBold, "SC");
+    page.text(left + 40.0, y, 8.0, Font::HelveticaBold, "SET");
+    page.text(left + 300.0, y, 8.0, Font::HelveticaBold, "CAST");
+    page.text_right(right, y, 8.0, Font::HelveticaBold, "PAGES");
+    y -= 4.0;
+    page.line(left, y, right, y, 0.5, 0.6);
+    y -= 11.0;
+    for scene in &sheet.scenes {
+        page.text(left, y, 9.0, Font::Helvetica, &scene.number);
+        page.text(left + 40.0, y, 9.0, Font::Helvetica, &scene.heading);
+        page.text(
+            left + 300.0,
+            y,
+            9.0,
+            Font::Helvetica,
+            &scene
+                .cast_numbers
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        page.text_right(right, y, 9.0, Font::Helvetica, &scene.pages);
+        y -= 12.0;
+    }
+    if sheet.scenes.is_empty() {
+        page.text(
+            left,
+            y,
+            9.0,
+            Font::Helvetica,
+            "nothing scheduled for this day",
+        );
+        y -= 12.0;
+    }
+    y -= 8.0;
+
+    // Who is needed, and when.
+    heading(page, &mut y, "CAST");
+    page.text(left, y, 8.0, Font::HelveticaBold, "#");
+    page.text(left + 24.0, y, 8.0, Font::HelveticaBold, "NAME");
+    page.text(left + 240.0, y, 8.0, Font::HelveticaBold, "PICKUP");
+    page.text(left + 320.0, y, 8.0, Font::HelveticaBold, "MAKE-UP");
+    page.text(left + 400.0, y, 8.0, Font::HelveticaBold, "ON SET");
+    y -= 4.0;
+    page.line(left, y, right, y, 0.5, 0.6);
+    y -= 11.0;
+    for call in &sheet.cast_calls {
+        page.text(left, y, 9.0, Font::Helvetica, &call.number.to_string());
+        page.text(left + 24.0, y, 9.0, Font::Helvetica, &call.name);
+        page.text(
+            left + 240.0,
+            y,
+            9.0,
+            Font::Helvetica,
+            &call.pickup.to_string(),
+        );
+        page.text(
+            left + 320.0,
+            y,
+            9.0,
+            Font::Helvetica,
+            &call.makeup.to_string(),
+        );
+        page.text(
+            left + 400.0,
+            y,
+            9.0,
+            Font::Helvetica,
+            &call.on_set.to_string(),
+        );
+        y -= 12.0;
+    }
+    y -= 8.0;
+
+    // Departments.
+    heading(page, &mut y, "CREW");
+    let mut x = left;
+    for call in &sheet.crew_calls {
+        page.text(
+            x,
+            y,
+            9.0,
+            Font::Helvetica,
+            &format!("{}  {}", call.department, call.call),
+        );
+        x += 130.0;
+        if x > right - 100.0 {
+            x = left;
+            y -= 12.0;
+        }
+    }
+    if x != left {
+        y -= 12.0;
+    }
+    y -= 8.0;
+
+    // Notes, and the boxes that have nothing behind them yet.
+    heading(page, &mut y, "NOTES");
+    for note in &sheet.notes {
+        page.text(left, y, 9.0, Font::Helvetica, note);
+        y -= 11.0;
+    }
+    page.text(left, y, 9.0, Font::Helvetica, &sheet.weather_placeholder);
+    y -= 11.0;
+    page.text(
+        left,
+        y,
+        9.0,
+        Font::Helvetica,
+        "Hospital, unit base and transport are not in this project yet.",
+    );
+
+    page.line(left, 40.0, right, 40.0, 0.5, 0.6);
+    page.text(
+        left,
+        30.0,
+        7.5,
+        Font::Helvetica,
+        "Generated by CINE-OMNI from the schedule. Times are derived from the general call.",
+    );
+    pdf.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

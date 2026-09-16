@@ -83,6 +83,32 @@ pub fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &
     let _ = stream.flush();
 }
 
+/// `respond` with extra headers, for a response a browser should treat as a
+/// file rather than a page.
+pub fn respond_with(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    extra: &[&str],
+    body: &[u8],
+) {
+    let mut head = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-cache\r\n",
+        body.len()
+    );
+    for header in extra {
+        head.push_str(header);
+        head.push_str("\r\n");
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+}
+
 pub fn content_type_for(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",

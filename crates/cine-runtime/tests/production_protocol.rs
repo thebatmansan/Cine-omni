@@ -260,3 +260,62 @@ fn a_strip_moved_to_a_day_stays_there_until_it_is_released() {
     let undone = c.call("production", json!({}));
     assert_eq!(day_of(&undone, &scene), Some(was));
 }
+
+/// The call sheet a production actually uses: a PDF, served to the browser and
+/// readable by something that is not this build.
+#[test]
+fn the_call_sheet_is_served_as_a_pdf_a_reader_can_open() {
+    let h = Harness::start();
+    let (status, headers, body) = h.get("/callsheet?day=1");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        headers
+            .iter()
+            .any(|h| h.to_ascii_lowercase().contains("application/pdf")),
+        "{headers:?}"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|h| h.to_ascii_lowercase().contains("call-sheet-day-1.pdf")),
+        "it downloads under a name that says what it is: {headers:?}"
+    );
+    assert!(body.starts_with(b"%PDF-1.4"), "it is a PDF");
+    assert!(body.ends_with(b"%%EOF\n"));
+
+    // A day that is not a shooting day is a 404 that says so, not an empty PDF.
+    let (status, _, body) = h.get("/callsheet?day=999");
+    assert!(status.contains("404"), "{status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("no call sheet"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // And what the PDF says is what the projection says.
+    if std::process::Command::new("which")
+        .arg("pdftotext")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let dir = std::env::temp_dir().join(format!("cine-rt-callsheet-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("day1.pdf");
+        let (_, _, body) = h.get("/callsheet?day=1");
+        std::fs::write(&path, &body).unwrap();
+        let out = std::process::Command::new("pdftotext")
+            .args([path.to_str().unwrap(), "-"])
+            .output()
+            .expect("pdftotext");
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let mut c = h.client();
+        let production = c.call("production", json!({}));
+        let sheet = &production["call_sheets"][0];
+        for scene in sheet["scenes"].as_array().unwrap() {
+            let heading = scene["heading"].as_str().unwrap_or_default();
+            assert!(text.contains(heading), "the PDF has {heading}: {text}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

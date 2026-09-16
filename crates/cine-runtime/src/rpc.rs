@@ -301,6 +301,28 @@ pub fn full_report(p: &OmniProject) -> String {
 }
 
 /// Render one of the project's export formats.
+/// One day's call sheet as a PDF, for printing.
+///
+/// Binary, so it does not go through the JSON protocol: the server serves it
+/// at `/callsheet?day=N` and the command line writes it to a file.
+pub fn call_sheet_pdf(p: &OmniProject, day: usize) -> std::result::Result<Vec<u8>, String> {
+    let doc = first_document(p).ok_or_else(|| "no screenplay imported".to_string())?;
+    let g = p.engine.read();
+    let schedule = EntityId::derived(doc, kinds::LOGISTICS_SCHEDULE);
+    let day_id = cine_logistics::graph::day_id(schedule, day);
+    let sheet = cine_logistics::graph::read_call_sheet(&g, day_id)
+        .ok_or_else(|| format!("day {day} has no call sheet"))?;
+    let production = g
+        .of_kind(kinds::PROJECT)
+        .first()
+        .map(|n| n.name())
+        .unwrap_or_else(|| "PRODUCTION".into());
+    Ok(cine_logistics::callsheet::call_sheet_pdf(
+        &sheet,
+        &production,
+    ))
+}
+
 pub fn export(
     p: &OmniProject,
     what: &str,

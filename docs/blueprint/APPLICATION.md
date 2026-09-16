@@ -184,6 +184,14 @@ not shooting, not released, still paid — is what re-ordering the board actuall
 moves, so it is never folded into a single total. `cine export <dir> dood`
 prints the same table.
 
+Each day's call sheet prints: the PDF button on the panel opens
+`/callsheet?day=N`, and `cine export <dir> callsheet-pdf --day N --out f.pdf`
+writes the same file. It is written by a small PDF writer in this workspace
+rather than a dependency, and the tests read it back with poppler and parse it
+with Ghostscript instead of trusting that it is a PDF. The boxes a production
+expects that this project has nothing behind — weather, hospital, unit base,
+transport — are printed as saying so.
+
 A strip can be moved: the buttons on it put the scene on another day, and the
 scheduler then arranges everything else around it rather than moving it back,
 because the pin is stored with the constraints. Releasing it hands the decision

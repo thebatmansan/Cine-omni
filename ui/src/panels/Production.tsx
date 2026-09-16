@@ -211,6 +211,18 @@ export function Production({
           <div className="panel-head">
             <span>Call sheet</span>
             {sheet && <span className="count">Day {sheet.day} · {dateLabel(sheet.date)}</span>}
+            <span className="spacer" />
+            {sheet && (
+              <a
+                className="pdf-link"
+                href={`/callsheet?day=${sheet.day}`}
+                target="_blank"
+                rel="noreferrer"
+                title="The printable call sheet for this day"
+              >
+                PDF
+              </a>
+            )}
           </div>
           <div className="panel-body pad">{sheet ? <Sheet sheet={sheet} /> : <div className="empty">—</div>}</div>
         </div>

@@ -45,6 +45,7 @@ pub mod error;
 pub mod fixtures;
 pub mod graph;
 pub mod metadata;
+pub mod pdf;
 pub mod schedule;
 pub mod shotlist;
 
