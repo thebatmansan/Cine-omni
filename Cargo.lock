@@ -479,6 +479,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "cine-audio-io",
+ "cine-color",
  "cine-gpu",
  "cine-jobs",
  "cine-logistics",
@@ -520,6 +521,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "cine-audio-io",
+ "cine-color",
  "cine-gpu",
  "cine-media",
  "cine-timeline",
