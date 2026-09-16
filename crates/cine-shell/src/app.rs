@@ -248,6 +248,17 @@ struct App {
     /// How the pictures must be shown: the project's colour config, compiled
     /// and baked by the runtime. `None` means they are shown as decoded.
     viewing: Option<Viewing>,
+    /// Scopes of the picture on screen, measured when the panels are rebuilt
+    /// rather than per picture: a scope is for looking at, and a viewer that
+    /// dropped frames to draw one would be measuring the wrong thing.
+    scopes: Option<Arc<crate::scopes::Scopes>>,
+    /// The picture last put on the GPU, and how: what the scopes measure.
+    /// Planes are `Arc`-shared, so keeping it costs a pointer, not a frame.
+    last_picture: Option<(
+        VideoFrame,
+        cine_gpu::yuv::YuvConversion,
+        Option<Arc<cine_color::lut::Lut3D>>,
+    )>,
     /// The sequence's sound on the device, when there is one.
     sound: Option<SoundEngine>,
 }
@@ -286,6 +297,8 @@ impl App {
             finished: false,
             sequence: None,
             viewing: None,
+            scopes: None,
+            last_picture: None,
             sound: None,
         }
     }
@@ -327,6 +340,7 @@ impl App {
             ));
         }
         self.picture_size = Some((conversion.width, conversion.height));
+        self.last_picture = Some((frame.clone(), conversion, lut.clone()));
         if let Err(e) = presenter.set_view_lut(&surface.device, &surface.queue, lut.as_ref()) {
             self.failure = Some(format!("the view transform could not be uploaded: {e}"));
             return;
@@ -358,6 +372,25 @@ impl App {
                 Err(e) => self.failure = Some(format!("colour conversion failed: {e}")),
             }
         }
+    }
+
+    /// Measure the picture on screen, for the scopes pane.
+    ///
+    /// Done while the panels are being rebuilt — a few times a second — and
+    /// not per picture: playback's budget belongs to playback.
+    fn measure_scopes(&mut self) {
+        let Some((frame, conversion, lut)) = self.last_picture.as_ref() else {
+            return;
+        };
+        self.scopes = crate::scopes::of_frame(
+            frame,
+            conversion,
+            lut.as_ref(),
+            crate::scopes::Sampling::default(),
+            256,
+            256,
+        )
+        .map(Arc::new);
     }
 
     /// The view transform for the picture presenting at `pts`, if the project
@@ -479,6 +512,7 @@ impl App {
             buffered: p.source().buffered().len(),
             buffer_bytes: a.bytes,
             colour: self.colour.clone(),
+            scopes: self.scopes.clone(),
             view: self
                 .viewing
                 .as_ref()
@@ -787,6 +821,15 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // The scopes measure the picture on screen, and the panels show what
+        // they measured: both happen before anything is borrowed for drawing.
+        let rebuilding = self.ui_dirty
+            || self
+                .ui_built
+                .is_none_or(|at| at.elapsed() >= Duration::from_millis(200));
+        if rebuilding {
+            self.measure_scopes();
+        }
         // Gathered before anything is borrowed mutably: `status` reads the
         // whole of `self`, and the drawing below borrows four of its fields.
         let status = self.status();

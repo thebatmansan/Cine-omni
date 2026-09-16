@@ -63,6 +63,17 @@ license_text = "licenses/OpenColorIO-Config-ACES-BSD-3-Clause.txt"
 obligations = "BSD-3-Clause: binary distributions must reproduce the copyright notice, conditions and disclaimer in their documentation; no endorsement by the copyright holders' names."
 
 [[entry]]
+project = "ASC MHL (Media Hash List) specification"
+url = "https://github.com/ascmitc/mhl"
+version = "v2.0 (format), implemented from the published specification"
+license = "MIT (specification and reference tool)"
+copyright = "American Society of Cinematographers"
+integration = "format"
+used_by = ["crates/cine-media/src/mhl.rs"]
+modifications = "An independent implementation of a subset of the format: generations with xxh64/xxh3/md5/sha1 hashes, read and written. No reference-tool code was used; the implementation has not been validated against the reference `ascmhl` tool, which the capability matrix records."
+obligations = "none: a file format carries no licence on the files that read it."
+
+[[entry]]
 project = "Blender"
 url = "https://www.blender.org/"
 version = "4.2.4 LTS"

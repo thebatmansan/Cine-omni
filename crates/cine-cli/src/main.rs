@@ -12,6 +12,9 @@
 //! cine demo                                    in-memory walkthrough of the thesis
 //! cine serve <dir>                             JSON-RPC 2.0 over stdio (one client)
 //! cine gpu                                     probe GPU support and kernel registry
+//! cine offload <card> <destination> [--hash xxh64|xxh3|md5|sha1]
+//!                                              copy a card, verify it from disk, write the ASC MHL
+//! cine verify <folder>                         check a folder against its ASC MHL
 //! ```
 
 mod start;
@@ -163,12 +166,126 @@ fn run(args: &[String]) -> CliResult {
                         || std::env::var_os("WAYLAND_DISPLAY").is_some()),
             })?
         }
+        "offload" => offload(args)?,
+        "verify" => verify(args)?,
         "serve" => serve(args.get(1).ok_or("missing <dir>")?)?,
         "gpu" => gpu_probe(),
         "help" | "--help" | "-h" => print_usage(),
         other => return Err(format!("unknown command `{other}`").into()),
     }
     Ok(())
+}
+
+/// `cine offload <card> <destination>`: the DIT's first job of the day.
+fn offload(args: &[String]) -> CliResult {
+    use cine_media::offload::Step;
+    let source = PathBuf::from(args.get(1).ok_or("missing <card>")?);
+    let destination = PathBuf::from(args.get(2).ok_or("missing <destination>")?);
+    let kind = hash_kind(flag(args, "--hash").unwrap_or("xxh64"))?;
+    if !source.is_dir() {
+        return Err(format!("{} is not a folder", source.display()).into());
+    }
+    println!(
+        "offloading {} → {} ({kind})",
+        source.display(),
+        destination.display()
+    );
+    let mut last = String::new();
+    let report = cine_media::offload::offload(&source, &destination, kind, |step| match step {
+        Step::Copying { path, done, total } => {
+            last = path.clone();
+            print!("\r  [{:>3}/{total}] copying   {path:<48}", done + 1);
+            let _ = std::io::stdout().flush();
+        }
+        Step::Verifying { done, total, .. } => {
+            print!("\r  [{:>3}/{total}] verifying {last:<48}", done + 1);
+            let _ = std::io::stdout().flush();
+        }
+    })?;
+    println!("\r{:<80}", "");
+    for (path, source_hash, copy_hash) in &report.mismatched {
+        println!("  MISMATCH {path}: card {source_hash}, copy {copy_hash}");
+    }
+    for path in &report.refused {
+        println!("  refused (already at the destination): {path}");
+    }
+    println!(
+        "  {} file(s), {:.1} MB, {:.1} MB/s including verification",
+        report.copied.len(),
+        report.bytes as f64 / 1e6,
+        report.megabytes_per_second()
+    );
+    match &report.hash_list {
+        Some(path) => println!("  hash list: {}", path.display()),
+        None => println!("  nothing to write a hash list for"),
+    }
+    if !report.is_clean() {
+        return Err("the offload did not complete cleanly; the card has not been verified".into());
+    }
+    println!("  verified from disk. The card may be wiped.");
+    Ok(())
+}
+
+/// `cine verify <folder>`: check a folder against the newest hash list it has.
+fn verify(args: &[String]) -> CliResult {
+    let root = PathBuf::from(args.get(1).ok_or("missing <folder>")?);
+    let generations = cine_media::mhl::generations(&root);
+    let newest = generations
+        .last()
+        .ok_or_else(|| format!("{} has no ascmhl folder to check against", root.display()))?;
+    println!("checking {} against {}", root.display(), newest.display());
+    let list = cine_media::mhl::read_generation(newest)?;
+    if !list.unimplemented.is_empty() {
+        println!(
+            "  note: this list uses {} — not applied by this build",
+            list.unimplemented.join(", ")
+        );
+    }
+    let total = list.entries.len();
+    let report = cine_media::mhl::verify(&root, &list, |done, _| {
+        print!("\r  [{done:>3}/{total}]");
+        let _ = std::io::stdout().flush();
+    })?;
+    println!("\r{:<40}", "");
+    for (path, expected, actual) in &report.failed {
+        println!("  FAILED {path}: expected {expected}, found {actual}");
+    }
+    for path in &report.missing {
+        println!("  MISSING {path}");
+    }
+    for path in &report.unlisted {
+        println!("  not in the list: {path}");
+    }
+    println!(
+        "  {} verified, {} failed, {} missing, {} unlisted",
+        report.verified.len(),
+        report.failed.len(),
+        report.missing.len(),
+        report.unlisted.len()
+    );
+    // The check is itself a generation: the folder's history is its record.
+    let written =
+        cine_media::mhl::write_generation(&root, &cine_media::mhl::generation_for(&list, &report))?;
+    println!("  recorded as {}", written.display());
+    if !report.is_clean() {
+        return Err("the folder does not match its hash list".into());
+    }
+    Ok(())
+}
+
+fn hash_kind(name: &str) -> std::result::Result<cine_media::mhl::HashKind, String> {
+    use cine_media::mhl::HashKind;
+    Ok(match name {
+        "xxh64" => HashKind::Xxh64,
+        "xxh3" => HashKind::Xxh3,
+        "md5" => HashKind::Md5,
+        "sha1" => HashKind::Sha1,
+        other => {
+            return Err(format!(
+                "unknown hash `{other}`; ASC MHL names xxh64, xxh3, md5 and sha1"
+            ))
+        }
+    })
 }
 
 fn print_usage() {

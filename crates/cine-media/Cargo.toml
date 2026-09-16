@@ -28,6 +28,11 @@ mp4 = "0.14"
 rusty_h264 = { version = "0.16", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png", "tiff", "jpeg"] }
 sha2 = "0.10"
+# ASC MHL: the hashes an offload is verified by, and the XML it is written in.
+twox-hash.workspace = true
+md-5.workspace = true
+sha1.workspace = true
+roxmltree.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

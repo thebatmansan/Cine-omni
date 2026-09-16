@@ -215,10 +215,19 @@ lattice vs the exact transform       2.1 of 255 in legal code values, 2.8 with s
 lattice cost                         88 ms to bake, 0.6 MB on the GPU
 ```
 
-There is no grading — no wheels, curves, qualifiers or windows — no scopes in
-any viewer, and no analytic transform on the GPU: the lattice is an
-approximation, and its size is the measured number above rather than a matter
-of taste. A 65³ lattice would halve the error at 558 ms to bake.
+The native window also has scopes: a waveform and a vectorscope of the picture
+*as shown*, through the same conversion and the same lattice the shader uses,
+so what the scope reads and what the eye sees differ by no more than the
+lattice's own error. They read a sixteenth of the pixels — every fourth each
+way — and are measured while the panels redraw rather than per picture, because
+playback's budget belongs to playback. The pane says both: how many samples,
+and what they cost.
+
+There is no grading — no wheels, curves, qualifiers or windows — no parade,
+histogram or HDR scope in the interface, no scopes at all in the browser, and
+no analytic transform on the GPU: the lattice is an approximation, and its size
+is the measured number above rather than a matter of taste. A 65³ lattice would
+halve the error at 558 ms to bake.
 
 ## What remains
 

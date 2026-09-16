@@ -78,6 +78,8 @@ pub struct ViewerStatus {
     pub buffer_bytes: usize,
     /// Colour interpretation and whether it had to be assumed.
     pub colour: Option<(String, bool)>,
+    /// Scopes of the picture on screen, when one has been measured.
+    pub scopes: Option<std::sync::Arc<crate::scopes::Scopes>>,
     /// The view the picture is shown through, and how far the lattice the GPU
     /// interpolates is from the transform itself, in code value of 255.
     pub view: Option<(String, f32)>,
@@ -104,6 +106,7 @@ pub enum Pane {
     Project,
     Inspector,
     Capabilities,
+    Scopes,
 }
 
 impl Pane {
@@ -114,6 +117,7 @@ impl Pane {
             Pane::Project => "Project",
             Pane::Inspector => "Inspector",
             Pane::Capabilities => "Capabilities",
+            Pane::Scopes => "Scopes",
         }
     }
 }
@@ -164,7 +168,8 @@ impl Workspace {
         let timeline = tiles.insert_pane(Pane::Timeline);
 
         let left = tiles.insert_tab_tile(vec![project]);
-        let right = tiles.insert_tab_tile(vec![inspector, capabilities]);
+        let scopes = tiles.insert_pane(Pane::Scopes);
+        let right = tiles.insert_tab_tile(vec![inspector, scopes, capabilities]);
         let top = tiles.insert_horizontal_tile(vec![left, program, right]);
         let root = tiles.insert_vertical_tile(vec![top, timeline]);
         Workspace {
@@ -383,6 +388,7 @@ impl egui_tiles::Behavior<Pane> for PaneBehavior<'_> {
             Pane::Project => self.project(ui),
             Pane::Inspector => self.inspector(ui),
             Pane::Capabilities => self.capabilities(ui),
+            Pane::Scopes => self.scopes(ui),
         }
         egui_tiles::UiResponse::None
     }
@@ -528,6 +534,48 @@ impl PaneBehavior<'_> {
             }
             ui.add_space(4.0);
         }
+    }
+
+    /// Waveform, parade and vectorscope of the picture on screen.
+    ///
+    /// Drawn from the counts `cine-color` produced, with no smoothing and no
+    /// gain: a trace is where the pixels are. The heading says what was
+    /// measured — how much of the picture, and whether it went through the
+    /// view — because a scope that does not say what it read is a decoration.
+    fn scopes(&mut self, ui: &mut Ui) {
+        let Some(scopes) = self.status.scopes.clone() else {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("No picture measured yet.")
+                    .size(11.0)
+                    .color(DIM),
+            );
+            return;
+        };
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "{} samples · {:.1} ms · {}",
+                scopes.sampled,
+                scopes.took.as_secs_f64() * 1000.0,
+                if scopes.through_view {
+                    "through the view"
+                } else {
+                    "as decoded"
+                }
+            ))
+            .size(10.0)
+            .color(DIM),
+        );
+        let width = ui.available_width().max(32.0);
+        let height = (ui.available_height() - 24.0).max(60.0);
+        let each = (height / 2.0 - 6.0).max(40.0);
+
+        let waveform = ui.allocate_space(Vec2::new(width, each)).1;
+        draw_waveform(ui, waveform, &scopes.waveform);
+        ui.add_space(4.0);
+        let vector = ui.allocate_space(Vec2::new(width, each)).1;
+        draw_vectorscope(ui, vector, &scopes.vectorscope);
     }
 
     fn timeline_pane(&mut self, ui: &mut Ui) {
@@ -779,4 +827,92 @@ fn longest_gop(keyframes: &[usize], count: usize) -> usize {
         .chain(keyframes.last().map(|&k| count.saturating_sub(k)))
         .max()
         .unwrap_or(count)
+}
+
+/// A luma waveform: one column per sampled column, brightness by count.
+///
+/// Counts are drawn on a square-root curve, which is what a scope does: a
+/// single stray pixel must be visible against a flat sky without the flat sky
+/// saturating everything.
+fn draw_waveform(ui: &Ui, rect: Rect, wf: &cine_color::scopes::Waveform) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(12, 12, 14));
+    let peak = wf.luma.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let cw = rect.width() / wf.columns.max(1) as f32;
+    let rh = rect.height() / wf.rows.max(1) as f32;
+    for col in 0..wf.columns {
+        for row in 0..wf.rows {
+            let n = cine_color::scopes::Waveform::at(&wf.luma, wf.rows, col, row) as f32;
+            if n <= 0.0 {
+                continue;
+            }
+            let a = (n / peak).sqrt().clamp(0.0, 1.0);
+            // Row 0 is the bottom of the scale.
+            let y = rect.bottom() - (row as f32 + 1.0) * rh;
+            painter.rect_filled(
+                Rect::from_min_size(
+                    egui::pos2(rect.left() + col as f32 * cw, y),
+                    Vec2::new(cw.max(1.0), rh.max(1.0)),
+                ),
+                0.0,
+                Color32::from_rgba_unmultiplied(120, 235, 140, (a * 255.0) as u8),
+            );
+        }
+    }
+    // Reference lines at 0, 50 and 100% of the scale.
+    for t in [0.0, 0.5, 1.0] {
+        let y = rect.bottom() - t * rect.height();
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(90, 90, 100, 90)),
+        );
+    }
+}
+
+/// A vectorscope: hue around, saturation outward, with the primary targets.
+fn draw_vectorscope(ui: &Ui, rect: Rect, vs: &cine_color::scopes::Vectorscope) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(12, 12, 14));
+    let side = rect.width().min(rect.height());
+    let centre = rect.center();
+    let radius = side / 2.0 - 4.0;
+    painter.circle_stroke(
+        centre,
+        radius,
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(90, 90, 100, 110)),
+    );
+    let peak = vs.density.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let n = vs.size.max(1);
+    for y in 0..n {
+        for x in 0..n {
+            let count = vs.density[y * n + x] as f32;
+            if count <= 0.0 {
+                continue;
+            }
+            let a = (count / peak).sqrt().clamp(0.0, 1.0);
+            // Bin centres run -0.5..0.5 in Cb/Cr; up is +Cr.
+            let cb = (x as f32 + 0.5) / n as f32 - 0.5;
+            let cr = (y as f32 + 0.5) / n as f32 - 0.5;
+            let p = egui::pos2(centre.x + cb * 2.0 * radius, centre.y + cr * 2.0 * radius);
+            painter.rect_filled(
+                Rect::from_center_size(p, Vec2::splat((side / n as f32).max(1.0))),
+                0.0,
+                Color32::from_rgba_unmultiplied(235, 220, 120, (a * 255.0) as u8),
+            );
+        }
+    }
+    for target in &vs.targets {
+        let p = egui::pos2(
+            centre.x + target.x * 2.0 * radius,
+            centre.y + target.y * 2.0 * radius,
+        );
+        painter.circle_stroke(p, 4.0, Stroke::new(1.0, DIM));
+        painter.text(
+            p + Vec2::new(6.0, -2.0),
+            Align2::LEFT_CENTER,
+            &target.name,
+            FontId::monospace(9.0),
+            DIM,
+        );
+    }
 }

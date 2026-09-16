@@ -26,6 +26,8 @@ pub mod error;
 pub mod frame;
 pub mod h264_sps;
 pub mod identity;
+pub mod mhl;
+pub mod offload;
 pub mod probe;
 pub mod reader;
 pub mod schedule;

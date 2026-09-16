@@ -39,6 +39,7 @@ pub mod egui_layer;
 pub mod gpu;
 pub mod link;
 pub mod present;
+pub mod scopes;
 pub mod sound;
 pub mod viewer;
 pub mod workspace;
@@ -133,8 +134,14 @@ impl ShellCapabilities {
          48 kHz stereo only — no resampling, no downmix, no clip gain or fades, and no sound \
          at speeds other than 1",
     );
-    pub const SCOPES: Availability = Availability::Unavailable(
-        "scopes are implemented in cine-color but not wired to the viewer",
+    /// Waveform and vectorscope of the picture on screen, measured through the
+    /// same view transform the shader applies, on a sixteenth of the pixels
+    /// (every fourth each way). The interface says how many samples and what
+    /// it cost; `crate::scopes` checks them against known signals.
+    pub const SCOPES: Availability = Availability::Degraded(
+        "waveform and vectorscope of the picture as shown, from a sixteenth of its pixels, \
+         measured while the panels redraw rather than per picture; no parade, histogram or \
+         HDR scopes in the interface, and no scopes in the browser",
     );
     /// The picture is shown through the project's colour config: each clip's
     /// input colorspace through the chosen display and view, baked by the
@@ -215,6 +222,15 @@ mod tests {
         assert!(!ShellCapabilities::AUDIO_MONITORING.is_working());
         let why = ShellCapabilities::AUDIO_MONITORING.reason().unwrap();
         assert!(why.contains("no resampling"), "{why:?}");
+    }
+
+    /// Scopes exist now, and say what they read rather than implying they
+    /// read the whole picture.
+    #[test]
+    fn scopes_are_backed_and_say_what_they_sample() {
+        assert!(ShellCapabilities::SCOPES.is_backed());
+        let why = ShellCapabilities::SCOPES.reason().unwrap();
+        assert!(why.contains("sixteenth"), "{why}");
     }
 
     /// Colour is applied now, and neither claims grading nor hides the
