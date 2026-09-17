@@ -30,10 +30,6 @@ pub struct SequencePlan {
     pub sound: Vec<SoundEntry>,
     /// Transitions on visible picture tracks, which play as cuts.
     pub transitions: usize,
-    /// Sound the window is not playing, and why — a retimed sound clip needs
-    /// resampling to keep its pitch, and the mixer does not resample, so it is
-    /// silent rather than wrong, and says so here.
-    pub sound_not_played: Vec<String>,
     /// The composed timeline, for the timeline pane.
     pub timeline: Timeline,
     /// Track entity ids in timeline order, for intents about a track.

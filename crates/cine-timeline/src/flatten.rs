@@ -160,11 +160,10 @@ pub struct SoundSegment {
     pub track: usize,
     pub item: usize,
     pub clip: Option<EntityId>,
-    /// Media time heard at `record.start_time`, in source coordinates.
+    /// Media time heard at `record.start_time`, in source coordinates. For a
+    /// reversed clip this is the end of its range: it is read backwards.
     pub source_start: RationalTime,
-    /// How fast the media runs. Sound at a speed other than real time needs
-    /// resampling, which the mixer does not do; it is reported so that a
-    /// caller refuses rather than plays it at the wrong pitch.
+    /// How fast the media runs, for the mixer to read it at.
     pub speed: Option<Speed>,
 }
 
@@ -185,13 +184,22 @@ pub fn sound_segments(timeline: &Timeline) -> Vec<SoundSegment> {
             let (Some(span), Some(source)) = (track.range_of_child(ii), c.trimmed_range()) else {
                 continue;
             };
+            let speed = speed_of(c);
             out.push(SoundSegment {
                 record: span,
                 track: ti,
                 item: ii,
                 clip: item.ucg_id(),
-                source_start: source.start_time,
-                speed: speed_of(c),
+                // Sound is continuous, not a picture held for a frame: played
+                // backwards it starts at the *end* of its range and reads down
+                // to the start, so the first thing heard is the last instant
+                // of the range, not the start of its last frame.
+                source_start: if speed.is_some_and(|s| s.reversed) {
+                    source.end_time_exclusive()
+                } else {
+                    source.start_time
+                },
+                speed,
             });
         }
     }

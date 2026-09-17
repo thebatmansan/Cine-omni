@@ -180,8 +180,9 @@ function Speed({
       </div>
       {item.speed && (
         <div className="note">
-          Trims, rolls and joins refuse a retimed clip rather than guess whether you meant
-          to keep the speed or the media. Set the length again instead.
+          Sound plays as varispeed: its pitch follows the speed. Trims, rolls and joins refuse a
+          retimed clip rather than guess whether you meant to keep the speed or the media. Set the
+          length again instead.
         </div>
       )}
     </>

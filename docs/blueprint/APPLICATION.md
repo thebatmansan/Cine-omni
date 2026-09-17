@@ -405,9 +405,9 @@ neither the speed nor the length.
   links; the interface does not yet draw a broken sync.
 * **Speed ramps do not exist.** A retime is one constant speed for the whole
   clip. A ramp is a curve, and nothing in the model carries a curve yet.
-* **Retimed sound is not resampled.** The mixer plays sound at real time; a
-  retimed sound clip is reported with its speed so that a caller refuses it
-  rather than playing it at the wrong pitch.
+* **Retimed sound plays as varispeed.** Pitch follows speed, as on tape: a clip
+  at twice speed sounds an octave up. Keeping pitch while changing speed is a
+  separate operation and is not done yet.
 * **Reverse plays, slowly.** A reversed clip composes, exports and resolves the
   right picture; but each successive picture is *earlier* in the file, so every
   one costs a walk from the preceding keyframe. The scheduler reports that as

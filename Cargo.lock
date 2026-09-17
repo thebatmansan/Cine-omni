@@ -428,6 +428,7 @@ dependencies = [
 name = "cine-media"
 version = "0.1.0"
 dependencies = [
+ "cine-audio",
  "image",
  "indexmap",
  "md-5",

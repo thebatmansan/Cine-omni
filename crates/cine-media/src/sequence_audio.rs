@@ -15,11 +15,20 @@
 //! Priming samples and MP4 edit lists are not applied by the demuxer here; the
 //! offset they would introduce is not measured and not claimed to be zero.
 //!
+//! ## Speed, and files at other rates
+//!
+//! A retimed clip, and a file whose sample rate is not the output's, are read
+//! the same way: every output sample reads the file at an exact rational
+//! position ([`cine_audio::speed::Stepper`]) through a band-limited kernel whose
+//! cutoff falls when the file is read faster than one sample per output sample,
+//! so nothing aliases. A clip at one-for-one from a file at the output rate —
+//! nearly every clip — skips the kernel and copies samples, bit for bit.
+//!
+//! This is *varispeed*: a clip at twice speed sounds an octave up, as tape
+//! does. Backwards reads the file backwards from the end of the clip's range.
+//!
 //! ## What is refused rather than converted
 //!
-//! * A file at a rate other than the output's: there is no resampler, and
-//!   playing it at the wrong speed is not an option. The entry is silent and
-//!   [`SequenceAudio::refusals`] says why.
 //! * More than two channels: there is no downmix. Mono is placed in both
 //!   channels, which is what mono means on a stereo output.
 //!
@@ -30,9 +39,10 @@ use crate::av::AudioSource;
 use crate::error::Result;
 use crate::reader::MediaReader;
 use crate::video::VideoReader;
+use cine_audio::speed::{cutoff_for, KernelTable, Stepper, HALF};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use ucg_core::{Rate, RationalTime, Rounding, TimeRange};
+use ucg_core::{Rate, RationalTime, Rounding, Speed, TimeRange};
 
 /// One clip's sound on the sequence.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,14 +50,20 @@ pub struct SoundEntry {
     pub record: TimeRange,
     pub path: Option<PathBuf>,
     /// Media time heard at `record.start_time`, from the file's first picture.
+    /// For a reversed clip, the end of its range (exclusive): it is read
+    /// backwards from there.
     pub offset: Option<RationalTime>,
     pub name: String,
+    /// How fast the media runs against record time. `None` is real time.
+    pub speed: Option<Speed>,
 }
 
 /// Decoded audio of one file, kept as a sliding window.
 struct Track {
     reader: MediaReader,
-    /// Audio sample index (at the output rate) of the file's first picture.
+    /// The file's own sample rate: the window is in file samples.
+    rate: Rate,
+    /// File sample index of the file's first picture.
     anchor: i64,
     /// Interleaved stereo, starting at file sample `start`.
     window: Vec<f32>,
@@ -62,6 +78,9 @@ pub struct SequenceAudio {
     tracks: HashMap<PathBuf, Option<Track>>,
     refusals: HashMap<String, String>,
     clipped: u64,
+    /// Kernels by cutoff, built once: a cutoff depends only on how fast a clip
+    /// reads its file, and a cut has few distinct speeds.
+    kernels: HashMap<u64, KernelTable>,
 }
 
 /// Samples kept decoded behind the read position.
@@ -80,6 +99,7 @@ impl SequenceAudio {
             tracks: HashMap::new(),
             refusals: HashMap::new(),
             clipped: 0,
+            kernels: HashMap::new(),
         }
     }
 
@@ -119,26 +139,20 @@ impl SequenceAudio {
             .cloned()
             .ok_or("the file has no sound")?;
         let audio = stream.audio.ok_or("the sound stream declares no format")?;
-        if Rate::new(audio.sample_rate, 1) != Some(self.rate) {
-            return Err(format!(
-                "sound at {} Hz and the output at {}/{} Hz; no resampler exists",
-                audio.sample_rate,
-                self.rate.num(),
-                self.rate.den()
-            ));
-        }
+        let rate = Rate::new(audio.sample_rate, 1).ok_or("the sound declares no sample rate")?;
         if audio.channels > 2 {
             return Err(format!("{} channels and no downmix exists", audio.channels));
         }
         let anchor = match VideoReader::open_path(path) {
             Ok(v) => v
                 .extent()
-                .map(|(first, _)| first.rescale_checked(self.rate, Rounding::Floor).0.ticks())
+                .map(|(first, _)| first.rescale_checked(rate, Rounding::Floor).0.ticks())
                 .unwrap_or(0),
             Err(_) => 0,
         };
         Ok(Track {
             reader,
+            rate,
             anchor,
             window: Vec::new(),
             start: 0,
@@ -148,7 +162,8 @@ impl SequenceAudio {
 
 impl Track {
     /// Make the window cover file samples `[from, to)`.
-    fn cover(&mut self, rate: Rate, from: i64, to: i64) -> Result<()> {
+    fn cover(&mut self, from: i64, to: i64) -> Result<()> {
+        let rate = self.rate;
         let have_end = self.start + (self.window.len() / 2) as i64;
         if from < self.start || from > have_end {
             // Not contiguous with what is decoded: enter again from a seek.
@@ -230,18 +245,73 @@ impl AudioSource for SequenceAudio {
             if a >= b {
                 continue;
             }
-            let off = offset.rescale_checked(rate, Rounding::Floor).0.ticks();
             let Some(track) = self.open(&path, &entry.name) else {
                 continue;
             };
-            let file_from = track.anchor + off + (a - e0);
-            let file_to = file_from + (b - a);
-            track.cover(rate, file_from, file_to)?;
+            let file_rate = track.rate;
+            let (media, per, reversed) = match entry.speed {
+                Some(s) => (s.media, s.track, s.reversed),
+                None => (1, 1, false),
+            };
+            let stepper = Stepper::for_speed(
+                (media, per),
+                (file_rate.num(), file_rate.den()),
+                (rate.num(), rate.den()),
+            );
+            let start = track.anchor + offset.rescale_checked(file_rate, Rounding::Floor).0.ticks();
+            let dest = |s: i64| base + (s - from) as usize * 2;
+
+            if stepper.is_identity() && !reversed {
+                // One-for-one from a file at the output rate: the samples
+                // themselves, with no kernel in the way.
+                let file_from = start + (a - e0);
+                track.cover(file_from, file_from + (b - a))?;
+                for s in a..b {
+                    let (l, r) = track.sample(file_from + (s - a));
+                    out[dest(s)] += l;
+                    out[dest(s) + 1] += r;
+                }
+                continue;
+            }
+
+            // Every other case reads between samples. The positions of the
+            // first and last output sample bound what must be decoded.
+            let at = |u: i64| -> (i64, f64) {
+                let (c, f) = stepper.position(u);
+                if reversed {
+                    // Backwards from `start`: position -(c + f).
+                    if f == 0.0 {
+                        (start - c, 0.0)
+                    } else {
+                        (start - c - 1, 1.0 - f)
+                    }
+                } else {
+                    (start + c, f)
+                }
+            };
+            let (first, _) = at(a - e0);
+            let (last, _) = at(b - 1 - e0);
+            let (lo, hi) = if first <= last {
+                (first, last)
+            } else {
+                (last, first)
+            };
+            track.cover(lo - HALF as i64, hi + HALF as i64 + 1)?;
+            let cutoff = cutoff_for(stepper.per_output());
+            let kernel = self
+                .kernels
+                .entry(cutoff.to_bits())
+                .or_insert_with(|| KernelTable::new(cutoff));
+            let track = self
+                .tracks
+                .get(&path)
+                .and_then(Option::as_ref)
+                .expect("opened above");
             for s in a..b {
-                let (l, r) = track.sample(file_from + (s - a));
-                let o = base + (s - from) as usize * 2;
-                out[o] += l;
-                out[o + 1] += r;
+                let (c, f) = at(s - e0);
+                let (l, r) = kernel.read(c, f, |i| track.sample(i));
+                out[dest(s)] += l;
+                out[dest(s) + 1] += r;
             }
         }
         self.clipped += out[base..].iter().filter(|v| v.abs() > 1.0).count() as u64;

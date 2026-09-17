@@ -608,35 +608,18 @@ impl AudioBuffer {
 }
 
 /// Taps in the resampling kernel, and half that.
-const RS_TAPS: usize = 16;
-const RS_HALF: usize = RS_TAPS / 2;
+const RS_TAPS: usize = crate::speed::TAPS;
+const RS_HALF: usize = crate::speed::HALF;
 /// Largest polyphase table [`AudioBuffer::resample`] will build. Every pair of
 /// standard rates needs far fewer (320 at the worst); the limit only matters
 /// for rates chosen to share no factor, where deriving the weights per frame is
 /// cheaper than tabulating one phase per output frame.
 const RS_PHASE_LIMIT: i64 = 4_096;
 
-/// The 16 Hann-windowed sinc weights for a fractional sample position, with the
-/// reciprocal of their sum: normalising to unit DC gain keeps the phases
-/// agreeing with each other on a steady signal, which truncating the window
-/// otherwise breaks.
+/// The kernel is shared with sequence playback, so a file converted here and a
+/// clip played at a speed are filtered identically.
 fn resample_taps(frac: f64, cutoff: f64) -> ([f64; RS_TAPS], f64) {
-    let mut w = [0.0f64; RS_TAPS];
-    let mut wsum = 0.0;
-    for (wi, wv) in w.iter_mut().enumerate() {
-        let k = wi as i64 - RS_HALF as i64 + 1;
-        let x = k as f64 - frac; // distance from the tap to the sample point
-        let sinc = if x.abs() < 1e-9 {
-            1.0
-        } else {
-            (PI * cutoff * x).sin() / (PI * cutoff * x)
-        };
-        let win = 0.5 * (1.0 + (PI * x / RS_HALF as f64).cos());
-        let win = if x.abs() >= RS_HALF as f64 { 0.0 } else { win };
-        *wv = sinc * cutoff * win;
-        wsum += *wv;
-    }
-    (w, if wsum.abs() > 1e-12 { 1.0 / wsum } else { 1.0 })
+    crate::speed::kernel(frac, cutoff)
 }
 
 fn gcd(a: u32, b: u32) -> u32 {

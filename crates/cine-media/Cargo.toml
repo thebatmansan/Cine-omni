@@ -8,6 +8,9 @@ publish.workspace = true
 
 [dependencies]
 ucg-core.workspace = true
+# The band-limited kernel sound is read at a speed with, shared with file
+# conversion so both filter identically. Pure Rust, no device code.
+cine-audio.workspace = true
 ucg-schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true

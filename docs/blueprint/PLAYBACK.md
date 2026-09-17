@@ -521,10 +521,17 @@ demonstrably runs. `ShellCapabilities::PLAYBACK` is now `Degraded`, naming the
   time, which costs a walk from the preceding keyframe for every one. That is
   reported as `Degraded`; it is not smoothed over and it is not called
   unplayable.
-* **Retimed sound is not played at all.** Keeping its pitch needs resampling,
-  which the mixer does not do, so the sequence plan lists it under
-  `sound_not_played` with the reason and the window plays silence there rather
-  than something at the wrong pitch.
+* **Retimed sound is varispeed, not time-stretched.** The mixer reads each
+  output sample at an exact rational position in the file through the same
+  16-tap band-limited kernel file conversion uses, with the cutoff lowered when
+  reading faster so nothing aliases; a clip at 2x sounds an octave up and a
+  reversed one is read backwards from the end of its range. A 44.1 kHz file in
+  a 48 kHz sequence is converted the same way, where it used to be silent.
+  Measured with real WAV files through `MediaReader`: a converted 1 kHz tone
+  counts 1,000 Hz within 0.5 Hz at −9.03 dB within 0.1 dB, reading in pieces or
+  from a cold seek matches reading at once, and one retimed stream renders at
+  63–73x real time (dev test profile, decode included). Pitch preservation is
+  not done.
 * **Edit lists are not parsed.** The reference asset presents from 1024/12288
   rather than 0, and nothing compensates. Anything that assumes media starts at
   zero is wrong on this file.

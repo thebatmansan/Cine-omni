@@ -106,7 +106,7 @@ playhead scales the exact elapsed time by the playback rate without dividing —
 
 | Situation | Behaviour |
 |---|---|
-| Source and sink at different sample rates | **Refused.** No resampler exists |
+| Source and sink at different sample rates | **Refused.** No resampler in the scheduler. (Within a sequence, a *file* at another rate is converted by the mixer before it reaches the scheduler, which only ever sees the output rate — see `PLAYBACK.md`.) |
 | Source and sink with different channel counts | **Refused.** No channel mapper exists |
 | Any playback rate other than 1 | **Muted**, with the reason: no time-stretch, so other speeds would change pitch |
 | Reverse | **Muted.** Playing samples backwards is not playback |

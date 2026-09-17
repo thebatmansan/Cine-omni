@@ -61,6 +61,7 @@ fn a_clips_sound_is_the_files_sound_at_the_right_place() {
         path: Some(path.clone()),
         offset: Some(f(12)),
         name: "A".into(),
+        speed: None,
     }];
     let mut seq = SequenceAudio::new(r48(), f(72), entries);
     let mut out = Vec::new();
@@ -116,6 +117,7 @@ fn overlapping_clips_sum_and_a_seek_lands_on_the_same_samples() {
         path: Some(path.clone()),
         offset: Some(f(0)),
         name: "A".into(),
+        speed: None,
     };
     let mut one = SequenceAudio::new(r48(), f(48), vec![entry(0)]);
     let mut two = SequenceAudio::new(r48(), f(48), vec![entry(0), entry(0)]);
