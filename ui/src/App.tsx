@@ -422,6 +422,17 @@ export function App() {
                   jobs={session.jobs}
                   onCancel={(id) => void session.run("cancel job", () => client.cancelJob(id))}
                   onRetry={(id) => void session.run("retry job", () => client.retryJob(id))}
+                  render={
+                    timeline
+                      ? {
+                          timeline,
+                          languages: captions?.languages ?? [],
+                          marks: recordMarks[timeline.id] ?? NO_MARKS,
+                          onRender: (params) =>
+                            void session.run("render", () => client.submitJob("render.sequence", params)),
+                        }
+                      : undefined
+                  }
                 />
               ) : (
                 <History history={session.history} onUndo={() => void session.undo()} onRedo={() => void session.redo()} />

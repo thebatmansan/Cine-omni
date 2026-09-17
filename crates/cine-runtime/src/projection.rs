@@ -354,7 +354,6 @@ pub fn structure(graph: &Graph) -> J {
 /// player plays. A gap answers `black`; a clip whose asset declares no available
 /// range answers with no index, because which picture it plays cannot be known.
 pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result<J, String> {
-    use ucg_core::Rounding;
     let list = crate::playlist::edit_list(graph, timeline)?;
     let Some(entry) = list.at(at) else {
         return Ok(json!({ "black": true }));
@@ -368,17 +367,7 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
     // the retime when there is one. The speed's own arithmetic is exact and
     // floors onto the asset's frame grid, so this never invents a picture
     // between two pictures.
-    let into = at.checked_sub(&entry.record.start_time);
-    let offset = match (&entry.timing, available) {
-        // Anchored at the clip's start, so a ramp is read from its beginning.
-        (Some(t), Some(a)) => Some(t.media_at(at, a.start_time.rate_exact())),
-        _ => entry.offset.map(|o| o.checked_add(&into)),
-    };
-    let index = offset.zip(available).map(|(o, a)| {
-        // Pictures are counted at the rate the asset declares its range in.
-        let (t, _) = o.rescale_checked(a.start_time.rate_exact(), Rounding::Floor);
-        t.ticks()
-    });
+    let (offset, index) = crate::playlist::picture_index(graph, entry, at);
     let track_ids = track_entity_ids(graph, timeline);
     Ok(json!({
         "black": false,
@@ -393,7 +382,7 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
         "playable": entry.unplayable().is_none(),
         "why_not": entry.unplayable(),
         "source": offset.zip(available).map(|(o, a)| time(a.start_time.checked_add(&o))),
-        "index": index.filter(|i| *i >= 0),
+        "index": index,
     }))
 }
 

@@ -229,3 +229,29 @@ Three things this does and does not establish:
 * **`du -sh target` belongs in the loop, not in a document.** The finding that
   matters is the one in §4's last row: the tree was measured twice, at 60 GB
   and at 92 GB, and both times only because somebody happened to look.
+
+## 7. The first derived media on disk: renders
+
+`render.sequence` (`crates/cine-runtime/src/render.rs`) is the first thing that
+writes derived media into a project. Against the gates in §3:
+
+1. **Location — met.** `derived/render/<sequence>/<unix seconds>-job<id>/`,
+   `frame_%06d.png` plus `manifest.json`. A render is written into a sibling
+   `….partial` directory and renamed only when every picture and the manifest
+   exist, so a directory without the suffix is complete. A cancelled or failed
+   render's partial directory is *temporary* data and is removed by the render
+   itself; nothing else ever deletes under `derived/`.
+2. **Bound — not applicable, deliberately.** A render is retained derived media,
+   not a cache (§1). Its size is known before it starts — frames × width ×
+   height, compressed — and it is not evicted.
+3. **Stale detection — recorded, not yet acted on.** The manifest records the
+   request, the project revision, every source clip, asset and path, the look
+   (display, view, transforms, measured lattice error) and the caption language
+   and font. That is enough to tell a stale render from a current one. No
+   surface does so yet; until one does, a render is a record of the revision it
+   names, and the Jobs panel shows that path, not a claim of currency.
+4. **Release — manual only.** There is no delete path in the application. A
+   render is removed by a person, on disk.
+
+Measured in `render_protocol.rs` (dev profile, 320×180 H.264 written by
+`cine_media::encode`): 46 frames with burned-in captions in 389 ms.

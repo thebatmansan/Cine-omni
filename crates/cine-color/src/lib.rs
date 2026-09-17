@@ -63,6 +63,7 @@ pub mod scopes;
 pub mod space;
 pub mod transfer;
 pub mod ucg;
+pub mod view;
 pub mod yaml;
 
 pub use aces::{idt, rrt_odt_fit_srgb, Camera, Display, HueMode, OutputTransform, TonescaleParams};

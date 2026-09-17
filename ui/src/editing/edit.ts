@@ -222,3 +222,29 @@ export function frameLabel(frames: number): string {
   if (frames === 0) return "0f";
   return `${frames > 0 ? "+" : "−"}${Math.abs(frames)}f`;
 }
+
+/** How a render colours its pictures: as decoded, or through the project's view. */
+export type RenderLook = "as_decoded" | "project_view";
+
+/**
+ * The parameters of a `render.sequence` job.
+ *
+ * With both record marks set, the render is the marked frames — the out mark
+ * is on a picture that belongs to the range, so the end is one past it. With
+ * either mark missing it is the whole cut: a half-marked range is not a range,
+ * and guessing its other end would render something nobody asked for.
+ */
+export function renderParams(
+  timeline: string,
+  look: RenderLook,
+  captions: string | null,
+  marks: FrameMarks,
+): Record<string, unknown> {
+  const params: Record<string, unknown> = { timeline, look };
+  if (captions) params.captions = captions;
+  if (marks.in != null && marks.out != null && marks.out >= marks.in) {
+    params.start_frame = marks.in;
+    params.end_frame = marks.out + 1;
+  }
+  return params;
+}

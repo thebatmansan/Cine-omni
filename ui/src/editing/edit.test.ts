@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Time, TimelineItem, TimelineTrack } from "../rpc/client";
-import { canTrim, editFor, newCaptionSpan, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel } from "./edit";
+import { canTrim, editFor, newCaptionSpan, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel, renderParams } from "./edit";
 
 const R24 = { num: 24, den: 1 };
 const NTSC = { num: 24000, den: 1001 };
@@ -206,5 +206,21 @@ describe("a new caption's span", () => {
 
   it("starts at the in mark when only that is set", () => {
     expect(newCaptionSpan({ in: 10, out: null }, 500, R24)).toEqual({ start: 10, end: 58 });
+  });
+});
+
+describe("renderParams", () => {
+  it("renders the whole cut unless both marks are set", () => {
+    expect(renderParams("t", "as_decoded", null, { in: 10, out: null })).toEqual({ timeline: "t", look: "as_decoded" });
+    expect(renderParams("t", "as_decoded", null, { in: null, out: null })).toEqual({ timeline: "t", look: "as_decoded" });
+  });
+  it("includes the out-marked picture", () => {
+    expect(renderParams("t", "project_view", "en", { in: 10, out: 33 })).toEqual({
+      timeline: "t",
+      look: "project_view",
+      captions: "en",
+      start_frame: 10,
+      end_frame: 34,
+    });
   });
 });

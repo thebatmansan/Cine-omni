@@ -10,6 +10,8 @@ publish.workspace = true
 ucg-core.workspace = true
 ucg-schema.workspace = true
 cine-color.workspace = true
+# Burning captions into a render.
+cine-comp.workspace = true
 cine-pipeline.workspace = true
 cine-jobs.workspace = true
 cine-script.workspace = true

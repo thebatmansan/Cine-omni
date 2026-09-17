@@ -220,8 +220,9 @@ fn capabilities() -> J {
             "state": "degraded",
             "detail": "In the native window the sequence's sound is decoded, mixed and played, \
                        and paces the picture (measured -3.5 ms median, 3 ms spread, by the \
-                       device's reported delay). Not in the browser. No resampling, no downmix, \
-                       no clip gain or fades, and no sound at speeds other than 1",
+                       device's reported delay). Not in the browser. Retimed clips play as \
+                       varispeed or with pitch kept, and files at other rates are converted. \
+                       No downmix, no clip gain or fades",
         }),
         json!({
             "id": "colour.management",
@@ -234,6 +235,18 @@ fn capabilities() -> J {
                        on the released configs (aces2_oracle.rs, released_configs.rs). The \
                        native window shows the picture through the chosen view; the browser \
                        shows decoded pictures untransformed, and neither grades",
+        }),
+        json!({
+            "id": "delivery.render",
+            "name": "Render the cut to pictures",
+            "group": "Delivery",
+            "state": "degraded",
+            "detail": "A background job writes the cut as a PNG sequence with a manifest under \
+                       derived/render/: retimes and angles as the monitor plays them, as decoded \
+                       or through the project's view by the window's own bake, captions burned \
+                       in with a system font. Checked picture for picture against the files \
+                       (render_protocol.rs). 8-bit, picture only: no movie file, no sound, no \
+                       scaling, and a cut of mixed picture sizes is refused",
         }),
         json!({
             "id": "colour.scopes",

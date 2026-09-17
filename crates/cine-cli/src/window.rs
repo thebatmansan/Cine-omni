@@ -18,19 +18,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use ucg_core::{EntityId, Graph, UcgError};
-use ucg_schema::{attrs, kinds, ColorMeta, Component};
-
-/// Edge length of a baked view lattice.
-///
-/// 33 is the size grading systems have used for decades, and the error it
-/// leaves is measured rather than assumed: every `Viewing` carries the worst
-/// difference between the lattice and the transform it came from.
-const LATTICE_SIZE: usize = 33;
-
-/// The domain a lattice covers, in code values. Limited-range video reaches
-/// below 0 and above 1 (sub-black and super-white), and a viewer that clipped
-/// them at the lattice edge would hide exactly what a colourist looks for.
-const LATTICE_DOMAIN: (f32, f32) = (-0.125, 1.125);
+use ucg_schema::kinds;
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
@@ -87,14 +75,27 @@ impl RuntimeLink {
     fn lattice(&self, config: &Config, config_key: u64, want: &Wanted<'_>) -> Lattice {
         let key = (
             config_key,
-            format!("{}|{}|{}", want.input, want.working, fingerprint(want.cdl)),
+            format!(
+                "{}|{}|{}",
+                want.input,
+                want.working,
+                cine_color::view::cdl_fingerprint(want.cdl)
+            ),
             want.display.to_string(),
             want.view.to_string(),
         );
         if let Some(hit) = self.lattices.lock().get(&key) {
             return hit.clone();
         }
-        let baked = bake(config, want);
+        let baked = cine_color::view::bake_view(
+            config,
+            want.input,
+            want.working,
+            want.cdl,
+            want.display,
+            want.view,
+        )
+        .map(|b| (b.lut, b.worst_error, b.describe));
         self.lattices.lock().insert(key, baked.clone());
         baked
     }
@@ -206,22 +207,14 @@ impl ProjectLink for RuntimeLink {
     fn viewing(&self) -> Option<Viewing> {
         let graph = self.runtime.project.engine.read();
         let root = self.runtime.project.root;
-        let config_entity = cine_color::ucg::project_config(&graph, root)?;
-        let yaml = graph.node(config_entity)?.get_str("yaml")?.to_string();
-        let config = Config::parse(&yaml).ok()?;
-        let config_key = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            yaml.hash(&mut h);
-            h.finish()
-        };
+        let (config, config_key) = cine_color::view::project_config(&graph, root)?;
         let (display, view) = match self.runtime.project.session.view() {
             Some(v) => (v.display, v.view),
-            None => default_view(&config)?,
+            None => cine_color::view::default_view(&config)?,
         };
         let id = current_timeline(&graph, self.runtime.project.session.focus())?;
         let list = cine_runtime::playlist::edit_list(&graph, id).ok()?;
-        let inputs = input_colorspaces(&graph);
+        let inputs = cine_color::view::input_colorspaces(&graph);
         let working = config.role("scene_linear").unwrap_or("ACEScg").to_string();
         let mut luts = Vec::with_capacity(list.entries.len());
         let mut describe: Vec<String> = Vec::new();
@@ -294,94 +287,4 @@ impl ProjectLink for RuntimeLink {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-}
-
-/// The display and view a project is looked through until someone chooses:
-/// the config's first active display, and its first active view.
-fn default_view(config: &Config) -> Option<(String, String)> {
-    let display = config
-        .active_displays
-        .iter()
-        .find(|d| config.displays.contains_key(*d))
-        .cloned()
-        .or_else(|| config.displays.keys().next().cloned())?;
-    let views = config.views(&display).ok()?;
-    let view = config
-        .active_views
-        .iter()
-        .find(|v| views.iter().any(|x| x.name.eq_ignore_ascii_case(v)))
-        .cloned()
-        .or_else(|| views.first().map(|v| v.name.clone()))?;
-    Some((display, view))
-}
-
-/// Media path → the input colorspace established for it.
-fn input_colorspaces(graph: &Graph) -> HashMap<String, String> {
-    graph
-        .of_kind(kinds::ASSET_MEDIA)
-        .iter()
-        .filter_map(|n| {
-            let path = n.get_str(attrs::MEDIA_PATH)?.to_string();
-            let meta = ColorMeta::read_from(graph, n.id)?;
-            Some((path, meta.input_colorspace))
-        })
-        .collect()
-}
-
-/// Bake `input → display / view` to a lattice, and measure what baking cost.
-///
-/// `None` when the config cannot compile the transform, and — deliberately —
-/// when the input colorspace is scene-linear: a lattice over code values would
-/// be wrong for unbounded scene light, and showing the picture untransformed
-/// while claiming a view is worse than showing it plainly.
-fn bake(config: &Config, want: &Wanted<'_>) -> Lattice {
-    let (input, working, cdl, display, view) =
-        (want.input, want.working, want.cdl, want.display, want.view);
-    let encoding = config
-        .colorspace(input)
-        .map(|c| c.encoding.to_lowercase())
-        .unwrap_or_default();
-    if !matches!(
-        encoding.as_str(),
-        "sdr-video" | "hdr-video" | "edr-video" | "log"
-    ) {
-        return None;
-    }
-    let processor =
-        cine_color::ucg::viewing_processor(config, input, working, cdl, display, view).ok()?;
-    let mut lut = Lut3D::bake_domain(
-        &processor,
-        LATTICE_SIZE,
-        [LATTICE_DOMAIN.0; 3],
-        [LATTICE_DOMAIN.1; 3],
-    );
-    // Trilinear, because that is what the shader does; measuring tetrahedral
-    // error would be measuring an interpolation nobody performs.
-    lut.interpolation = cine_color::lut::Interpolation::Trilinear;
-    let error = lut.worst_error(&processor, 4096);
-    let what = match cdl {
-        Some(_) => format!("{input} → grade → {display} / {view}"),
-        None => format!("{input} → {display} / {view}"),
-    };
-    Some((Arc::new(lut), error, what))
-}
-
-/// A short, stable name for a grade, so the lattice cache can tell two grades
-/// apart without holding the grade itself.
-fn fingerprint(cdl: Option<&ucg_schema::Cdl>) -> String {
-    let Some(cdl) = cdl else {
-        return "ungraded".into();
-    };
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    for v in cdl
-        .slope
-        .iter()
-        .chain(&cdl.offset)
-        .chain(&cdl.power)
-        .chain(std::iter::once(&cdl.saturation))
-    {
-        v.to_bits().hash(&mut h);
-    }
-    format!("{:016x}", h.finish())
 }

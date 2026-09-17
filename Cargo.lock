@@ -374,6 +374,7 @@ dependencies = [
 name = "cine-comp"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "exr",
  "glam",
  "indexmap",
@@ -492,6 +493,7 @@ dependencies = [
  "base64",
  "cine-audio-io",
  "cine-color",
+ "cine-comp",
  "cine-gpu",
  "cine-jobs",
  "cine-logistics",

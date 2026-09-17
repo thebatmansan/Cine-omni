@@ -131,6 +131,20 @@ pub fn png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
 /// 8-bit RGBA through the verified reference conversion, with a description of
 /// the colour interpretation and whether it was assumed.
 pub fn rgba8(frame: &VideoFrame) -> Result<(Vec<u8>, u32, u32, String, bool), String> {
+    let (rgba, w, h, describe, assumed) = rgba_f32(frame)?;
+    // 8-bit for transport: the browser has nowhere better to put it, and the
+    // clamping is reported rather than silent.
+    let bytes: Vec<u8> = rgba
+        .iter()
+        .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect();
+    Ok((bytes, w, h, describe, assumed))
+}
+
+/// RGBA code values through the verified reference conversion, unclamped:
+/// limited-range video reaches below 0 and above 1, and a view transform is
+/// entitled to see those excursions before anything clips them.
+pub fn rgba_f32(frame: &VideoFrame) -> Result<(Vec<f32>, u32, u32, String, bool), String> {
     if frame.format != PixelFormat::Yuv420P8 {
         return Err(format!(
             "this build converts 4:2:0 8-bit for preview; this picture is {:?}",
@@ -177,14 +191,8 @@ pub fn rgba8(frame: &VideoFrame) -> Result<(Vec<u8>, u32, u32, String, bool), St
         &plane(2, cw, ch)?,
     );
 
-    // 8-bit for transport: the browser has nowhere better to put it, and the
-    // clamping is reported rather than silent.
-    let bytes: Vec<u8> = rgba
-        .iter()
-        .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect();
     Ok((
-        bytes,
+        rgba,
         w,
         h,
         format!(

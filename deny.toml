@@ -50,11 +50,19 @@ ignore = [
     # project data or anything else attacker-influenced, and it is absent on
     # every non-Wayland target.
     #
+    # Since caption burn-in, `cine-comp` also uses `ab_glyph` (and so this
+    # parser) directly, on every target. The same boundary holds, and is
+    # enforced in code rather than hoped for: `ops::captions::CaptionFont` loads
+    # only from a fixed list of system font paths and has no constructor that
+    # takes a path or bytes, so a font inside a project — data an outsider can
+    # hand us — is never parsed. Adding such a constructor reopens this
+    # exception and must be decided here first.
+    #
     # Action: none available to us. The alternative is dropping winit's
     # decorations, which would leave the window without a title bar for a
     # dependency question rather than a product one. Re-evaluate when winit's
     # decoration stack moves to a maintained parser.
-    { id = "RUSTSEC-2026-0192", reason = "unmaintained-only, transitive via winit's Wayland window decorations, no upgrade exists" },
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained-only, no upgrade exists; parses only system fonts (winit's Wayland decorations, and caption burn-in from a fixed list of system paths)" },
 ]
 
 # ---------------------------------------------------------------------------

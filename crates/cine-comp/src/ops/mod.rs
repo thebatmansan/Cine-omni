@@ -2,6 +2,7 @@
 //! functions over [`crate::image::Image`] / [`crate::image::DeepImage`]; the
 //! evaluator ([`crate::eval`]) maps node parameters onto them.
 
+pub mod captions;
 pub mod color;
 pub mod deep;
 pub mod defocus;

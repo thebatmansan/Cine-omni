@@ -21,6 +21,8 @@
 //!   [`SYNC_MAX_SECONDS`]), cross-correlated against the active angle's, and an
 //!   angle whose best match is not clearly better than chance is left alone and
 //!   reported rather than moved to a guess. The offsets are one undoable commit.
+//! * **`render.sequence`** — the cut written as pictures, with an optional view
+//!   and burned-in captions, under `derived/render/`. See [`crate::render`].
 
 use cine_jobs::{JobConfig, JobContext, JobId, JobRecord, JobSpec, JobSystem, Resource};
 use cine_media::ContentHash;
@@ -70,6 +72,25 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
         let project = p.upgrade().ok_or("the project has closed")?;
         sync_angles(&project, ctx, spec)
     });
+    let p = Arc::downgrade(project);
+    let root = root_dir.to_path_buf();
+    jobs.register(
+        crate::render::RENDER_KIND,
+        move |ctx: &JobContext, spec: &JobSpec| {
+            let project = p.upgrade().ok_or("the project has closed")?;
+            let request = crate::render::RenderRequest::from_params(&spec.params)?;
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let out = crate::render::render_root(&root, request.timeline)
+                .join(format!("{stamp}-job{}", ctx.id()));
+            crate::render::render_sequence(&project, &request, &out, &mut |f, message| {
+                ctx.progress(f, message);
+                !ctx.is_cancelled()
+            })
+        },
+    );
     Ok(jobs)
 }
 
@@ -266,6 +287,36 @@ fn sync_angles(project: &OmniProject, ctx: &JobContext, spec: &JobSpec) -> Resul
 
 /// Build the spec for a kind of work a client asked for.
 pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec, String> {
+    if kind == crate::render::RENDER_KIND {
+        let request = crate::render::RenderRequest::from_params(params)?;
+        let name = {
+            let g = project.engine.read();
+            let node = g
+                .node(request.timeline)
+                .ok_or("no such sequence in this project")?;
+            if node.kind.as_str() != ucg_schema::kinds::NLE_TIMELINE {
+                return Err(format!("{} is not a sequence", request.timeline));
+            }
+            node.get_str(attrs::NAME).unwrap_or("sequence").to_string()
+        };
+        let mut label = format!("Render · {name}");
+        if let Some(language) = &request.captions {
+            label.push_str(&format!(" · {language} captions burned in"));
+        }
+        return Ok(JobSpec::new(
+            kind,
+            // A render of a later revision is a different render.
+            &format!(
+                "render:{}:{}:{}",
+                request.timeline,
+                project.engine.revision(),
+                request.to_params()
+            ),
+            &label,
+            Resource::Cpu,
+        )
+        .params(request.to_params()));
+    }
     if kind == "multicam.sync" {
         let clip = params
             .get("clip")
@@ -324,7 +375,7 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             .attempts(2))
         }
         other => Err(format!(
-            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, multicam.sync)"
+            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, multicam.sync, render.sequence)"
         )),
     }
 }

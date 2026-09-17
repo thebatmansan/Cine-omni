@@ -170,3 +170,28 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
         transitions: flat.transitions,
     })
 }
+
+/// Which picture of its file an entry shows at record time `at`: the media
+/// time, measured from the start of the asset's available range, and the
+/// picture index counted at the rate that range is declared in.
+///
+/// One answer for every surface that asks — the record monitor, the render —
+/// so a rendered frame is the frame the monitor showed at that instant.
+pub fn picture_index(graph: &Graph, entry: &Entry, at: RationalTime) -> (Option<RationalTime>, Option<i64>) {
+    let available = entry
+        .asset
+        .and_then(|a| graph.node(a))
+        .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
+        .and_then(Value::as_range);
+    let into = at.checked_sub(&entry.record.start_time);
+    let offset = match (&entry.timing, available) {
+        // Anchored at the clip's start, so a ramp is read from its beginning.
+        (Some(t), Some(a)) => Some(t.media_at(at, a.start_time.rate_exact())),
+        _ => entry.offset.map(|o| o.checked_add(&into)),
+    };
+    let index = offset.zip(available).map(|(o, a)| {
+        let (t, _) = o.rescale_checked(a.start_time.rate_exact(), ucg_core::Rounding::Floor);
+        t.ticks()
+    });
+    (offset, index.filter(|i| *i >= 0))
+}

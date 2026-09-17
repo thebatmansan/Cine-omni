@@ -224,6 +224,12 @@ pub struct Harness {
 
 impl Harness {
     pub fn start() -> Harness {
+        Harness::start_in(std::env::temp_dir())
+    }
+
+    /// A harness whose project directory — where jobs journal and renders
+    /// land — is `root`.
+    pub fn start_in(root: std::path::PathBuf) -> Harness {
         let project = OmniProject::new(ProjectSetup::default()).expect("project");
         project
             .import_fountain(SCREENPLAY, "test.fountain")
@@ -231,7 +237,7 @@ impl Harness {
         project
             .import_otio(TIMELINE, "test.otio")
             .expect("timeline");
-        let runtime = Runtime::new(project, std::env::temp_dir());
+        let runtime = Runtime::new(project, root);
         let server = Server::bind(
             runtime.clone(),
             ServeConfig {

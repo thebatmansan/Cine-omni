@@ -395,7 +395,35 @@ was written for — at ten minutes and an hour, where drop-frame counting matter
 successor started loading before it should clear stayed up until the successor
 appeared, because the erase had been left out.
 
-Not here: burn-in (the compositor has no text renderer).
+### Rendering the cut, with captions burned in
+
+**Jobs → Render** renders the open sequence — the marked frames when both
+record marks are set, otherwise the whole cut — as a PNG sequence, as decoded
+or through the project's display and view, optionally with one language's
+captions burned in. The form only chooses; the job is `render.sequence`, and
+the finished row says how many frames, at what size, through what look, with
+captions on how many frames, and where it wrote.
+
+Every record frame is resolved by the same edit list and the same picture
+arithmetic the record monitor uses (`playlist::picture_index`, now shared by
+both), so a retimed clip or a switched angle renders as it plays. The view is
+the bake the native window uses (`cine_color::view`, moved out of the window
+for this), so a render and the window cannot disagree about colour; the
+manifest records the transforms and the lattice's measured worst error.
+Captions are drawn on the grid the exported IMSC declares, from a system font.
+
+What it refuses, by name: an offline clip, a picture the decoder does not
+produce, a cut of mixed picture sizes (it does not scale), a view some clip
+cannot be baked into, captions in a language the sequence does not have, and a
+caption line wider than the safe area. None of these becomes black, stretched
+or untransformed output. Checked in `render_protocol.rs` on H.264 written by the
+build's own encoder: every compared frame is byte-identical to the file's own
+picture through the reference conversion, the gap is opaque black, a caption
+changes only the lower half, and a view render equals the bake applied to the
+file independently.
+
+Not yet: a movie file (the H.264 writer exists, unused by renders), sound, and
+knowing when a render has gone stale — the manifest records enough to tell.
 
 ### Speed
 

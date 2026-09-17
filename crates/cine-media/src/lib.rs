@@ -31,6 +31,7 @@ pub mod offload;
 pub mod probe;
 pub mod reader;
 pub mod schedule;
+pub mod encode;
 pub mod sequence_audio;
 pub mod sound;
 pub mod time;
