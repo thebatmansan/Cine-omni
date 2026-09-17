@@ -479,24 +479,58 @@ fn sequence_rate(g: &Graph, timeline: EntityId) -> std::result::Result<ucg_core:
 }
 
 /// A caption track as the interface reads it: every caption with its own
-/// issues against the default delivery rules, in time order.
-fn captions_json(track: &cine_timeline::captions::CaptionTrack) -> J {
+/// delivery issues, the line of dialogue it transcribes and why it needs
+/// review, in time order.
+fn captions_json(
+    g: &Graph,
+    timeline: EntityId,
+    track: &cine_timeline::captions::CaptionTrack,
+) -> J {
+    use cine_timeline::caption_link::{recorded, REVIEW};
     use cine_timeline::captions::{check, Placement, Rules};
     let rules = Rules::default();
     let issues = check(track, &rules);
+    let link_of = |key: &Option<String>| -> (J, J) {
+        let Some(key) = key else {
+            return (J::Null, J::Null);
+        };
+        let id = cine_timeline::graph::caption_node(timeline, &track.language, key);
+        let review = g
+            .node(id)
+            .and_then(|n| n.get_str(REVIEW))
+            .map(|s| J::String(s.to_string()))
+            .unwrap_or(J::Null);
+        let link = recorded(g, id).map(|r| {
+            let line = g.targets(id, EdgeKind::DerivedFrom).first().copied();
+            json!({
+                "line": line,
+                "scene": r.scene,
+                "heading": g.node(r.scene).and_then(|n| n.get_str(attrs::HEADING)),
+                "character": r.character,
+                "transcribed": r.text,
+                "now": line.and_then(|l| g.node(l)).and_then(|n| n.get_str(attrs::TEXT)),
+            })
+        });
+        (link.unwrap_or(J::Null), review)
+    };
     json!({
         "language": track.language,
         "rate_num": track.rate.num(),
         "rate_den": track.rate.den(),
         "rules": rules,
-        "captions": track.captions.iter().enumerate().map(|(i, c)| json!({
+        "captions": track.captions.iter().enumerate().map(|(i, c)| {
+            let (link, review) = link_of(&c.key);
+            json!({
             "index": i,
+            "key": c.key,
+            "link": link,
+            "review": review,
             "record": crate::projection::range(c.record),
             "lines": c.lines,
             "placement": match c.placement { Placement::Bottom => "bottom", Placement::Top => "top" },
             "speaker": c.speaker,
             "issues": issues.iter().filter(|x| x.caption == i).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        })}).collect::<Vec<_>>(),
         "issue_count": issues.len(),
     })
 }
@@ -530,7 +564,13 @@ fn with_captions(
         })
         .map_err(|x| x.to_string())?;
     let mut out = with_impact(p, &group);
-    out["track"] = captions_json(&track);
+    // Read back: storing assigns keys, and the reactors may have flagged.
+    let g = p.engine.read();
+    if let Some(stored) =
+        cine_timeline::graph::export_captions(&g, timeline, language).map_err(|e| e.to_string())?
+    {
+        out["track"] = captions_json(&g, timeline, &stored);
+    }
     Ok(out)
 }
 
@@ -895,7 +935,7 @@ pub fn dispatch_with(
             json!({
                 "languages": languages,
                 "language": language,
-                "track": track.as_ref().map(captions_json),
+                "track": track.as_ref().map(|t| captions_json(&g, timeline, t)),
             })
         }
         "set_caption" => {
@@ -943,6 +983,9 @@ pub fn dispatch_with(
                             .captions
                             .get_mut(i)
                             .ok_or_else(|| format!("there is no caption {i}"))?;
+                        // The same caption, edited: it keeps its identity, and
+                        // with it the line of dialogue it is linked to.
+                        caption.key = slot.key.clone();
                         *slot = caption;
                     }
                     None => track.captions.push(caption),
@@ -985,6 +1028,94 @@ pub fn dispatch_with(
                 "largest_snap_ms": report.largest_snap_ms,
                 "skipped": report.skipped,
             });
+            out
+        }
+        "caption_candidates" => {
+            let timeline = entity(params, "timeline")?;
+            let language = str_param(params, "language")?;
+            let key = str_param(params, "key")?;
+            let g = p.engine.read();
+            let track = cine_timeline::graph::export_captions(&g, timeline, language)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("the sequence has no `{language}` captions"))?;
+            let caption = track
+                .captions
+                .iter()
+                .find(|c| c.key.as_deref() == Some(key))
+                .ok_or_else(|| format!("there is no caption `{key}`"))?;
+            let index = cine_timeline::caption_link::CutIndex::of(&g, timeline)
+                .map_err(|e| e.to_string())?;
+            let found = cine_timeline::caption_link::candidates(
+                &g,
+                &index,
+                caption.record,
+                &caption.lines.join(" "),
+            );
+            json!({
+                "scenes": index.scenes_under(&g, caption.record),
+                "candidates": found,
+            })
+        }
+        "link_caption" | "unlink_caption" | "accept_caption_line" => {
+            let timeline = entity(params, "timeline")?;
+            let language = str_param(params, "language")?.to_string();
+            let key = str_param(params, "key")?.to_string();
+            let caption = cine_timeline::graph::caption_node(timeline, &language, &key);
+            if !p.engine.read().contains(caption) {
+                return Err(format!("there is no caption `{key}`"));
+            }
+            let line = if method == "link_caption" {
+                Some(entity(params, "line")?)
+            } else {
+                None
+            };
+            let label = match method {
+                "link_caption" => "link caption to line",
+                "unlink_caption" => "unlink caption",
+                _ => "accept rewritten line",
+            };
+            let group = p
+                .engine
+                .transact(label, |tx| {
+                    let r = match (method, line) {
+                        ("link_caption", Some(line)) => {
+                            cine_timeline::caption_link::link(tx, caption, line)
+                        }
+                        ("unlink_caption", _) => cine_timeline::caption_link::unlink(tx, caption),
+                        _ => cine_timeline::caption_link::accept(tx, caption),
+                    };
+                    r.map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                })
+                .map_err(|x| x.to_string())?;
+            let mut out = with_impact(p, &group);
+            let g = p.engine.read();
+            if let Some(track) = cine_timeline::graph::export_captions(&g, timeline, &language)
+                .map_err(|e| e.to_string())?
+            {
+                out["track"] = captions_json(&g, timeline, &track);
+            }
+            out
+        }
+        "link_captions_exact" => {
+            let timeline = entity(params, "timeline")?;
+            let language = str_param(params, "language")?.to_string();
+            let mut linked = 0;
+            let group = p
+                .engine
+                .transact("link captions to their lines", |tx| {
+                    linked = cine_timeline::caption_link::link_exact(tx, timeline, &language)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                    Ok(())
+                })
+                .map_err(|x| x.to_string())?;
+            let mut out = with_impact(p, &group);
+            out["linked"] = json!(linked);
+            let g = p.engine.read();
+            if let Some(track) = cine_timeline::graph::export_captions(&g, timeline, &language)
+                .map_err(|e| e.to_string())?
+            {
+                out["track"] = captions_json(&g, timeline, &track);
+            }
             out
         }
         "export_captions" => {

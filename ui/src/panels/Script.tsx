@@ -196,7 +196,20 @@ function Element({
     return (
       <div className={`el dialogue-block${el.revised ? " revised" : ""}`}>
         {mark}
-        <div className="el character">{el.character}</div>
+        <div className="el character">
+          {el.character}
+          {el.captions && el.captions.length > 0 && (
+            <span
+              className={`cc${el.captions.some((c) => c.review) ? " bad" : ""}`}
+              title={
+                el.captions.find((c) => c.review)?.review ??
+                `${el.captions.length} caption${el.captions.length === 1 ? "" : "s"} transcribe this line`
+              }
+            >
+              CC
+            </span>
+          )}
+        </div>
         {draft == null ? (
           <div
             className="el dialogue editable"

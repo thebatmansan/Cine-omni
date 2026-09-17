@@ -427,7 +427,25 @@ fn project_persists_and_reopens_with_reactors() {
     );
     assert!(g.contains(EntityId::derived(scenes[2], kinds::PREVIS_SCENE)));
     assert!(g.validate().is_empty());
-    assert_eq!(reopened.engine.reactor_names().len(), 7);
+    // Reopening installs every reactor, by name: a project that reopened
+    // without one would silently stop propagating that department's changes.
+    let names = reopened.engine.reactor_names();
+    for expected in [
+        "script",
+        "previs",
+        "logistics",
+        "timeline",
+        "captions",
+        "audio",
+        "comp",
+        "color",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "{expected} missing from {names:?}"
+        );
+    }
+    assert_eq!(names.len(), 8);
 }
 
 /// Rewording a line without changing its length changes no scene statistic, so

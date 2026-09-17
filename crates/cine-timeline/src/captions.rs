@@ -59,6 +59,15 @@ pub struct Caption {
     /// decision the caption author makes in the lines themselves.
     #[serde(default)]
     pub speaker: Option<String>,
+    /// A stable identity within its track, assigned when the caption is first
+    /// stored. `None` for a caption that has never been stored — one just
+    /// typed, or read from a file.
+    ///
+    /// Captions need an identity that is not their position: a caption is
+    /// linked to the line of dialogue it transcribes, and inserting a caption
+    /// earlier in the track must not move that link onto a different one.
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 impl Caption {
@@ -68,6 +77,7 @@ impl Caption {
             lines: text.lines().map(str::to_string).collect(),
             placement: Placement::Bottom,
             speaker: None,
+            key: None,
         }
     }
 
@@ -292,6 +302,7 @@ pub fn read_srt(text: &str, language: &str, rate: Rate) -> Result<(CaptionTrack,
             lines: body,
             placement: Placement::Bottom,
             speaker: None,
+            key: None,
         });
         report.captions += 1;
     }

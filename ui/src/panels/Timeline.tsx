@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  CaptionTrackView,
   EditOp,
   MarkMismatch,
   TimelineItem,
@@ -57,6 +58,8 @@ export function Timeline({
   onMark,
   mismatch,
   onMismatch,
+  captions,
+  onCaption,
 }: {
   timeline: TimelineView | null;
   selected: string | null;
@@ -77,6 +80,10 @@ export function Timeline({
   onMark(which: "in" | "out" | "clear"): void;
   mismatch: MarkMismatch;
   onMismatch(next: MarkMismatch): void;
+  /** One language's captions, shown as a lane under the tracks. */
+  captions: CaptionTrackView | null;
+  /** A caption in the lane was clicked: its start, in sequence ticks. */
+  onCaption(ticks: number): void;
 }) {
   const [pxPerSecond, setPxPerSecond] = useState(90);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -276,9 +283,67 @@ export function Timeline({
               }}
             />
           ))}
+          {captions && (
+            <CaptionLane track={captions} width={width} pxPerSecond={pxPerSecond} onCaption={onCaption} />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Captions as a lane under the picture and sound, where their timing against
+ * the cut can be seen.
+ *
+ * Positions are the runtime's exact times, drawn in seconds. A caption that
+ * needs review against the script is marked as such, one with delivery issues
+ * is marked differently, and the tooltip says which and why; clicking one
+ * moves the playhead to it and opens it in the Captions tab.
+ */
+function CaptionLane({
+  track,
+  width,
+  pxPerSecond,
+  onCaption,
+}: {
+  track: CaptionTrackView;
+  width: number;
+  pxPerSecond: number;
+  onCaption(ticks: number): void;
+}) {
+  return (
+    <>
+      <div className="track-head caption-head">
+        <div className="name">
+          <span className="kind">CC</span>
+          <span>{track.language}</span>
+        </div>
+      </div>
+      <div className="track-lane caption-lane" style={{ width }}>
+        {track.captions.map((c) => {
+          const state = c.review ? " review" : c.issues.length ? " issues" : "";
+          const why = [c.review, ...c.issues.map((i) => i.message)].filter(Boolean).join("\n");
+          return (
+            <div
+              key={c.key ?? c.index}
+              className={`caption-block${state}`}
+              style={{
+                left: c.record.start.seconds * pxPerSecond,
+                width: Math.max(2, c.record.duration.seconds * pxPerSecond),
+              }}
+              title={`${c.record.start.timecode} ${c.lines.join(" / ")}${why ? `\n${why}` : ""}`}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onCaption(c.record.start.ticks);
+              }}
+            >
+              {c.lines.join(" ")}
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 

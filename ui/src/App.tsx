@@ -33,6 +33,7 @@ import {
   seconds,
   spanOf,
 } from "./editing/edit";
+import { useCaptions } from "./state/captions";
 import { useSession } from "./state/session";
 import { WORKSPACES, canOpen, workspaceReason, workspaceState } from "./workspaces";
 
@@ -65,6 +66,7 @@ export function App() {
   // is about to put something.
   const [recordMarks, setRecordMarks] = useState<Record<string, { in: number | null; out: number | null }>>({});
   const [mismatch, setMismatch] = useState<MarkMismatch>("refuse");
+  const [captionLanguage, setCaptionLanguage] = useState<string | null>(null);
   const [playheadTicks, setPlayheadTicks] = useState(0);
   const [tool, setTool] = useState<Tool>("select");
   const [snapping, setSnapping] = useState(true);
@@ -268,6 +270,7 @@ export function App() {
   );
 
   const revision = session.project?.revision ?? 0;
+  const captions = useCaptions(client, timeline?.id ?? null, captionLanguage, revision, setCaptionLanguage);
 
   // The band the timeline draws. Ticks are the number; seconds are layout.
   const recordMarkSeconds = useMemo(
@@ -390,7 +393,9 @@ export function App() {
                 <Captions
                   client={client}
                   timeline={timeline}
-                  revision={revision}
+                  view={captions}
+                  language={captionLanguage}
+                  onLanguage={setCaptionLanguage}
                   playhead={playhead}
                   marks={timeline ? (recordMarks[timeline.id] ?? NO_MARKS) : NO_MARKS}
                   onSeek={(ticks) => {
@@ -444,6 +449,12 @@ export function App() {
             }}
             mismatch={mismatch}
             onMismatch={setMismatch}
+            captions={captions?.track ?? null}
+            onCaption={(ticks) => {
+              setPlayheadTicks(ticks);
+              setMonitor("record");
+              setRightTab("captions");
+            }}
           />
         </div>
       )}

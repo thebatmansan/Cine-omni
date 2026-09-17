@@ -13,6 +13,7 @@
 //!   ├─ PrevisReactor     resync previs scene (characters, dialogue track length, bounds)
 //!   ├─ LogisticsReactor  rebuild breakdown, shot list, schedule diff, call sheets
 //!   ├─ TimelineReactor   flag clips synced to the scene as needs_conform
+//!   ├─ CaptionReactor    re-resolve captions linked to dialogue; flag rewrites, cuts, re-cuts
 //!   ├─ AudioReactor      resync dialogue placeholder clips in the DAW session
 //!   ├─ CompReactor       mark comps bound to the scene's shots dirty, refresh frame ranges
 //!   └─ ColorReactor      carry color metadata to any newly bound clips / grades

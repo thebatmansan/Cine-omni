@@ -260,3 +260,126 @@ fn issuing_a_revision_marks_what_changes_after_it() {
     );
     assert_eq!(fresh["documents"][0]["next_colour"], json!("Pink"));
 }
+
+/// A caption linked to the line it transcribes, over the protocol and in both
+/// directions: the caption knows its line, the line knows its caption, and
+/// rewriting the line in the script flags the caption with the old and new
+/// words until somebody accepts the rewrite.
+#[test]
+fn a_rewritten_line_flags_the_caption_that_transcribes_it() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let doc = document(&mut c);
+    let scene1 = scenes(&mut c)[0]["id"].as_str().unwrap().to_string();
+
+    // Bind the first picture clip of the cut to scene 1.
+    let tl = c.call("timelines", json!({}))[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let clip = seq["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["kind"] == "video")
+        .flat_map(|t| t["items"].as_array().unwrap().clone())
+        .find(|i| i["kind"] == "clip")
+        .expect("a clip");
+    let (clip_id, start, end) = (
+        clip["id"].as_str().unwrap().to_string(),
+        clip["at"]["start"].clone(),
+        clip["at"]["end"].clone(),
+    );
+    c.call("bind_clip", json!({ "clip": clip_id, "scene": scene1 }));
+
+    // A caption over it reading exactly MAREN's line, linked by the exact pass.
+    c.call(
+        "set_caption",
+        json!({ "timeline": tl, "language": "en", "start": start, "end": end,
+                "text": "We ride at dawn." }),
+    );
+    let r = c.call(
+        "link_captions_exact",
+        json!({ "timeline": tl, "language": "en" }),
+    );
+    assert_eq!(r["linked"], 1);
+    let caption = r["track"]["captions"][0].clone();
+    let key = caption["key"].as_str().unwrap().to_string();
+    assert_eq!(caption["link"]["character"], "MAREN");
+    assert_eq!(caption["link"]["transcribed"], "We ride at dawn.");
+    assert!(caption["review"].is_null());
+
+    // The other direction: the line lists its caption.
+    let line_captions = |c: &mut common::Client| -> Value {
+        scenes(c)[0]["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["character"] == "MAREN" && e["kind"] == "dialogue")
+            .unwrap()["captions"]
+            .clone()
+    };
+    assert_eq!(line_captions(&mut c).as_array().unwrap().len(), 1);
+
+    // Candidates are the dialogue of the scene under the caption.
+    let cands = c.call(
+        "caption_candidates",
+        json!({ "timeline": tl, "language": "en", "key": key }),
+    );
+    assert_eq!(cands["scenes"], json!([scene1]));
+    assert_eq!(cands["candidates"][0]["line"]["text"], "We ride at dawn.");
+    assert_eq!(cands["candidates"][0]["score"], 1.0);
+
+    // Rewrite the line through the script editor's own path.
+    let text = c.call("script_text", json!({ "document": doc }));
+    let rewritten = text
+        .as_str()
+        .unwrap()
+        .replace("We ride at dawn.", "We ride at first light.");
+    c.call(
+        "script_write",
+        json!({ "document": doc, "text": rewritten }),
+    );
+
+    let now = c.call("captions", json!({ "timeline": tl, "language": "en" }));
+    let flagged = &now["track"]["captions"][0];
+    let why = flagged["review"].as_str().expect("flagged");
+    assert!(
+        why.contains("\"We ride at dawn.\" is now \"We ride at first light.\""),
+        "{why}"
+    );
+    assert_eq!(flagged["link"]["now"], "We ride at first light.");
+    assert!(
+        line_captions(&mut c)[0]["review"].is_string(),
+        "and the script sees the flag"
+    );
+
+    // Accept: the new words become the transcription and the flag clears.
+    let r = c.call(
+        "accept_caption_line",
+        json!({ "timeline": tl, "language": "en", "key": key }),
+    );
+    assert!(r["track"]["captions"][0]["review"].is_null());
+    assert_eq!(
+        r["track"]["captions"][0]["link"]["transcribed"],
+        "We ride at first light."
+    );
+
+    // Editing the caption's text keeps the link: it is the same caption.
+    let r = c.call(
+        "set_caption",
+        json!({ "timeline": tl, "language": "en", "index": 0, "start": start, "end": end,
+                "text": "We ride at first light." }),
+    );
+    assert_eq!(r["track"]["captions"][0]["key"], key.as_str());
+    assert_eq!(r["track"]["captions"][0]["link"]["character"], "MAREN");
+
+    // Unlink.
+    let r = c.call(
+        "unlink_caption",
+        json!({ "timeline": tl, "language": "en", "key": key }),
+    );
+    assert!(r["track"]["captions"][0]["link"].is_null());
+    assert_eq!(line_captions(&mut c).as_array().unwrap().len(), 0);
+}

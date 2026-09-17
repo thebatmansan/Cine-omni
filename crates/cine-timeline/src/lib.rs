@@ -40,6 +40,7 @@
 //! assert_eq!(read_otio(&text).unwrap(), timeline);
 //! ```
 
+pub mod caption_link;
 pub mod captions;
 pub mod edit;
 pub mod edl;

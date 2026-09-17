@@ -1,4 +1,4 @@
-//! Does the 7-reactor cascade scale to a real production?
+//! Does the reactor cascade scale to a real production?
 //!
 //! The `demo` runs on a 7-scene screenplay and settles in milliseconds. This
 //! measures the same single-dialogue-line edit against feature-length and
@@ -85,7 +85,7 @@ fn measure(scenes: usize, lines: usize) -> Timings {
 #[test]
 #[ignore]
 fn cascade_latency_vs_production_size() {
-    println!("\nOne edit, all 7 reactors installed.");
+    println!("\nOne edit, every reactor installed.");
     println!("Interactive budget: 100ms is already sluggish; 1s is unusable.\n");
     println!(
         "{:>7} {:>9} {:>12} {:>18} {:>18} {:>7}",

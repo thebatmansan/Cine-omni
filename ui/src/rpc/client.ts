@@ -95,8 +95,30 @@ export interface CaptionIssue {
   message: string;
 }
 
+/** The line of dialogue a caption transcribes, as the runtime resolved it. */
+export interface CaptionLink {
+  line: string | null;
+  scene: string;
+  heading: string | null;
+  character: string;
+  /** The words as transcribed. */
+  transcribed: string;
+  /** The words the line says now, when it still exists. */
+  now: string | null;
+}
+
+export interface CaptionCandidate {
+  line: { id: string; scene: string; character: string; ordinal: number; text: string };
+  heading: string;
+  score: number;
+}
+
 export interface CaptionView {
   index: number;
+  key: string | null;
+  link: CaptionLink | null;
+  /** Why this caption needs review against the script or the cut; null if it does not. */
+  review: string | null;
   record: Span;
   lines: string[];
   placement: "bottom" | "top";
@@ -198,6 +220,8 @@ export interface ScriptElement {
   character: string | null;
   /** `"changed"` or `"added"` since the last revision went out; null if neither. */
   revised: "changed" | "added" | null;
+  /** Captions transcribing this line; `review` says why one needs looking at. */
+  captions?: { id: string; review: string | null }[];
 }
 
 export interface ScriptScene {
@@ -785,6 +809,28 @@ export class RpcClient {
         report: { captions: number; snapped: number; largest_snap_ms: number; skipped: string[] };
       }
     >("import_captions", { timeline, language, text });
+  }
+  captionCandidates(timeline: string, language: string, key: string) {
+    return this.call<{ scenes: string[]; candidates: CaptionCandidate[] }>("caption_candidates", {
+      timeline,
+      language,
+      key,
+    });
+  }
+  linkCaption(timeline: string, language: string, key: string, line: string) {
+    return this.call<CascadeResult & { track: CaptionTrackView }>("link_caption", { timeline, language, key, line });
+  }
+  unlinkCaption(timeline: string, language: string, key: string) {
+    return this.call<CascadeResult & { track: CaptionTrackView }>("unlink_caption", { timeline, language, key });
+  }
+  acceptCaptionLine(timeline: string, language: string, key: string) {
+    return this.call<CascadeResult & { track: CaptionTrackView }>("accept_caption_line", { timeline, language, key });
+  }
+  linkCaptionsExact(timeline: string, language: string) {
+    return this.call<CascadeResult & { linked: number; track?: CaptionTrackView }>("link_captions_exact", {
+      timeline,
+      language,
+    });
   }
   exportCaptions(timeline: string, language: string, format: CaptionFormat) {
     return this.call<{ text: string; mime: string; extension: string; largest_rounding_us?: number }>(

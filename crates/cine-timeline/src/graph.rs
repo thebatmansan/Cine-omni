@@ -56,6 +56,9 @@ pub mod nle_attrs {
     pub const CAPTION_LINES: &str = "nle.caption_lines";
     pub const CAPTION_PLACEMENT: &str = "nle.caption_placement";
     pub const CAPTION_SPEAKER: &str = "nle.caption_speaker";
+    /// A caption's stable key, and the next key a track will issue.
+    pub const CAPTION_KEY: &str = "nle.caption_key";
+    pub const CAPTION_NEXT_KEY: &str = "nle.caption_next_key";
 }
 
 /// An edit applied to a track node by [`apply_edit`]. See [`crate::edit`]
@@ -1496,6 +1499,7 @@ pub fn export_captions(
                     _ => Placement::Bottom,
                 },
                 speaker: n.get_str(nle_attrs::CAPTION_SPEAKER).map(str::to_string),
+                key: n.get_str(nle_attrs::CAPTION_KEY).map(str::to_string),
             },
         ));
     }
@@ -1507,12 +1511,19 @@ pub fn export_captions(
     }))
 }
 
+/// The entity id of one caption, from its stable key.
+pub fn caption_node(timeline: EntityId, language: &str, key: &str) -> EntityId {
+    EntityId::derived(captions_node(timeline, language), &format!("caption:{key}"))
+}
+
 /// Write one language's captions for a sequence, in time order.
 ///
-/// Idempotent: writing the same track again produces no ops. Captions are
-/// identified by their place in time order, as markers are by their place on
-/// a track, so inserting one early rewrites the ones after it; that costs ops,
-/// not correctness.
+/// Idempotent: writing the same track again produces no ops. A caption keeps
+/// its entity across edits by its key, so inserting one early moves nothing
+/// that is attached to the ones after it — in particular, not the line of
+/// dialogue a caption is linked to. A caption without a key is given the next
+/// one, and keys are never reused within a track, so a removed caption's
+/// links cannot land on a new one.
 pub fn write_captions(
     tx: &mut Tx,
     timeline: EntityId,
@@ -1540,10 +1551,27 @@ pub fn write_captions(
     )?;
     let mut sorted = track.clone();
     sorted.sort();
+    let mut next = tx
+        .graph()
+        .node(id)
+        .and_then(|n| n.get_int(nle_attrs::CAPTION_NEXT_KEY))
+        .unwrap_or(1);
     let mut keep = Vec::with_capacity(sorted.captions.len());
+    let mut seen = HashSet::new();
     for (i, c) in sorted.captions.iter().enumerate() {
-        let cid = EntityId::derived(id, &format!("caption:{i}"));
+        let key = match &c.key {
+            Some(k) if seen.insert(k.clone()) => k.clone(),
+            _ => loop {
+                let k = format!("c{next}");
+                next += 1;
+                if seen.insert(k.clone()) {
+                    break k;
+                }
+            },
+        };
+        let cid = caption_node(timeline, &track.language, &key);
         ensure_kind(tx, cid, kinds::NLE_CAPTION)?;
+        tx.set(cid, nle_attrs::CAPTION_KEY, key.as_str())?;
         tx.link(id, cid, EdgeKind::Contains)?;
         tx.set(cid, attrs::ORDER, i)?;
         tx.set(cid, attrs::RANGE, c.record)?;
@@ -1563,6 +1591,14 @@ pub fn write_captions(
         set_opt(tx, cid, nle_attrs::CAPTION_SPEAKER, c.speaker.clone())?;
         keep.push(cid);
     }
+    // Keys issued so far, including any read back from the track: a key is
+    // never handed out twice.
+    for k in &seen {
+        if let Some(n) = k.strip_prefix('c').and_then(|n| n.parse::<i64>().ok()) {
+            next = next.max(n + 1);
+        }
+    }
+    tx.set(id, nle_attrs::CAPTION_NEXT_KEY, next)?;
     sync_children(tx, id, &keep)?;
     Ok(id)
 }

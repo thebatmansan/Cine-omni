@@ -538,6 +538,17 @@ pub fn script(graph: &Graph) -> J {
                                 "kind": kind,
                                 "text": en.get_str(attrs::TEXT),
                                 "character": en.get_str(attrs::CHARACTER),
+                                // Captions transcribing this line, and whether
+                                // any of them needs review: the other direction
+                                // of the caption's link.
+                                "captions": cine_timeline::caption_link::captions_of_line(graph, e)
+                                    .into_iter()
+                                    .filter_map(|c| graph.node(c))
+                                    .map(|cn| json!({
+                                        "id": cn.id,
+                                        "review": cn.get_str(cine_timeline::caption_link::REVIEW),
+                                    }))
+                                    .collect::<Vec<_>>(),
                                 // "changed" or "added" since the last revision.
                                 "revised": marks.get(&e.to_string()).map(|m| match m {
                                     cine_script::revision::Mark::Changed => "changed",

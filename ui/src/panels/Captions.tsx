@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { newCaptionSpan } from "../editing/edit";
-import type { CaptionFormat, CaptionsView, CaptionView, ExactTime, RpcClient, TimelineView } from "../rpc/client";
+import type {
+  CaptionCandidate,
+  CaptionFormat,
+  CaptionsView,
+  CaptionView,
+  ExactTime,
+  RpcClient,
+  TimelineView,
+} from "../rpc/client";
 
 /**
  * A sequence's captions, per language.
@@ -18,7 +26,9 @@ import type { CaptionFormat, CaptionsView, CaptionView, ExactTime, RpcClient, Ti
 export function Captions({
   client,
   timeline,
-  revision,
+  view,
+  language,
+  onLanguage,
   playhead,
   marks,
   onSeek,
@@ -26,38 +36,23 @@ export function Captions({
 }: {
   client: RpcClient;
   timeline: TimelineView | null;
-  revision: number;
+  /** The shared caption state (`useCaptions`). */
+  view: CaptionsView | null;
+  language: string | null;
+  onLanguage(l: string | null): void;
   playhead: ExactTime | null;
   /** Record marks in ticks at the sequence rate, as the timeline holds them. */
   marks: { in: number | null; out: number | null };
   onSeek(ticks: number): void;
   run<T>(label: string, call: () => Promise<T>): Promise<T | null>;
 }) {
-  const [view, setView] = useState<CaptionsView | null>(null);
-  const [language, setLanguage] = useState<string | null>(null);
+  const setLanguage = onLanguage;
   const [newLanguage, setNewLanguage] = useState("");
   const [importing, setImporting] = useState(false);
   const [srt, setSrt] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
   const id = timeline?.id ?? null;
-  useEffect(() => {
-    if (!id) return;
-    let live = true;
-    client
-      .captions(id, language ?? undefined)
-      .then((v) => {
-        if (!live) return;
-        setView(v);
-        if (!language && v.language) setLanguage(v.language);
-      })
-      .catch(() => live && setView(null));
-    return () => {
-      live = false;
-    };
-    // The revision is a dependency on purpose: another window's edit changes
-    // the captions without anything here changing.
-  }, [client, id, language, revision]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const add = useCallback(async () => {
     if (!id || !playhead || !language) return;
@@ -128,6 +123,16 @@ export function Captions({
             <button aria-pressed={importing} onClick={() => setImporting((v) => !v)}>
               Import SRT…
             </button>
+            <button
+              title="Link each caption to the line of dialogue it reads exactly, among the scenes under it. Ambiguous ones are left alone."
+              disabled={!track?.captions.length}
+              onClick={async () => {
+                const r = await run("link captions", () => client.linkCaptionsExact(timeline.id, language));
+                if (r) setNote(`${r.linked} caption${r.linked === 1 ? "" : "s"} linked to the script`);
+              }}
+            >
+              Link to script
+            </button>
             <span className="spacer" />
             {(["imsc", "srt", "vtt"] as CaptionFormat[]).map((f) => (
               <button key={f} disabled={!track?.captions.length} onClick={() => void download(f)}>
@@ -174,6 +179,8 @@ export function Captions({
           <div className="section-title">
             {track.captions.length} captions ·{" "}
             {track.issue_count === 0 ? "no delivery issues" : `${track.issue_count} delivery issues`}
+            {track.captions.some((c) => c.review) &&
+              ` · ${track.captions.filter((c) => c.review).length} to review against the script`}
           </div>
         )}
         {track?.captions.map((c) => (
@@ -206,6 +213,21 @@ export function Captions({
               )
             }
             onRemove={() => void run("remove caption", () => client.removeCaption(timeline.id, track.language, c.index))}
+            candidates={() =>
+              c.key
+                ? client.captionCandidates(timeline.id, track.language, c.key).then((r) => r.candidates)
+                : Promise.resolve([])
+            }
+            onLink={(line) =>
+              c.key && void run("link caption", () => client.linkCaption(timeline.id, track.language, c.key!, line))
+            }
+            onUnlink={() =>
+              c.key && void run("unlink caption", () => client.unlinkCaption(timeline.id, track.language, c.key!))
+            }
+            onAccept={() =>
+              c.key &&
+              void run("accept rewritten line", () => client.acceptCaptionLine(timeline.id, track.language, c.key!))
+            }
           />
         ))}
       </div>
@@ -219,13 +241,22 @@ function CaptionRow({
   onSave,
   onPlacement,
   onRemove,
+  candidates,
+  onLink,
+  onUnlink,
+  onAccept,
 }: {
   caption: CaptionView;
   onSeek(): void;
   onSave(text: string): void;
   onPlacement(p: "top" | "bottom"): void;
   onRemove(): void;
+  candidates(): Promise<CaptionCandidate[]>;
+  onLink(line: string): void;
+  onUnlink(): void;
+  onAccept(): void;
 }) {
+  const [picking, setPicking] = useState<CaptionCandidate[] | null>(null);
   const committed = caption.lines.join("\n");
   const [draft, setDraft] = useState(committed);
   // A change from anywhere else replaces the draft: the runtime's text wins.
@@ -263,6 +294,62 @@ function CaptionRow({
           {i.message}
         </div>
       ))}
+      {caption.review && (
+        <div className="review">
+          <span className="bad">{caption.review}</span>
+          {caption.link?.now != null && (
+            <button title="Take the line's current words as the transcription" onClick={onAccept}>
+              Accept
+            </button>
+          )}
+          <button onClick={onUnlink}>Unlink</button>
+        </div>
+      )}
+      {caption.link ? (
+        <div className="linked" title={caption.link.heading ?? ""}>
+          <span className="meta">
+            transcribes {caption.link.character || "a line"} in {caption.link.heading ?? "a scene"}
+          </span>
+          {!caption.review && (
+            <button className="link" onClick={onUnlink}>
+              unlink
+            </button>
+          )}
+        </div>
+      ) : (
+        caption.key && (
+          <div className="linked">
+            <button
+              className="link"
+              onClick={async () => setPicking(picking ? null : await candidates())}
+            >
+              {picking ? "cancel" : "link to a line…"}
+            </button>
+          </div>
+        )
+      )}
+      {picking && (
+        <div className="candidates">
+          {picking.length === 0 && (
+            <div className="note">
+              No scene is bound to the picture under this caption, so there is no dialogue to link it to.
+            </div>
+          )}
+          {picking.map((k) => (
+            <button
+              key={k.line.id}
+              className="candidate"
+              onClick={() => {
+                setPicking(null);
+                onLink(k.line.id);
+              }}
+            >
+              <span className="meta">{k.line.character}</span> {k.line.text}
+              <span className="meta"> · {k.heading}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

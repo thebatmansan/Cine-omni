@@ -338,9 +338,34 @@ Captions are stored in the project beside the sequence, not inside it:
 re-importing a cut rewrites the sequence's own contents, and captions are
 authored work that has to survive that.
 
-Not here: burn-in (the compositor has no text renderer), SCC, a caption lane on
-the timeline, and any link to the screenplay — a rewritten line of dialogue does
-not flag the caption that transcribes it.
+A caption can be linked to the line of dialogue it transcribes, and the link
+runs through the project rather than through text: the caption sits over clips,
+those clips are bound to scenes, and the lines it can be linked to are the
+dialogue of those scenes. *Link to script* links every caption that reads
+exactly one of those lines, and leaves anything ambiguous alone; *link to a
+line…* offers the rest, most alike first. The script shows **CC** on a line
+that has a caption, red when that caption needs review.
+
+Then the script and the cut keep the link honest. Rewrite the line and the
+caption is flagged with the words it transcribed and the words the line says
+now; cut the line, or its scene, and it is flagged as gone; re-cut the picture
+so the caption no longer sits over that scene and it is flagged for that. A
+line that only *moved* — an action line inserted above it gives it a new
+identity in the script — is followed, not flagged, because nothing it says
+changed. Reverting a rewrite clears the flag by itself; *Accept* takes the new
+words as the transcription; undo takes back either.
+
+Resolving every link runs on every script or cut change. With 1,200 captions
+linked across 120 scenes it costs 49 ms, and a one-line rewrite with every
+reactor settles in 183 ms (dev test profile, optimised dependencies). That is
+paid on a trim too, and is the number to watch as caption counts grow.
+
+Captions also show as a lane under the picture and sound tracks, from the same
+projection the tab reads, so where a caption sits against the cut is visible;
+one that needs review against the script, or has delivery issues, is marked,
+and clicking it moves the playhead there and opens it in the tab.
+
+Not here: burn-in (the compositor has no text renderer) and SCC.
 
 ### Speed
 

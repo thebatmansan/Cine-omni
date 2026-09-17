@@ -13,6 +13,7 @@ pub fn install_all(engine: &Engine) {
     engine.add_reactor(Arc::new(PrevisReactor));
     engine.add_reactor(Arc::new(LogisticsReactor));
     engine.add_reactor(Arc::new(TimelineReactor));
+    engine.add_reactor(Arc::new(CaptionReactor));
     engine.add_reactor(Arc::new(AudioReactor));
     engine.add_reactor(Arc::new(CompReactor));
     engine.add_reactor(Arc::new(ColorReactor));
@@ -445,6 +446,52 @@ impl Reactor for TimelineReactor {
             }));
         }
         Ok(plans)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Captions
+// ---------------------------------------------------------------------------
+
+/// Keeps every caption's link to the line of dialogue it transcribes resolved
+/// against the script and the cut.
+///
+/// A rewrite of that line, the line being cut, its scene being removed, or the
+/// caption no longer sitting over that scene's picture flags the caption with
+/// the reason; a line that only moved re-points the link silently; a rewrite
+/// reverted clears the flag. What counts is in
+/// `cine_timeline::caption_link`. Nothing else is flagged: a change to a scene
+/// the caption's line is not in reaches no caption.
+pub struct CaptionReactor;
+
+impl Reactor for CaptionReactor {
+    fn name(&self) -> &str {
+        "captions"
+    }
+    fn interested(&self, cs: &ChangeSet) -> bool {
+        // The script (a line's words or place), the cut (what is under a
+        // caption, and what those clips are bound to), and captions themselves.
+        cs.touches_module("script.") || cs.touches_module("nle.")
+    }
+    fn react(&self, _cs: &ChangeSet, g: &Graph) -> Result<Vec<Plan>> {
+        use cine_timeline::caption_link::{agrees, apply_standing, review_all};
+        let changed: Vec<_> = review_all(g)
+            .into_iter()
+            .filter(|(caption, standing)| !agrees(g, *caption, standing))
+            .collect();
+        if changed.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![Plan::new(
+            "review captions against the script",
+            move |tx| {
+                for (caption, standing) in &changed {
+                    apply_standing(tx, *caption, standing)
+                        .map_err(|e| engine_err("captions", e))?;
+                }
+                Ok(())
+            },
+        )])
     }
 }
 
