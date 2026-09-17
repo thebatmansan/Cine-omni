@@ -34,8 +34,17 @@ ignore = [
     # RUSTSEC-2024-0436 — `paste` is unmaintained (archived by its author).
     #
     # Investigated: this is an *unmaintained* notice, not a vulnerability. There
-    # is no CVE and no exploit path. It reaches us only transitively:
-    #     paste -> metal -> wgpu-hal -> wgpu -> cine-gpu
+    # is no CVE and no exploit path. The wgpu 30 upgrade removed the original
+    # path (through Metal); it came back with OpenEXR support:
+    #     paste -> pulp -> exr -> cine-comp
+    # `paste` is a proc-macro. It runs inside the compiler to generate
+    # identifiers for `pulp`'s SIMD dispatch and contributes no code of its own
+    # to the binary, so no input the application reads ever reaches it.
+    #
+    # Action: none available to us; `exr` has no feature that drops `pulp`.
+    # Re-evaluate when `pulp` or `exr` moves off `paste`.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained-only proc-macro, compile time only, via exr -> pulp; no upgrade exists" },
+
     # `ttf-parser` is unmaintained (RUSTSEC-2026-0192). It is not a
     # vulnerability: the author has simply stated the crate will receive no
     # further fixes, and the advisory itself records "No safe upgrade is
@@ -100,7 +109,20 @@ confidence-threshold = 0.9
 # A crate whose licence cannot be detected from its metadata must be recorded
 # here with the file that was actually read. This list is empty because nothing
 # in the current graph needs it; adding an entry requires reading the licence.
-exceptions = []
+exceptions = [
+    # egui's embedded fonts (cine-shell). Read: fonts/OFL.txt, fonts/UFL.txt,
+    # fonts/Hack-Regular.txt and fonts/emoji-icon-font-mit-license.txt in
+    # epaint_default_fonts 0.36.2. The crate's code is MIT OR Apache-2.0; its
+    # fonts are Noto Emoji (OFL-1.1), Ubuntu Light (Ubuntu Font Licence 1.0),
+    # Hack (MIT, with Bitstream Vera terms the SPDX expression omits) and
+    # emoji-icon-font (MIT). All four permit embedding unmodified fonts in
+    # software, including sold software, provided each copy carries the
+    # notices and licence texts, and forbid selling the fonts on their own.
+    # They are font licences, not code copyleft: nothing about them reaches the
+    # application's code. Scoped to this crate so the allow list does not widen
+    # for anything else. Obligations and texts: licenses/THIRD-PARTY.toml.
+    { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
+]
 
 # ---------------------------------------------------------------------------
 # Bans

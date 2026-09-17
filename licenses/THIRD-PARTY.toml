@@ -112,3 +112,20 @@ integration = "oracle"
 used_by = ["crates/cine-timeline/tests/data/captions/oracle.sh"]
 modifications = "none; not linked, not shipped. Run through `uvx` as a separate program to decode the IMSC this crate writes into SRT; its outputs are committed as reference files (*.ttconv.srt) and checked by crates/cine-timeline/tests/captions_oracle.rs."
 obligations = "none for CINE-OMNI: a tool run on test fixtures imposes nothing on what it is run on."
+
+[[entry]]
+project = "epaint_default_fonts (egui's embedded fonts: Hack, Noto Emoji, Ubuntu Light, emoji-icon-font)"
+url = "https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts"
+version = "0.36.2"
+license = "(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0; Hack also carries the Bitstream Vera License"
+copyright = "Hack: Source Foundry Authors (2018); Bitstream Vera: Bitstream, Inc. (2003); emoji-icon-font: John Slegers (2014); Noto Emoji and Ubuntu: as stated in the font files (the crate's OFL.txt and UFL.txt carry no copyright line)"
+integration = "bundled-data"
+used_by = ["crates/cine-shell (through egui -> epaint), compiled into the cine binary as font bytes"]
+modifications = "none"
+license_text = [
+  "licenses/epaint_default_fonts-NotoEmoji-OFL-1.1.txt",
+  "licenses/epaint_default_fonts-Ubuntu-font-1.0.txt",
+  "licenses/epaint_default_fonts-Hack-MIT-and-Bitstream-Vera.txt",
+  "licenses/epaint_default_fonts-emoji-icon-font-MIT.txt",
+]
+obligations = "Every distributed copy of the application must include these four texts with their notices. The fonts may not be sold by themselves, may not be relicensed, and a modified font may not keep a reserved name (Bitstream Vera: not 'Bitstream' or 'Vera'). Not yet met by any distribution, because none exists: a release package must ship these files. Recorded here so that it does."
