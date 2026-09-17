@@ -811,3 +811,88 @@ fn angles_can_be_attached_and_cut_between() {
     let seq = c.call("timeline", json!({ "id": tl }));
     assert_eq!(seq["tracks"][0]["items"].as_array().unwrap().len(), 2);
 }
+
+/// Captions over the protocol: written against the sequence's frames, checked
+/// against delivery rules, imported from SRT with what moved reported, and
+/// exported as frame-exact IMSC — each change one undoable commit.
+#[test]
+fn captions_are_authored_checked_imported_and_exported() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let tl = timeline_id(&mut c);
+
+    let none = c.call("captions", json!({ "timeline": tl }));
+    assert_eq!(none["languages"].as_array().unwrap().len(), 0);
+    assert!(none["track"].is_null());
+
+    // Two seconds of a line, then a second caption one frame later: the gap
+    // is below the two frames a delivery wants, and the check says so.
+    let r = c.call(
+        "set_caption",
+        json!({ "timeline": tl, "language": "en", "start": frames(24), "end": frames(72),
+                "text": "We ride at dawn." }),
+    );
+    assert_eq!(r["track"]["captions"].as_array().unwrap().len(), 1);
+    let r = c.call(
+        "set_caption",
+        json!({ "timeline": tl, "language": "en", "start": frames(73), "end": frames(121),
+                "text": "Not before.", "speaker": "TOBIAS" }),
+    );
+    let first = &r["track"]["captions"][0];
+    assert_eq!(first["record"]["start"]["ticks"], 24);
+    assert_eq!(first["issues"][0]["kind"], "gap_too_small", "{first}");
+    assert_eq!(r["track"]["captions"][1]["speaker"], "TOBIAS");
+
+    // Editing closes the gap, and the issue goes away.
+    let r = c.call(
+        "set_caption",
+        json!({ "timeline": tl, "language": "en", "index": 0, "start": frames(24),
+                "end": frames(73), "text": "We ride at dawn." }),
+    );
+    assert_eq!(r["track"]["issue_count"], 0, "{}", r["track"]);
+
+    // Exported as IMSC, every time is a whole frame.
+    let imsc = c.call(
+        "export_captions",
+        json!({ "timeline": tl, "language": "en", "format": "imsc" }),
+    );
+    let xml = imsc["text"].as_str().unwrap();
+    assert!(xml.contains("begin=\"24f\" end=\"73f\""), "{xml}");
+    assert!(xml.contains("ttm:agent=\"TOBIAS\""), "{xml}");
+
+    // An SRT from elsewhere replaces the track, and what moved is reported.
+    let r = c.call(
+        "import_captions",
+        json!({ "timeline": tl, "language": "fr", "text":
+            "1\n00:00:01,020 --> 00:00:03,000\nNous partons à l'aube.\n\nbroken\n" }),
+    );
+    assert_eq!(r["report"]["captions"], 1);
+    assert_eq!(
+        r["report"]["snapped"], 1,
+        "1.020 s is not on a frame at 24 fps"
+    );
+    assert_eq!(r["report"]["skipped"].as_array().unwrap().len(), 1);
+    let both = c.call("captions", json!({ "timeline": tl }));
+    assert_eq!(both["languages"], json!(["en", "fr"]));
+
+    // Removing is a commit like any other, and undo brings it back.
+    c.call(
+        "remove_caption",
+        json!({ "timeline": tl, "language": "en", "index": 1 }),
+    );
+    let en = c.call("captions", json!({ "timeline": tl, "language": "en" }));
+    assert_eq!(en["track"]["captions"].as_array().unwrap().len(), 1);
+    c.call("undo", json!({}));
+    let en = c.call("captions", json!({ "timeline": tl, "language": "en" }));
+    assert_eq!(en["track"]["captions"].as_array().unwrap().len(), 2);
+
+    // A caption that ends before it starts is refused.
+    let e = c
+        .call_result(
+            "set_caption",
+            json!({ "timeline": tl, "language": "en", "start": frames(50), "end": frames(40),
+                    "text": "backwards" }),
+        )
+        .expect_err("backwards");
+    assert!(e.contains("end after it starts"), "{e}");
+}

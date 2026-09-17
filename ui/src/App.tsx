@@ -3,6 +3,7 @@ import { Browser } from "./panels/Browser";
 import { Capabilities } from "./panels/Capabilities";
 import { History, Impact } from "./panels/Impact";
 import { Jobs } from "./panels/Jobs";
+import { Captions } from "./panels/Captions";
 import { Colour } from "./panels/Colour";
 import { Production } from "./panels/Production";
 import { Inspector } from "./panels/Inspector";
@@ -71,7 +72,7 @@ export function App() {
   const [monitor, setMonitor] = useState<"source" | "record">("record");
   const [lastApplied, setLastApplied] = useState<string | null>(null);
   const [sceneId, setSceneId] = useState<string | null>(null);
-  const [rightTab, setRightTab] = useState<"inspector" | "history" | "jobs">("inspector");
+  const [rightTab, setRightTab] = useState<"inspector" | "captions" | "history" | "jobs">("inspector");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [scriptMode, setScriptMode] = useState<"read" | "write">("read");
 
@@ -358,6 +359,9 @@ export function App() {
                 <button aria-selected={rightTab === "inspector"} onClick={() => setRightTab("inspector")}>
                   Inspector
                 </button>
+                <button aria-selected={rightTab === "captions"} onClick={() => setRightTab("captions")}>
+                  Captions
+                </button>
                 <button aria-selected={rightTab === "history"} onClick={() => setRightTab("history")}>
                   History
                 </button>
@@ -381,6 +385,19 @@ export function App() {
                   onAngle={(clip, key) =>
                     void session.run(`angle ${key}`, () => client.setAngle(clip, key))
                   }
+                />
+              ) : rightTab === "captions" ? (
+                <Captions
+                  client={client}
+                  timeline={timeline}
+                  revision={revision}
+                  playhead={playhead}
+                  marks={timeline ? (recordMarks[timeline.id] ?? NO_MARKS) : NO_MARKS}
+                  onSeek={(ticks) => {
+                    setPlayheadTicks(ticks);
+                    setMonitor("record");
+                  }}
+                  run={session.run}
                 />
               ) : rightTab === "jobs" ? (
                 <Jobs

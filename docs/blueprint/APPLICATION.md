@@ -316,6 +316,32 @@ There is no quad view: showing four angles at once needs four decoders running
 together, and that is a separate capability. Nothing here syncs angles
 automatically either; the offsets have to already be in the assets.
 
+### Captions
+
+The Captions tab holds a sequence's captions, one language at a time. A new
+caption goes where the record marks are, or two seconds from the playhead;
+its text is edited in place and committed when the field is left, so every
+other window sees it and undo takes it back. Each caption carries the
+runtime's own check against the numbers deliveries share — two lines, 42
+characters a line, five sixths of a second to seven seconds on screen, two
+frames between events, twenty characters a second, no overlap — so the list
+says what a QC report would, before there is one.
+
+Times are the sequence's exact frames. IMSC is written with the frame rate
+declared and every time an offset in frames, so nothing is rounded; ttconv, an
+independent TTML reader run as a test oracle, decodes those documents onto
+exactly the frames written, at NTSC rates and an hour in. SRT and WebVTT store
+milliseconds, so an import moves each time onto the nearest frame and says how
+many moved and by how much, rather than keeping a time the picture cannot show.
+
+Captions are stored in the project beside the sequence, not inside it:
+re-importing a cut rewrites the sequence's own contents, and captions are
+authored work that has to survive that.
+
+Not here: burn-in (the compositor has no text renderer), SCC, a caption lane on
+the timeline, and any link to the screenplay — a rewritten line of dialogue does
+not flag the caption that transcribes it.
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

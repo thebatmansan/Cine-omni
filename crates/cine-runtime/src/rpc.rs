@@ -470,6 +470,70 @@ fn plan_json(plan: &cine_timeline::Plan) -> J {
     })
 }
 
+/// A sequence's frame rate, which every caption time is counted in.
+fn sequence_rate(g: &Graph, timeline: EntityId) -> std::result::Result<ucg_core::Rate, String> {
+    let t = cine_timeline::graph::export_timeline(g, timeline).map_err(|e| e.to_string())?;
+    t.global_start_time
+        .map(|s| s.rate_exact())
+        .ok_or_else(|| "the sequence declares no frame rate to count caption times in".into())
+}
+
+/// A caption track as the interface reads it: every caption with its own
+/// issues against the default delivery rules, in time order.
+fn captions_json(track: &cine_timeline::captions::CaptionTrack) -> J {
+    use cine_timeline::captions::{check, Placement, Rules};
+    let rules = Rules::default();
+    let issues = check(track, &rules);
+    json!({
+        "language": track.language,
+        "rate_num": track.rate.num(),
+        "rate_den": track.rate.den(),
+        "rules": rules,
+        "captions": track.captions.iter().enumerate().map(|(i, c)| json!({
+            "index": i,
+            "record": crate::projection::range(c.record),
+            "lines": c.lines,
+            "placement": match c.placement { Placement::Bottom => "bottom", Placement::Top => "top" },
+            "speaker": c.speaker,
+            "issues": issues.iter().filter(|x| x.caption == i).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "issue_count": issues.len(),
+    })
+}
+
+/// Read, change and write one language's captions as one undoable commit.
+fn with_captions(
+    p: &OmniProject,
+    timeline: EntityId,
+    language: &str,
+    label: &str,
+    change: impl FnOnce(&mut cine_timeline::captions::CaptionTrack) -> std::result::Result<(), String>,
+) -> RpcResult {
+    let rate = {
+        let g = p.engine.read();
+        sequence_rate(&g, timeline)?
+    };
+    let existing = {
+        let g = p.engine.read();
+        cine_timeline::graph::export_captions(&g, timeline, language).map_err(|e| e.to_string())?
+    };
+    let mut track =
+        existing.unwrap_or_else(|| cine_timeline::captions::CaptionTrack::new(language, rate));
+    change(&mut track)?;
+    track.sort();
+    let group = p
+        .engine
+        .transact(label, |tx| {
+            cine_timeline::graph::write_captions(tx, timeline, &track)
+                .map(|_| ())
+                .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+        })
+        .map_err(|x| x.to_string())?;
+    let mut out = with_impact(p, &group);
+    out["track"] = captions_json(&track);
+    Ok(out)
+}
+
 fn op_label(op: &cine_timeline::EditOp) -> &'static str {
     use cine_timeline::EditOp as E;
     match op {
@@ -813,6 +877,142 @@ pub fn dispatch_with(
             let mut out = with_impact(p, &group);
             out["clip"] = json!(switched.ok_or("the switch did not run")?);
             out
+        }
+        "captions" => {
+            let timeline = entity(params, "timeline")?;
+            let g = p.engine.read();
+            let languages = cine_timeline::graph::caption_languages(&g, timeline);
+            let language = params
+                .get("language")
+                .and_then(J::as_str)
+                .map(str::to_string)
+                .or_else(|| languages.first().cloned());
+            let track = match &language {
+                Some(l) => cine_timeline::graph::export_captions(&g, timeline, l)
+                    .map_err(|e| e.to_string())?,
+                None => None,
+            };
+            json!({
+                "languages": languages,
+                "language": language,
+                "track": track.as_ref().map(captions_json),
+            })
+        }
+        "set_caption" => {
+            let timeline = entity(params, "timeline")?;
+            let language = str_param(params, "language")?.to_string();
+            let time = |key: &str| -> std::result::Result<RationalTime, String> {
+                serde_json::from_value(
+                    params
+                        .get(key)
+                        .cloned()
+                        .ok_or_else(|| format!("missing param `{key}`"))?,
+                )
+                .map_err(|e| format!("invalid `{key}`: {e}"))
+            };
+            let (start, end) = (time("start")?, time("end")?);
+            if end <= start {
+                return Err("a caption has to end after it starts".into());
+            }
+            let text = str_param(params, "text")?.to_string();
+            let index = params.get("index").and_then(J::as_u64).map(|i| i as usize);
+            let placement = match params.get("placement").and_then(J::as_str) {
+                Some("top") => cine_timeline::captions::Placement::Top,
+                _ => cine_timeline::captions::Placement::Bottom,
+            };
+            let speaker = params
+                .get("speaker")
+                .and_then(J::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string);
+            let label = if index.is_some() {
+                "edit caption"
+            } else {
+                "add caption"
+            };
+            return with_captions(p, timeline, &language, label, |track| {
+                let mut caption = cine_timeline::captions::Caption::new(
+                    ucg_core::TimeRange::from_start_end(start, end),
+                    &text,
+                );
+                caption.placement = placement;
+                caption.speaker = speaker;
+                match index {
+                    Some(i) => {
+                        let slot = track
+                            .captions
+                            .get_mut(i)
+                            .ok_or_else(|| format!("there is no caption {i}"))?;
+                        *slot = caption;
+                    }
+                    None => track.captions.push(caption),
+                }
+                Ok(())
+            });
+        }
+        "remove_caption" => {
+            let timeline = entity(params, "timeline")?;
+            let language = str_param(params, "language")?.to_string();
+            let index = params
+                .get("index")
+                .and_then(J::as_u64)
+                .ok_or("missing param `index`")? as usize;
+            return with_captions(p, timeline, &language, "remove caption", |track| {
+                if index >= track.captions.len() {
+                    return Err(format!("there is no caption {index}"));
+                }
+                track.captions.remove(index);
+                Ok(())
+            });
+        }
+        "import_captions" => {
+            let timeline = entity(params, "timeline")?;
+            let language = str_param(params, "language")?.to_string();
+            let text = str_param(params, "text")?.to_string();
+            let rate = {
+                let g = p.engine.read();
+                sequence_rate(&g, timeline)?
+            };
+            let (imported, report) = cine_timeline::captions::read_srt(&text, &language, rate)
+                .map_err(|e| e.to_string())?;
+            let mut out = with_captions(p, timeline, &language, "import captions", |track| {
+                *track = imported;
+                Ok(())
+            })?;
+            out["report"] = json!({
+                "captions": report.captions,
+                "snapped": report.snapped,
+                "largest_snap_ms": report.largest_snap_ms,
+                "skipped": report.skipped,
+            });
+            out
+        }
+        "export_captions" => {
+            let timeline = entity(params, "timeline")?;
+            let language = str_param(params, "language")?;
+            let format = str_param(params, "format")?;
+            let g = p.engine.read();
+            let track = cine_timeline::graph::export_captions(&g, timeline, language)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("the sequence has no `{language}` captions"))?;
+            match format {
+                "imsc" | "ttml" => json!({
+                    "text": cine_timeline::captions::write_imsc(&track).map_err(|e| e.to_string())?,
+                    "mime": "application/ttml+xml",
+                    "extension": "ttml",
+                }),
+                "srt" => {
+                    let (text, report) = cine_timeline::captions::write_srt(&track);
+                    json!({ "text": text, "mime": "application/x-subrip", "extension": "srt",
+                            "largest_rounding_us": report.largest_rounding_us })
+                }
+                "vtt" => {
+                    let (text, report) = cine_timeline::captions::write_vtt(&track);
+                    json!({ "text": text, "mime": "text/vtt", "extension": "vtt",
+                            "largest_rounding_us": report.largest_rounding_us })
+                }
+                other => return Err(format!("no caption format `{other}` (imsc, srt, vtt)")),
+            }
         }
         "jobs" => {
             let jobs = p

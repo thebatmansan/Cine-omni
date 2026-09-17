@@ -49,6 +49,13 @@ pub mod nle_attrs {
     pub const ANGLES: &str = "nle.angles";
     /// Which key in [`ANGLES`] is playing.
     pub const ANGLE: &str = "nle.angle";
+    /// A caption track's language (BCP 47) and the rate its times count in.
+    pub const CAPTION_LANGUAGE: &str = "nle.caption_language";
+    pub const CAPTION_RATE: &str = "nle.caption_rate";
+    /// One caption's lines, placement and speaker.
+    pub const CAPTION_LINES: &str = "nle.caption_lines";
+    pub const CAPTION_PLACEMENT: &str = "nle.caption_placement";
+    pub const CAPTION_SPEAKER: &str = "nle.caption_speaker";
 }
 
 /// An edit applied to a track node by [`apply_edit`]. See [`crate::edit`]
@@ -1415,4 +1422,157 @@ pub fn three_point_edit(
     let overwrite = kind == crate::three_point::EditKind::Overwrite;
     let placed = place_material(tx, tracks, plan.record.start_time, &spec, overwrite)?;
     Ok((plan, placed))
+}
+
+// ---------------------------------------------------------------------------
+// captions
+// ---------------------------------------------------------------------------
+
+/// The node holding one language's captions for a sequence.
+///
+/// Contained by the project and bound to the sequence by a `References` edge.
+/// Not contained by the timeline, because re-importing a cut reconciles the
+/// timeline's children and would delete authored captions with the stack it
+/// replaced. `References` rather than `SyncedTo` because nothing yet reacts to
+/// a cut change by flagging captions for review, and an edge that claims
+/// propagation should have something behind it.
+pub fn captions_node(timeline: EntityId, language: &str) -> EntityId {
+    EntityId::derived(timeline, &format!("captions:{language}"))
+}
+
+/// Languages captioned for a sequence, in the order they sort.
+pub fn caption_languages(graph: &Graph, timeline: EntityId) -> Vec<String> {
+    let mut out: Vec<String> = graph
+        .of_kind(kinds::NLE_CAPTIONS)
+        .iter()
+        .filter(|n| {
+            graph
+                .targets(n.id, EdgeKind::References)
+                .contains(&timeline)
+        })
+        .filter_map(|n| n.get_str(nle_attrs::CAPTION_LANGUAGE).map(str::to_string))
+        .collect();
+    out.sort();
+    out
+}
+
+/// One language's captions, when the sequence has them.
+pub fn export_captions(
+    graph: &Graph,
+    timeline: EntityId,
+    language: &str,
+) -> Result<Option<crate::captions::CaptionTrack>> {
+    use crate::captions::{Caption, CaptionTrack, Placement};
+    let id = captions_node(timeline, language);
+    let Some(node) = graph.node(id) else {
+        return Ok(None);
+    };
+    let rate: ucg_core::Rate = node
+        .get_as(nle_attrs::CAPTION_RATE)
+        .ok_or(Error::MissingAttr {
+            id,
+            attr: nle_attrs::CAPTION_RATE,
+        })?;
+    let mut rows: Vec<(i64, Caption)> = Vec::new();
+    for c in graph.children(id) {
+        let n = graph.require(c)?;
+        if n.kind.as_str() != kinds::NLE_CAPTION {
+            continue;
+        }
+        let record = n
+            .get(attrs::RANGE)
+            .and_then(Value::as_range)
+            .ok_or(Error::MissingAttr {
+                id: c,
+                attr: attrs::RANGE,
+            })?;
+        rows.push((
+            n.get_int(attrs::ORDER).unwrap_or(0),
+            Caption {
+                record,
+                lines: n.get_as(nle_attrs::CAPTION_LINES).unwrap_or_default(),
+                placement: match n.get_str(nle_attrs::CAPTION_PLACEMENT) {
+                    Some("top") => Placement::Top,
+                    _ => Placement::Bottom,
+                },
+                speaker: n.get_str(nle_attrs::CAPTION_SPEAKER).map(str::to_string),
+            },
+        ));
+    }
+    rows.sort_by_key(|(order, _)| *order);
+    Ok(Some(CaptionTrack {
+        language: language.to_string(),
+        rate,
+        captions: rows.into_iter().map(|(_, c)| c).collect(),
+    }))
+}
+
+/// Write one language's captions for a sequence, in time order.
+///
+/// Idempotent: writing the same track again produces no ops. Captions are
+/// identified by their place in time order, as markers are by their place on
+/// a track, so inserting one early rewrites the ones after it; that costs ops,
+/// not correctness.
+pub fn write_captions(
+    tx: &mut Tx,
+    timeline: EntityId,
+    track: &crate::captions::CaptionTrack,
+) -> Result<EntityId> {
+    use crate::captions::Placement;
+    require_kind(tx.graph(), timeline, kinds::NLE_TIMELINE)?;
+    if track.language.trim().is_empty() {
+        return Err(Error::Edit("a caption track needs a language".into()));
+    }
+    let project = tx.graph().parent(timeline).ok_or(Error::MissingAttr {
+        id: timeline,
+        attr: "a project",
+    })?;
+    let id = captions_node(timeline, &track.language);
+    ensure_kind(tx, id, kinds::NLE_CAPTIONS)?;
+    tx.link(project, id, EdgeKind::Contains)?;
+    tx.link(id, timeline, EdgeKind::References)?;
+    tx.set(id, attrs::NAME, format!("Captions ({})", track.language))?;
+    tx.set(id, nle_attrs::CAPTION_LANGUAGE, track.language.as_str())?;
+    tx.set(
+        id,
+        nle_attrs::CAPTION_RATE,
+        Value::from_serde(&track.rate).map_err(Error::Ucg)?,
+    )?;
+    let mut sorted = track.clone();
+    sorted.sort();
+    let mut keep = Vec::with_capacity(sorted.captions.len());
+    for (i, c) in sorted.captions.iter().enumerate() {
+        let cid = EntityId::derived(id, &format!("caption:{i}"));
+        ensure_kind(tx, cid, kinds::NLE_CAPTION)?;
+        tx.link(id, cid, EdgeKind::Contains)?;
+        tx.set(cid, attrs::ORDER, i)?;
+        tx.set(cid, attrs::RANGE, c.record)?;
+        tx.set(
+            cid,
+            nle_attrs::CAPTION_LINES,
+            Value::from_serde(&c.lines).map_err(Error::Ucg)?,
+        )?;
+        tx.set(
+            cid,
+            nle_attrs::CAPTION_PLACEMENT,
+            match c.placement {
+                Placement::Bottom => "bottom",
+                Placement::Top => "top",
+            },
+        )?;
+        set_opt(tx, cid, nle_attrs::CAPTION_SPEAKER, c.speaker.clone())?;
+        keep.push(cid);
+    }
+    sync_children(tx, id, &keep)?;
+    Ok(id)
+}
+
+/// Remove one language's captions from a sequence.
+pub fn remove_captions(tx: &mut Tx, timeline: EntityId, language: &str) -> Result<()> {
+    let id = captions_node(timeline, language);
+    if tx.graph().contains(id) {
+        sync_children(tx, id, &[])?;
+        tx.delete(id)?;
+    }
+    Ok(())
 }

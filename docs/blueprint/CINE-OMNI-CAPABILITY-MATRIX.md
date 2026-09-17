@@ -126,7 +126,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Keyframes & effects | All NLEs | Opacity, position, speed, audio levels; curves | **MISSING** | — | BE · FE · G | animated params | — | — | L | P1 | — |
 | Retiming — constant speed | All NLEs | Speed changes, freeze frames, reverse | **VERIFIED** (constant) / **MISSING** (ramps) | a retime is an exact pair — the media consumed and the track time it takes — never a float scalar; composition, the OTIO file (with `LinearTimeWarp` for other tools), the graph, the flattened picture list, `picture_at`, the EDL's `M2` record and fit-to-fill all carry it; trims/rolls/joins refuse a retimed clip rather than guess; reverse is modelled and the decoder says it cannot play it yet | speed *ramps* need a curve, not a constant | `nle.retime_played` | — | — | M | P2 | 12 unit + 1 protocol test |
 | Retiming — speed ramps | All NLEs | Retime as a function, not a scalar | **PLANNED** | R16 §A.6 | BE · M · G | retime curve | — | — | M | P2 | — |
-| Captions & subtitles | Resolve, Premiere, subtitle tools | SRT/TTML/IMSC/SCC authoring, burn-in | **MISSING** | — | BE · FE | caption track | — | — | M | P1 | IMSC validator |
+| Captions & subtitles | Resolve, Premiere, subtitle tools | SRT/TTML/IMSC/SCC authoring, burn-in | **IMPLEMENTED** (authoring, import, export) / **MISSING** (burn-in, SCC, timeline lane) | a Captions tab per sequence and language: add at the record marks or the playhead, edit text in place, move to the top, remove; import SRT with what moved onto a frame reported; export IMSC, SRT or WebVTT. Every change is one commit shared across windows and undoable; each caption shows the runtime's delivery issues. Stored in the project, not under the timeline, so re-importing the cut does not delete them | burn-in needs a text renderer in the compositor; captions are not linked to script dialogue, so a rewrite does not flag them | `nle.captions`, `nle.caption` | — | — | M | P1 | 4 graph + 1 protocol + 3 browser tests |
 | Proxy editing & conform | All NLEs | Cut on proxies, conform to originals exactly | **PARTIAL** | multiple refs preserved; proxy never becomes original | BE proxy gen · FE toggle | media refs | — | — | M | P1 | proxy/original round-trip (tested) |
 | Relink / offline media | All NLEs | Relink by content, name, TC | **VERIFIED** (engine) / **IMPLEMENTED** (UI) | content-hash relink | FE relink dialog | asset.media | — | — | S | P1 | relink tests |
 | OTIO interchange | OpenTimelineIO | Read and write real OTIO | **PARTIAL** | write Tier 1; read fails real files | BE reader hardening | nle.* | Apache-2.0 spec; no usable Rust binding | — | M | P1 | 5-tier harness (R16) |
@@ -237,7 +237,7 @@ separate process costs weeks and is legally clean.
 | Web / social deliverables | Resolve, Premiere | H.264/HEVC presets | **BLOCKED** | — | M encode | — | patent pools | — | M | P1 | — |
 | DCP (theatrical) | DCP-o-matic, Clipster | SMPTE DCP: JPEG 2000 in MXF, CPL/PKL, ≤250 Mb/s | **MISSING** | — | M J2K encode · MXF | delivery package | **OpenJPEG BSD-2** (verified); SMPTE ST 429 | — | L | P2 | DCP validators |
 | IMF (streaming masters) | Clipster, Resolve | App 2E: J2K + PCM, CPL, Photon-clean | **MISSING** | — | M · MXF | delivery package | **Netflix Photon is open source** (verify licence); OpenJPEG/OpenJPH BSD-2 | — | L | P2 | passes Photon |
-| Timed text | Subtitle Edit, EZTitles | TTML1 / IMSC1.1 (Netflix), SCC, SRT | **PARTIAL** | `cine_timeline::captions`: IMSC 1.1 Text written with frame-exact offsets (`ttp:frameRate` + multiplier, refused for a rate TTML cannot express), SRT read/write and WebVTT write snapped to the sequence's frames, and delivery checks (lines, characters per line, duration, gap, reading speed, overlap). Checked against **ttconv**, an independent TTML reader: at 24000/1001, 30000/1001 and 25, including a half-millisecond tie and an hour in, every caption it decodes lands on the frame written. **Not yet reachable from the product**; no SCC, no IMSC schema validation | graph, protocol and interface; SCC | caption track | W3C specs; ttconv as oracle | — | M | P1 | `captions_oracle.rs` + 7 unit tests |
+| Timed text | Subtitle Edit, EZTitles | TTML1 / IMSC1.1 (Netflix), SCC, SRT | **VERIFIED** (IMSC, SRT, WebVTT) / **MISSING** (SCC) | `cine_timeline::captions`: IMSC 1.1 Text written with frame-exact offsets (`ttp:frameRate` + multiplier, refused for a rate TTML cannot express), SRT read/write and WebVTT write snapped to the sequence's frames, and delivery checks (lines, characters per line, duration, gap, reading speed, overlap). Checked against **ttconv**, an independent TTML reader: at 24000/1001, 30000/1001 and 25, including a half-millisecond tie and an hour in, every caption it decodes lands on the frame written. Reachable from the Captions tab (row above). No SCC, no IMSC schema validation | SCC; schema validation | caption track | W3C specs; ttconv as oracle | — | M | P1 | `captions_oracle.rs` + 7 unit tests |
 | Audio masters & stems | Pro Tools | BWF, ADM BW64, loudness-compliant | **PARTIAL** | stems + loudness | BE writers | audio.stem | — | — | M | P1 | loudness spec per platform |
 | HDR deliverables | Resolve Studio | PQ/HLG with mastering metadata | **MISSING** | — | BE · M | mastering meta | Dolby for DV | — | L | P2 | — |
 | Automated QC | Vidchecker, Baton | Black frames, freezes, loudness, gamut, flashes, spec | **MISSING** | loudness only | BE analysers | QC report | — | faster than real time | L | P2 | known-defect corpus |
@@ -275,12 +275,12 @@ Counted from the tables above (154 rows; where a row has two states, the first i
 
 | Status | Count |
 |---|---:|
-| VERIFIED | 20 |
-| IMPLEMENTED | 6 |
-| PARTIAL | 51 |
+| VERIFIED | 21 |
+| IMPLEMENTED | 7 |
+| PARTIAL | 50 |
 | PROTOTYPE | 3 |
 | PLANNED | 5 |
-| MISSING | 52 |
+| MISSING | 51 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |
 

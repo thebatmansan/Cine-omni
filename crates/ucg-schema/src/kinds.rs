@@ -66,6 +66,11 @@ pub const NLE_CLIP: &str = "nle.clip";
 pub const NLE_GAP: &str = "nle.gap";
 pub const NLE_TRANSITION: &str = "nle.transition";
 pub const NLE_MARKER: &str = "nle.marker";
+/// One language's captions for a sequence. Contained by the project, not the
+/// timeline: re-importing a cut rewrites the timeline's children, and captions
+/// are authored work that must survive that.
+pub const NLE_CAPTIONS: &str = "nle.captions";
+pub const NLE_CAPTION: &str = "nle.caption";
 
 // ---- compositing ----
 pub const COMP_GRAPH: &str = "comp.graph";

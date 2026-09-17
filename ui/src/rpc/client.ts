@@ -80,6 +80,46 @@ export interface EditPlan {
   description: string;
 }
 
+/** One thing a delivery would reject about a caption, in an editor's words. */
+export interface CaptionIssue {
+  caption: number;
+  kind:
+    | "too_many_lines"
+    | "line_too_long"
+    | "too_short"
+    | "too_long"
+    | "gap_too_small"
+    | "overlap"
+    | "reading_speed"
+    | "empty";
+  message: string;
+}
+
+export interface CaptionView {
+  index: number;
+  record: Span;
+  lines: string[];
+  placement: "bottom" | "top";
+  speaker: string | null;
+  issues: CaptionIssue[];
+}
+
+export interface CaptionTrackView {
+  language: string;
+  rate_num: number;
+  rate_den: number;
+  captions: CaptionView[];
+  issue_count: number;
+}
+
+export interface CaptionsView {
+  languages: string[];
+  language: string | null;
+  track: CaptionTrackView | null;
+}
+
+export type CaptionFormat = "imsc" | "srt" | "vtt";
+
 /** An edit, exactly as `cine_timeline::EditOp` deserializes it. */
 export type EditOp =
   | { op: "ripple_trim"; index: number; edge: Edge; delta: ExactTime }
@@ -724,6 +764,33 @@ export class RpcClient {
       mode,
       mismatch,
     });
+  }
+  captions(timeline: string, language?: string) {
+    return this.call<CaptionsView>("captions", language ? { timeline, language } : { timeline });
+  }
+  setCaption(
+    timeline: string,
+    language: string,
+    caption: { index?: number; start: ExactTime; end: ExactTime; text: string; placement?: string; speaker?: string },
+  ) {
+    return this.call<CascadeResult & { track: CaptionTrackView }>("set_caption", { timeline, language, ...caption });
+  }
+  removeCaption(timeline: string, language: string, index: number) {
+    return this.call<CascadeResult & { track: CaptionTrackView }>("remove_caption", { timeline, language, index });
+  }
+  importCaptions(timeline: string, language: string, text: string) {
+    return this.call<
+      CascadeResult & {
+        track: CaptionTrackView;
+        report: { captions: number; snapped: number; largest_snap_ms: number; skipped: string[] };
+      }
+    >("import_captions", { timeline, language, text });
+  }
+  exportCaptions(timeline: string, language: string, format: CaptionFormat) {
+    return this.call<{ text: string; mime: string; extension: string; largest_rounding_us?: number }>(
+      "export_captions",
+      { timeline, language, format },
+    );
   }
   /** Give a clip more angles: assets it could play instead of the one it plays. */
   addAngles(clip: string, angles: { key: string; media: string }[]) {

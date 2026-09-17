@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Time, TimelineItem, TimelineTrack } from "../rpc/client";
-import { canTrim, editFor, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel } from "./edit";
+import { canTrim, editFor, newCaptionSpan, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel } from "./edit";
 
 const R24 = { num: 24, den: 1 };
 const NTSC = { num: 24000, den: 1001 };
@@ -188,5 +188,21 @@ describe("trim handles", () => {
   it("are withheld from transitions and locked tracks", () => {
     expect(canTrim(item(0, 0, 24, "transition"), video, "select")).toBe(false);
     expect(canTrim(item(0, 0, 24), { ...video, locked: true }, "select")).toBe(false);
+  });
+});
+
+describe("a new caption's span", () => {
+  it("covers the marked pictures, including the one the out mark is on", () => {
+    expect(newCaptionSpan({ in: 24, out: 71 }, 0, R24)).toEqual({ start: 24, end: 72 });
+  });
+
+  it("runs two seconds from the playhead when nothing is marked", () => {
+    expect(newCaptionSpan({ in: null, out: null }, 100, R24)).toEqual({ start: 100, end: 148 });
+    // Two seconds at 24000/1001 is 47.95 pictures, which rounds to 48.
+    expect(newCaptionSpan({ in: null, out: null }, 0, NTSC)).toEqual({ start: 0, end: 48 });
+  });
+
+  it("starts at the in mark when only that is set", () => {
+    expect(newCaptionSpan({ in: 10, out: null }, 500, R24)).toEqual({ start: 10, end: 58 });
   });
 });

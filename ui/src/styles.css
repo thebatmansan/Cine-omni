@@ -960,3 +960,16 @@ button.danger { background: #6b2a22; border-color: var(--bad); }
 .cdl-row input { width: 62px; font-size: 11px; }
 .cdl-row button { font-size: 10px; }
 .chip[aria-selected="true"] { border-color: var(--accent); color: var(--text); }
+
+/* Captions */
+.captions .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.captions .row input { flex: 1 1 8em; min-width: 0; }
+.captions .spacer { flex: 1 1 auto; }
+.captions .import textarea { width: 100%; box-sizing: border-box; font-family: var(--mono); }
+.captions .note { font-size: 11px; color: var(--text-dim); margin: 4px 0; }
+.caption { border-top: 1px solid var(--line); padding: 6px 0; }
+.caption.has-issues { border-left: 2px solid var(--bad, #d05050); padding-left: 6px; }
+.caption-line { display: flex; gap: 6px; align-items: center; font-size: 11px; }
+.caption textarea { width: 100%; box-sizing: border-box; resize: vertical; margin-top: 4px; }
+.caption .issue { font-size: 11px; margin-top: 2px; }
+button.link { background: none; border: none; padding: 0; color: var(--accent); font-family: var(--mono); cursor: pointer; }

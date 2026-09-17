@@ -77,6 +77,24 @@ export function canTrim(item: TimelineItem, track: TimelineTrack, tool: Tool): b
   return tool === "select" || tool === "ripple" || tool === "roll";
 }
 
+/**
+ * Where a new caption goes, in ticks at the sequence rate.
+ *
+ * The record marks when there are any: the in mark, and one past the picture
+ * the out mark is on. Otherwise two seconds from the playhead. This proposes
+ * a span; the runtime decides whether it is a caption, and refuses one that
+ * ends before it starts.
+ */
+export function newCaptionSpan(
+  marks: { in: number | null; out: number | null },
+  playhead: number,
+  rate: Rate,
+): { start: number; end: number } {
+  const start = marks.in ?? playhead;
+  const end = marks.out != null ? marks.out + 1 : start + Math.round((2 * rate.num) / rate.den);
+  return { start, end };
+}
+
 /** A pair of marks in whole frames at some rate. `null` is unmarked. */
 export interface FrameMarks {
   in: number | null;
