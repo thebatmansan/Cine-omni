@@ -261,3 +261,28 @@ quality 18: 48 frames with 48 kHz 24-bit stereo sound, 582 KB — of which
 picture of still bars and the index. Uncompressed sound dominates short
 low-resolution renders; it is the right trade for a deliverable whose sound
 must not be altered.
+
+## 8. Proxies on disk
+
+`media.proxy` (`crates/cine-runtime/src/proxy.rs`) writes to
+`derived/proxy/<original hash, 16 chars>/<recipe key, 12 chars>/proxy.mov`
+with a `manifest.json` beside it. Against §3's gates:
+
+1. **Location — met.** One directory per original and recipe, so a survey can
+   tell whose proxy a file is without opening it. Written into a sibling
+   `….partial` and renamed when complete; a cancelled or failed proxy's partial
+   directory is temporary data and is removed, along with the empty
+   directories it needed.
+2. **Bound — not applicable.** A proxy is retained derived media, not a cache:
+   it is made when asked for and removed when a person removes it.
+3. **Stale detection — met.** A proxy records the original's content hash, its
+   recipe with a version, and its own hash and size; `current`/`stale`/
+   `missing` is recomputed whenever the media is listed, and playback never
+   reads anything but `current`.
+4. **Release — manual only.** Remaking a proxy of the same recipe replaces it
+   (the new one is complete before the old one goes). Nothing else deletes a
+   proxy; there is no automatic sweep.
+
+Measured: a 640×360 proxy of a 24-picture 1280×720 original is 0.3 MB, of which
+the 24-bit stereo sound is 288 KB. Uncompressed sound dominates short proxies,
+as it does short renders.

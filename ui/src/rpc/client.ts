@@ -525,6 +525,10 @@ export interface PictureAt {
   online?: boolean | null;
   source?: Time;
   index?: number | null;
+  /** The proxy this picture is read from, when one is. */
+  proxy?: string | null;
+  /** Why this file and not the other, when the choice needs saying. */
+  substitution?: string | null;
 }
 
 export interface SceneSummary {
@@ -675,7 +679,27 @@ export interface MediaView {
   } | null;
   streams: MediaStream[];
   checksum: ChecksumRecord | null;
+  /** Stand-ins made from this original, with whether each is still usable. */
+  proxies: ProxyView[];
 }
+
+/** One proxy of one original, as the runtime reports it. */
+export interface ProxyView {
+  id: string;
+  state: "current" | "stale" | "missing";
+  reasons: string[];
+  path: string | null;
+  width: number | null;
+  height: number | null;
+  sound: boolean | null;
+  recipe: string | null;
+  file_size: number | null;
+  job: number | null;
+  notes: string[] | null;
+}
+
+/** Which file playback reads. */
+export type MediaPreference = "original" | "proxy" | "auto";
 
 export interface StructureView {
   scenes: {
@@ -700,6 +724,7 @@ export class RpcClient {
   private stateListeners = new Set<(open: boolean) => void>();
   private focusListeners = new Set<(timeline: string | null) => void>();
   private viewListeners = new Set<(view: ViewSelection | null) => void>();
+  private mediaListeners = new Set<(preference: MediaPreference) => void>();
   private jobListeners = new Set<(job: JobView) => void>();
 
   constructor(private url: string) {}
@@ -747,6 +772,11 @@ export class RpcClient {
       this.viewListeners.forEach((l) => l((msg.params as ViewSelection | null) ?? null));
       return;
     }
+    if (msg.method === "media_preference") {
+      const p = (msg.params?.preference as MediaPreference) ?? "original";
+      this.mediaListeners.forEach((l) => l(p));
+      return;
+    }
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
@@ -769,6 +799,12 @@ export class RpcClient {
   onView(l: (view: ViewSelection | null) => void): () => void {
     this.viewListeners.add(l);
     return () => this.viewListeners.delete(l);
+  }
+
+  /** Another surface chose what playback reads. */
+  onMediaPreference(l: (preference: MediaPreference) => void): () => void {
+    this.mediaListeners.add(l);
+    return () => this.mediaListeners.delete(l);
   }
 
   /** Another surface opened a sequence. */
@@ -987,6 +1023,17 @@ export class RpcClient {
     return this.call<CascadeResult>("move_strip", { document, scene, day });
   }
   jobs(limit = 100) { return this.call<JobView[]>("jobs", { limit }); }
+  /** Read originals, proxies, or decide per clip — everywhere at once. */
+  mediaPreference(preference?: MediaPreference) {
+    return this.call<{ preference: MediaPreference }>(
+      "media_preference",
+      preference === undefined ? {} : { preference },
+    );
+  }
+  /** Look for each original on disk now and record what is there. */
+  checkMedia() {
+    return this.call<{ changed: { media: string; online: boolean }[] }>("check_media", {});
+  }
   /** Renders of a sequence on disk, newest first, each with whether it is still current. */
   renders(timeline: string) {
     return this.call<{ renders: RenderView[]; failed: FailedRender[] }>("renders", { timeline });

@@ -161,7 +161,13 @@ impl ProjectLink for RuntimeLink {
     fn sequence(&self) -> Option<SequencePlan> {
         let graph = self.runtime.project.engine.read();
         let id = current_timeline(&graph, self.runtime.project.session.focus())?;
-        let list = cine_runtime::playlist::edit_list(&graph, id).ok()?;
+        // Originals or proxies, as the session prefers, clip by clip.
+        let list = cine_runtime::playlist::edit_list_for(
+            &graph,
+            id,
+            self.runtime.project.session.media(),
+        )
+        .ok()?;
         let timeline = cine_timeline::graph::export_timeline(&graph, id).ok()?;
         let entries = list
             .entries
@@ -198,17 +204,25 @@ impl ProjectLink for RuntimeLink {
             None => cine_color::view::default_view(&config)?,
         };
         let id = current_timeline(&graph, self.runtime.project.session.focus())?;
-        let list = cine_runtime::playlist::edit_list(&graph, id).ok()?;
+        let list = cine_runtime::playlist::edit_list_for(
+            &graph,
+            id,
+            self.runtime.project.session.media(),
+        )
+        .ok()?;
         let inputs = cine_color::view::input_colorspaces(&graph);
         let working = config.role("scene_linear").unwrap_or("ACEScg").to_string();
         let mut luts = Vec::with_capacity(list.entries.len());
         let mut describe: Vec<String> = Vec::new();
         let mut worst = 0.0f32;
         for entry in &list.entries {
+            // The original's colorspace, by the asset, even when a proxy is
+            // read: a proxy keeps its original's encoding, re-matrixed only.
             let input = entry
-                .path
-                .as_ref()
-                .and_then(|p| inputs.get(&p.display().to_string()));
+                .asset
+                .and_then(|a| graph.node(a))
+                .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH))
+                .and_then(|p| inputs.get(p));
             // The clip's own grade, when it has one.
             let cdl = entry
                 .clip

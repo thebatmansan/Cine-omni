@@ -17,6 +17,7 @@ import type {
   EditOp,
   ExactTime,
   MarkMismatch,
+  MediaPreference,
   MediaView,
   TimelineItem,
   TimelineTrack,
@@ -352,6 +353,7 @@ export function App() {
             timeline={timeline}
             playhead={playhead}
             revision={revision}
+            preference={session.mediaPreference}
             active={monitor === "record"}
             onActivate={() => setMonitor("record")}
             onStep={stepRecord}
@@ -707,6 +709,7 @@ function MenuBar({
       )}
       {menu("View", <>{entry("Refresh", "", () => void session.refresh())}</>)}
 
+      <MediaPreferenceSwitch session={session} />
       <div className="project-id">
         <strong>{session.project?.name ?? "—"}</strong>
         <span className="path">{session.project?.path ?? ""}</span>
@@ -912,4 +915,33 @@ function useKeyboard(on: {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [on]);
+}
+
+/**
+ * Which file every surface reads: the camera originals, proxies where there
+ * are current ones, or a decision per clip. Shared by the whole application,
+ * like the open sequence — choosing here changes the native window too. It is
+ * a viewing choice: renders always read the originals.
+ */
+function MediaPreferenceSwitch({ session }: { session: ReturnType<typeof useSession> }) {
+  const preference = session.mediaPreference;
+  return (
+    <div className="media-preference">
+      <label>
+        Play{" "}
+        <select
+          aria-label="Media"
+          value={preference}
+          onChange={(e) => void session.setMediaPreference(e.target.value as MediaPreference)}
+        >
+          <option value="original">Originals</option>
+          <option value="proxy">Proxies</option>
+          <option value="auto">Auto</option>
+        </select>
+      </label>
+      <button title="Look for every original on disk now" onClick={() => void session.checkMedia()}>
+        Check media
+      </button>
+    </div>
+  );
 }

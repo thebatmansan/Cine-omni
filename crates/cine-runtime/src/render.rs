@@ -956,9 +956,10 @@ pub(crate) fn wanted_views(
         .iter()
         .map(|e| {
             let input = e
-                .path
-                .as_ref()
-                .and_then(|p| inputs.get(&p.display().to_string()))?
+                .asset
+                .and_then(|a| graph.node(a))
+                .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH))
+                .and_then(|p| inputs.get(p))?
                 .clone();
             let cdl = e
                 .clip

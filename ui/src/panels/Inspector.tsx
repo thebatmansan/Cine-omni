@@ -492,6 +492,7 @@ function MediaDetail({
           </button>
         </div>
       )}
+      <Proxies media={media} onJob={onJob} />
       <div className="section-title">Media</div>
       <dl className="props">
         <dt>name</dt>
@@ -540,6 +541,76 @@ function MediaDetail({
           </Fragment>
         ))}
       </dl>
+    </>
+  );
+}
+
+/**
+ * The stand-ins made from an original: what each is, and whether playback may
+ * still use it. The runtime decides the state; this only shows it and asks for
+ * another proxy.
+ */
+function Proxies({
+  media,
+  onJob,
+}: {
+  media: MediaView;
+  onJob?(kind: string, params: Record<string, unknown>): void;
+}) {
+  const [height, setHeight] = useState(540);
+  const v = media.video;
+  const taller = v?.height ?? 0;
+  const sizes = [1080, 720, 540, 360, 180].filter((h) => h < taller);
+  return (
+    <>
+      <div className="section-title">Proxies</div>
+      {media.proxies.length === 0 && (
+        <div className="hint">No proxy of this original. Playback reads the original.</div>
+      )}
+      {media.proxies.map((p) => (
+        <div key={p.id} className={`proxy-row ${p.state}`}>
+          <span className={`render-state ${p.state === "current" ? "current" : "stale"}`}>{p.state}</span>
+          <span className="label" title={p.path ?? ""}>
+            {p.width}×{p.height}
+            {p.sound ? " · sound" : " · no sound"}
+            {p.file_size ? ` · ${(p.file_size / 1e6).toFixed(1)} MB` : ""}
+          </span>
+          {p.reasons.length > 0 && (
+            <ul className="render-reasons">
+              {p.reasons.map((why, i) => (
+                <li key={i}>{why}</li>
+              ))}
+            </ul>
+          )}
+          {(p.notes ?? []).length > 0 && (
+            <ul className="render-reasons">
+              {(p.notes ?? []).map((note, i) => (
+                <li key={i}>{note}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+      {onJob && sizes.length > 0 && (
+        <div className="binding">
+          <label>
+            Height{" "}
+            <select aria-label="Proxy height" value={height} onChange={(e) => setHeight(Number(e.target.value))}>
+              {sizes.map((h) => (
+                <option key={h} value={h}>
+                  {h}p
+                </option>
+              ))}
+            </select>
+          </label>
+          <button disabled={!v?.decodable || media.online === false} onClick={() => onJob("media.proxy", { media: media.id, height })}>
+            Make proxy
+          </button>
+        </div>
+      )}
+      {onJob && sizes.length === 0 && v && (
+        <div className="hint">This original is {v.width}×{v.height}: a proxy would not be smaller.</div>
+      )}
     </>
   );
 }

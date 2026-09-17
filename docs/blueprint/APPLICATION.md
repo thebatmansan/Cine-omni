@@ -511,6 +511,63 @@ reason named the wrong frames. Each has a regression test.
 Not yet: other codecs (ProRes, DNxHR, AAC), sound other than 48 kHz stereo
 24-bit, more than 8-bit sources, timecode tracks, and rendering on the GPU.
 
+### Proxies, and choosing what plays
+
+**Play** in the menu bar is one choice for the whole application — Originals,
+Proxies or Auto — shared like the open sequence, so the browser and the native
+window read the same files. **Check media** looks for every original on disk
+now and records what is there; offline is a normal state, not an error.
+
+A proxy is made from the media inspector: choose a height, press **Make proxy**,
+and the job appears in Jobs. It decodes the original, scales it with the
+Lanczos-3 resampler, and re-encodes it as a QuickTime movie with the original's
+frame count and frame rate — picture `i` of the proxy is picture `i` of the
+original, so nothing has to be conformed later — and with the original's sound,
+sample for sample, when it has one or two channels.
+
+**A proxy is never the original.** It is a `media.derivative` node with a
+`DerivedFrom` edge to the original's asset, so no clip can bind to it and no
+render can read it. It records what it was made from (the original's content
+hash), how (its recipe, including a recipe version), what it is (its own hash,
+size, probed streams), whether it carries sound, and which job made it.
+
+**What plays** is one function (`proxy::choose`) that every surface calls:
+
+* **Originals** — the original.
+* **Proxies** — the largest current proxy; otherwise the original, with the
+  reason shown.
+* **Auto** — a current proxy when the original is offline, cannot be decoded by
+  this build, or is larger than HD; otherwise the original.
+
+A proxy that is `stale` (made from another original, by an older recipe, or
+changed on disk) or `missing` is never read, by any surface, and `/frame`
+refuses to serve it. The record monitor shows a **PROXY** badge and the reason
+whenever it is not showing the original. Renders always read originals, whatever
+is being watched (`proxy_protocol.rs`).
+
+Sound follows picture only when the proxy has sound. A proxy of a six-channel
+original carries none — there is no downmix — so the clip's sound stays on the
+original and the edit list says so.
+
+**Checked:** `proxy_protocol.rs` — a proxy's pictures match its original's and
+its sound is bit-exact; asking again does not remake it; a stale proxy is never
+played or served; Auto prefers the original until it is offline or over HD; a
+six-channel original's sound stays on the original; refusals (not smaller,
+offline) and cancellation leave no files and no record; a failed job retried
+succeeds; renders read originals. `ui/e2e/proxy.mjs` — the real application:
+select the media, make a 360p proxy, watch it become current, switch to
+Proxies, see the monitor say PROXY, break the file and watch the application
+stop trusting it.
+
+**Measured** (dev build, CPU, this laptop): 640×360 → 320×180 with sound, 4.4
+pictures/s; 1920×1082 → 958×540, 1.9 pictures/s; in the browser, submit to a
+current 640×360 proxy of 24 HD pictures, 4.9–6.7 s. Per stage for the HD proxy:
+scale 195 ms, YUV→RGB 90 ms, encode 96 ms, decode 69 ms per picture — so
+scaling dominates, and it is 1.7× faster than it was after specialising the
+resampler's inner loop, with the byte-path colour conversion 2× faster than
+building float planes first. Both are still CPU, single-threaded, in a dev
+build; nothing here is a claim about release performance or about real-time.
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

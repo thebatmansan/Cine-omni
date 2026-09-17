@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { AngleAt, ExactTime, PictureAt, RpcClient, TimelineView } from "../rpc/client";
+import type {
+  AngleAt,
+  ExactTime,
+  MediaPreference,
+  PictureAt,
+  RpcClient,
+  TimelineView,
+} from "../rpc/client";
 
 /**
  * The record monitor: the picture the sequence shows at the playhead.
@@ -15,6 +22,7 @@ export function Record({
   timeline,
   playhead,
   revision,
+  preference,
   active,
   onActivate,
   onStep,
@@ -24,6 +32,9 @@ export function Record({
   timeline: TimelineView | null;
   playhead: ExactTime | null;
   revision: number;
+  /** What playback reads. Changing it changes which file this shows, so it is
+   *  a dependency of the question, not decoration. */
+  preference: MediaPreference;
   active: boolean;
   onActivate(): void;
   onStep(by: number): void;
@@ -53,8 +64,10 @@ export function Record({
       live = false;
     };
     // The revision is a dependency on purpose: an edit under the playhead
-    // changes what is there without the playhead moving.
-  }, [client, timeline?.id, key, revision]); // eslint-disable-line react-hooks/exhaustive-deps
+    // changes what is there without the playhead moving. So is the media
+    // preference: the same instant of the same cut may be read from another
+    // file.
+  }, [client, timeline?.id, key, revision, preference]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!at || at.black || !at.asset || at.index == null) {
@@ -68,7 +81,7 @@ export function Record({
     inflight.current?.abort();
     const control = new AbortController();
     inflight.current = control;
-    fetch(`/frame?media=${at.asset}&index=${at.index}`, { signal: control.signal })
+    fetch(`/frame?media=${at.asset}&index=${at.index}${at.proxy ? `&proxy=${at.proxy}` : ""}`, { signal: control.signal })
       .then(async (r) => {
         if (!r.ok) {
           setFailure(await r.text());
@@ -129,9 +142,11 @@ export function Record({
         {url && !failure && <img src={url} alt="record picture" />}
         {at && !at.black && (
           <div className="viewer-note">
+            {at.proxy && <span className="chip proxy" title={at.substitution ?? "reading a proxy"}>PROXY</span>}
             {at.track_name} · {at.name}
             {at.source ? ` · src ${at.source.timecode}` : ""}
             {at.index != null ? ` · #${at.index}` : ""}
+            {at.substitution ? ` · ${at.substitution}` : ""}
           </div>
         )}
       </div>

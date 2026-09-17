@@ -35,6 +35,12 @@ pub struct Entry {
     pub timing: Option<cine_timeline::Timing>,
     /// For sound: keep pitch while the speed changes.
     pub keep_pitch: bool,
+    /// The proxy read instead of the original, when one is.
+    pub proxy: Option<EntityId>,
+    /// Why this file and not the other, when the choice needs saying: a
+    /// proxy asked for but stale, an original too large for Auto, a proxy
+    /// without sound.
+    pub substitution: Option<String>,
 }
 
 impl Entry {
@@ -79,8 +85,21 @@ impl EditList {
     }
 }
 
-/// Resolve a timeline into its edit list.
+/// Resolve a timeline into its edit list, reading camera originals.
+///
+/// Renders use this: a deliverable is made from originals, whatever anyone is
+/// viewing with.
 pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> {
+    edit_list_for(graph, timeline, cine_pipeline::session::MediaPreference::Original)
+}
+
+/// Resolve a timeline into its edit list, reading originals or proxies as
+/// `preference` and [`crate::proxy::choose`] decide, clip by clip.
+pub fn edit_list_for(
+    graph: &Graph,
+    timeline: EntityId,
+    preference: cine_pipeline::session::MediaPreference,
+) -> Result<EditList, String> {
     let composed = tl::export_timeline(graph, timeline).map_err(|e| e.to_string())?;
     let flat = cine_timeline::picture_segments(&composed);
     let tracks: Vec<&cine_timeline::Track> = composed.tracks().collect();
@@ -99,7 +118,8 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                    clip: Option<EntityId>,
                    source_start: RationalTime,
                    timing: Option<&cine_timeline::Timing>,
-                   keep_pitch: bool| {
+                   keep_pitch: bool,
+                   is_sound: bool| {
         let name = tracks
             .get(track)
             .and_then(|t| t.children.get(item))
@@ -110,17 +130,29 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
         let available = node
             .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
             .and_then(Value::as_range);
+        // Which file: the original, or a current proxy of it. A proxy has
+        // the original's pictures at the original's rate, so the offset and
+        // the available range are the original's either way.
+        let mut choice = asset.map(|a| crate::proxy::choose(graph, a, preference));
+        if is_sound {
+            if let Some(c) = choice.as_mut().filter(|c| c.proxy.is_some() && !c.has_sound) {
+                *c = crate::proxy::Choice {
+                    reason: Some("the proxy has no sound; the sound plays from the original".into()),
+                    ..crate::proxy::choose(graph, asset.expect("chosen for an asset"), cine_pipeline::session::MediaPreference::Original)
+                };
+            }
+        }
         Entry {
             record,
             clip,
             name,
             track,
             asset,
-            path: node
-                .and_then(|n| n.get_str(attrs::MEDIA_PATH))
-                .map(PathBuf::from),
+            path: choice.as_ref().and_then(|c| c.path.clone()),
             offset: available.map(|a| source_start.checked_sub(&a.start_time)),
-            online: node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
+            online: choice.as_ref().and_then(|c| c.online),
+            proxy: choice.as_ref().and_then(|c| c.proxy),
+            substitution: choice.and_then(|c| c.reason),
             // Re-anchored to the asset's range, like `offset`; without a range
             // which picture plays cannot be known, as for a real-time clip.
             timing: timing.zip(available).map(|(t, a)| cine_timeline::Timing {
@@ -142,6 +174,7 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                 s.source_start,
                 s.timing.as_ref(),
                 s.keep_pitch,
+                true,
             )
         })
         .collect();
@@ -156,6 +189,7 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                 s.clip,
                 s.source_start,
                 s.timing.as_ref(),
+                false,
                 false,
             )
         })

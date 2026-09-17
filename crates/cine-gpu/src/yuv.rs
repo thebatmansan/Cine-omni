@@ -231,6 +231,45 @@ pub fn yuv_to_rgb_cpu(
     out
 }
 
+/// [`yuv_to_rgb_cpu`] straight from 8-bit planes, with their strides.
+///
+/// The same arithmetic in the same order as the reference — checked sample for
+/// sample against it (`the_byte_path_is_the_reference_conversion`) — without
+/// building a float plane per channel first, which is most of the cost of
+/// converting a picture.
+pub fn yuv8_to_rgb_cpu(
+    conv: &YuvConversion,
+    planes: [&[u8]; 3],
+    strides: [usize; 3],
+) -> Vec<f32> {
+    let m = conv.choice.matrix();
+    let (yo, yg, co, cg) = conv.range.normalisation();
+    let (w, h) = (conv.width as usize, conv.height as usize);
+    let (cw, ch) = (conv.chroma_width as usize, conv.chroma_height as usize);
+    let kg = m.kg();
+    let mut out = vec![0.0f32; w * h * 4];
+    for y in 0..h {
+        let cy = (y * ch / h).min(ch.saturating_sub(1));
+        let luma_row = &planes[0][y * strides[0]..y * strides[0] + w];
+        let cb_row = &planes[1][cy * strides[1]..cy * strides[1] + cw];
+        let cr_row = &planes[2][cy * strides[2]..cy * strides[2] + cw];
+        let dst = &mut out[y * w * 4..(y + 1) * w * 4];
+        for (x, px) in dst.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let cx = (x * cw / w).min(cw.saturating_sub(1));
+            let luma = (f32::from(luma_row[x]) / 255.0 - yo) * yg;
+            let cb = (f32::from(cb_row[cx]) / 255.0 - co) * cg;
+            let cr = (f32::from(cr_row[cx]) / 255.0 - co) * cg;
+            let r = luma + 2.0 * (1.0 - m.kr) * cr;
+            let b = luma + 2.0 * (1.0 - m.kb) * cb;
+            px[0] = r;
+            px[1] = (luma - m.kr * r - m.kb * b) / kg;
+            px[2] = b;
+            px[3] = 1.0;
+        }
+    }
+    out
+}
+
 /// The inverse of [`yuv_to_rgb_cpu`], for encoding: RGBA code values to 8-bit
 /// 4:2:0 planes under `conv`'s matrix and range.
 ///
@@ -294,6 +333,33 @@ pub fn rgb_to_yuv8_cpu(conv: &YuvConversion, rgba: &[f32]) -> ([Vec<u8>; 3], u64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The byte path must be the reference conversion exactly, or pictures
+    /// differ depending on which one a surface happened to call.
+    #[test]
+    fn the_byte_path_is_the_reference_conversion() {
+        let (w, h) = (34u32, 18u32);
+        let c = conv(Matrix::BT709, Range::Limited, w, h);
+        let (cw, ch) = ((w / 2) as usize, (h / 2) as usize);
+        // Strides wider than the picture, as a decoder's planes usually are.
+        let (sy, sc) = (w as usize + 7, cw + 3);
+        let luma: Vec<u8> = (0..sy * h as usize).map(|i| (i * 7 % 256) as u8).collect();
+        let cb: Vec<u8> = (0..sc * ch).map(|i| (i * 13 % 256) as u8).collect();
+        let cr: Vec<u8> = (0..sc * ch).map(|i| (i * 29 % 256) as u8).collect();
+        let plane = |data: &[u8], stride: usize, pw: usize, ph: usize| -> Vec<f32> {
+            (0..ph)
+                .flat_map(|r| (0..pw).map(move |col| f32::from(data[r * stride + col]) / 255.0))
+                .collect()
+        };
+        let reference = yuv_to_rgb_cpu(
+            &c,
+            &plane(&luma, sy, w as usize, h as usize),
+            &plane(&cb, sc, cw, ch),
+            &plane(&cr, sc, cw, ch),
+        );
+        let fast = yuv8_to_rgb_cpu(&c, [&luma, &cb, &cr], [sy, sc, sc]);
+        assert!(fast == reference, "the byte path differs from the reference");
+    }
 
     /// Encoding and decoding again lands every sample within one code value of
     /// where it started, for pictures whose chroma is constant per 2×2 block —

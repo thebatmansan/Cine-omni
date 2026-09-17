@@ -1031,3 +1031,9 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 a.button { display: inline-block; padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 3px; color: inherit; text-decoration: none; font-size: 12px; }
 .render-row .job-line { flex-wrap: wrap; }
 .render-row .label { white-space: normal; overflow: visible; text-overflow: clip; flex: 1 1 12em; }
+
+.media-preference { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; }
+.media-preference label { display: inline-flex; align-items: center; gap: 4px; }
+.proxy-row { padding: 3px 0; border-top: 1px solid var(--line); }
+.proxy-row .label { margin-left: 6px; }
+.chip.proxy { background: #5a4a1e; color: #f0d78c; border-radius: 3px; padding: 0 5px; margin-right: 6px; font-size: 10px; letter-spacing: 0.05em; }

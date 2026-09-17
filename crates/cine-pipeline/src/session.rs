@@ -19,6 +19,46 @@ pub enum SessionEvent {
     /// The display and view everything is being looked at through changed.
     /// `None` means the project config's own default.
     View(Option<ViewSelection>),
+    /// Which media playback reads: originals, proxies, or chosen per clip.
+    Media(MediaPreference),
+}
+
+/// Which file a clip's picture and sound are read from while working.
+///
+/// A viewing choice, like the view: it changes what the monitors and the
+/// window read, never the project, and never a render, which always reads the
+/// originals.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MediaPreference {
+    /// Always the camera original.
+    #[default]
+    Original,
+    /// A current proxy where one exists; the original, with the reason, where
+    /// none does.
+    Proxy,
+    /// Decided per clip from what is available and what this machine can
+    /// play: a current proxy when the original is offline, undecodable or
+    /// larger than HD; otherwise the original.
+    Auto,
+}
+
+impl MediaPreference {
+    pub fn parse(s: &str) -> Option<MediaPreference> {
+        match s {
+            "original" => Some(MediaPreference::Original),
+            "proxy" => Some(MediaPreference::Proxy),
+            "auto" => Some(MediaPreference::Auto),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MediaPreference::Original => "original",
+            MediaPreference::Proxy => "proxy",
+            MediaPreference::Auto => "auto",
+        }
+    }
 }
 
 /// A display and one of its views, by name, as the colour config names them.
@@ -34,6 +74,7 @@ type Listener = Box<dyn Fn(&SessionEvent) + Send + Sync>;
 pub struct ProjectSession {
     focus: RwLock<Option<EntityId>>,
     view: RwLock<Option<ViewSelection>>,
+    media: RwLock<MediaPreference>,
     listeners: Mutex<Vec<Listener>>,
 }
 
@@ -76,6 +117,28 @@ impl ProjectSession {
             *current = view.clone();
         }
         let event = SessionEvent::View(view);
+        for l in self.listeners.lock().iter() {
+            l(&event);
+        }
+        true
+    }
+
+    /// Which media playback reads.
+    pub fn media(&self) -> MediaPreference {
+        *self.media.read()
+    }
+
+    /// Read originals, proxies, or decide per clip, everywhere. Returns
+    /// whether anything changed.
+    pub fn set_media(&self, preference: MediaPreference) -> bool {
+        {
+            let mut current = self.media.write();
+            if *current == preference {
+                return false;
+            }
+            *current = preference;
+        }
+        let event = SessionEvent::Media(preference);
         for l in self.listeners.lock().iter() {
             l(&event);
         }

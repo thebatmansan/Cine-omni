@@ -21,6 +21,8 @@
 //!   [`SYNC_MAX_SECONDS`]), cross-correlated against the active angle's, and an
 //!   angle whose best match is not clearly better than chance is left alone and
 //!   reported rather than moved to a guess. The offsets are one undoable commit.
+//! * **`media.proxy`** — a smaller stand-in for an original, picture for
+//!   picture, registered as derived from it. See [`crate::proxy`].
 //! * **`render.sequence`** — the cut written as pictures, with an optional view
 //!   and burned-in captions, under `derived/render/`. See [`crate::render`].
 
@@ -72,6 +74,23 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
         let project = p.upgrade().ok_or("the project has closed")?;
         sync_angles(&project, ctx, spec)
     });
+    let p = Arc::downgrade(project);
+    let root = root_dir.to_path_buf();
+    jobs.register(
+        crate::proxy::PROXY_KIND,
+        move |ctx: &JobContext, spec: &JobSpec| {
+            let project = p.upgrade().ok_or("the project has closed")?;
+            let media = spec.params["media"]
+                .as_str()
+                .and_then(EntityId::parse)
+                .ok_or("the job names no media")?;
+            let settings = crate::proxy::ProxySettings::from_params(&spec.params)?;
+            crate::proxy::generate(&project, &root, media, settings, Some(ctx.id()), &mut |f, m| {
+                ctx.progress(f, m);
+                !ctx.is_cancelled()
+            })
+        },
+    );
     let p = Arc::downgrade(project);
     let root = root_dir.to_path_buf();
     jobs.register(
@@ -370,6 +389,21 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
         )
         .params(json!({ "media": media }))
         .priority(5)),
+        crate::proxy::PROXY_KIND => {
+            let settings = crate::proxy::ProxySettings::from_params(params)?;
+            Ok(JobSpec::new(
+                kind,
+                &format!(
+                    "proxy:{media}:{}:{}:{}",
+                    settings.height,
+                    settings.quality,
+                    project.engine.revision()
+                ),
+                &format!("Proxy {}p · {name}", settings.height),
+                Resource::Cpu,
+            )
+            .params(json!({ "media": media, "height": settings.height, "quality": settings.quality })))
+        }
         "media.thumbnail" => {
             let index = params.get("index").and_then(J::as_u64).unwrap_or(0);
             Ok(JobSpec::new(
@@ -382,7 +416,7 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             .attempts(2))
         }
         other => Err(format!(
-            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, multicam.sync, render.sequence)"
+            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, media.proxy, multicam.sync, render.sequence)"
         )),
     }
 }

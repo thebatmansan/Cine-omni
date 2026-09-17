@@ -67,6 +67,12 @@ pub fn session_notification(event: &cine_pipeline::session::SessionEvent) -> Str
             "params": v.as_ref().map(|v| json!({ "display": v.display, "view": v.view })),
         })
         .to_string(),
+        cine_pipeline::session::SessionEvent::Media(m) => json!({
+            "jsonrpc": "2.0",
+            "method": "media_preference",
+            "params": { "preference": m.as_str() },
+        })
+        .to_string(),
     }
 }
 
@@ -1603,6 +1609,51 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "media_preference" => {
+            // With `preference` (`original`, `proxy`, `auto`), read that
+            // everywhere; without, report it.
+            if let Some(v) = params.get("preference") {
+                let want = v
+                    .as_str()
+                    .and_then(cine_pipeline::session::MediaPreference::parse)
+                    .ok_or("`preference` is one of original, proxy, auto")?;
+                p.session.set_media(want);
+            }
+            json!({ "preference": p.session.media().as_str() })
+        }
+        "check_media" => {
+            // Whether each original is where the project says, now. Offline
+            // is a normal state; only real changes are committed.
+            let found: Vec<(EntityId, bool)> = {
+                let g = p.engine.read();
+                g.of_kind(kinds::ASSET_MEDIA)
+                    .iter()
+                    .map(|n| {
+                        let here = n
+                            .get_str(ucg_schema::attrs::MEDIA_PATH)
+                            .is_some_and(|path| std::path::Path::new(path).is_file());
+                        (n.id, here)
+                    })
+                    .filter(|(id, here)| {
+                        g.node(*id).and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)) != Some(*here)
+                    })
+                    .collect()
+            };
+            if !found.is_empty() {
+                p.engine
+                    .transact("check media", |tx| {
+                        for (id, here) in &found {
+                            cine_media::ucg::set_online(tx, *id, *here)
+                                .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
+                        }
+                        Ok(())
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
+            json!({
+                "changed": found.iter().map(|(id, here)| json!({ "media": id, "online": here })).collect::<Vec<_>>(),
+            })
+        }
         "focus" => {
             // With `timeline`, open that sequence in every surface; `null`
             // closes it. Without, report what is open.
@@ -1686,7 +1737,7 @@ pub fn dispatch_with(
         "edit_list" => {
             let timeline = entity(params, "timeline")?;
             let g = p.engine.read();
-            crate::projection::edit_list(&g, timeline)?
+            crate::projection::edit_list(&g, timeline, p.session.media())?
         }
         "picture_at" => {
             let timeline = entity(params, "timeline")?;
@@ -1694,7 +1745,7 @@ pub fn dispatch_with(
                 serde_json::from_value(params.get("time").cloned().ok_or("missing param `time`")?)
                     .map_err(|e| format!("invalid time: {e}"))?;
             let g = p.engine.read();
-            crate::projection::picture_at(&g, timeline, at)?
+            crate::projection::picture_at(&g, timeline, at, p.session.media())?
         }
         "link" => {
             let clips: Vec<EntityId> = params

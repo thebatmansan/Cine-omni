@@ -6,6 +6,7 @@ import {
   HistoryView,
   ImpactView,
   JobView,
+  MediaPreference,
   ProductionView,
   MediaView,
   ProjectView,
@@ -52,6 +53,11 @@ export interface Session {
   jobs: JobView[];
   /** The last refused request, in the runtime's words. */
   refusal: string | null;
+  /** Which file every surface reads: originals, proxies, or per clip. */
+  mediaPreference: MediaPreference;
+  setMediaPreference(preference: MediaPreference): Promise<void>;
+  /** Look for every original on disk now. */
+  checkMedia(): Promise<void>;
   client: RpcClient;
   selectTimeline(id: string): void;
   setTrackState(track: string, key: TrackStateKey, value: boolean): Promise<void>;
@@ -97,6 +103,7 @@ export function useSession(url: string = runtimeUrl()): Session {
   const [changes, setChanges] = useState<ChangeNotification[]>([]);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobView[]>([]);
+  const [mediaPreference, setMediaPreference] = useState<MediaPreference>("original");
   const [production, setProduction] = useState<ProductionView | null>(null);
   const [colour, setColour] = useState<ColorView | null>(null);
   const selected = useRef<string | null>(null);
@@ -161,6 +168,12 @@ export function useSession(url: string = runtimeUrl()): Session {
       if (!live) return;
       setJobs((all) => [job, ...all.filter((j) => j.id !== job.id)].sort((x, y) => y.id - x.id).slice(0, 200));
     });
+    // Someone else chose what to play: follow it, as the native window does.
+    client.onMediaPreference((p) => {
+      if (!live) return;
+      setMediaPreference(p);
+      void refresh();
+    });
     // Someone else chose a view: follow it, as the native window does.
     client.onView(() => {
       if (!live) return;
@@ -177,6 +190,10 @@ export function useSession(url: string = runtimeUrl()): Session {
         if (!live) return;
         setCapabilities(await client.capabilities());
         void client.jobs().then((j) => live && setJobs(j)).catch(() => {});
+        void client
+          .mediaPreference()
+          .then((p) => live && setMediaPreference(p.preference))
+          .catch(() => {});
         const focus = await client.focus();
         if (focus.timeline) selected.current = focus.timeline;
         await refresh();
@@ -238,6 +255,16 @@ export function useSession(url: string = runtimeUrl()): Session {
     impact,
     changes,
     refusal,
+    mediaPreference,
+    setMediaPreference: async (preference: MediaPreference) => {
+      const answer = await run("play media", () => client.mediaPreference(preference));
+      if (answer) setMediaPreference(answer.preference);
+      await refresh();
+    },
+    checkMedia: async () => {
+      await run("check media", () => client.checkMedia());
+      await refresh();
+    },
     production,
     colour,
     jobs,

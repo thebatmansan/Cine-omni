@@ -26,7 +26,7 @@
 //! definition the GPU path is verified against. A second conversion here would
 //! be a second answer to "what colour is this picture".
 
-use cine_gpu::yuv::{yuv_to_rgb_cpu, YuvConversion};
+use cine_gpu::yuv::{yuv8_to_rgb_cpu, YuvConversion};
 use cine_media::{PixelFormat, VideoFrame, VideoReader};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
@@ -172,24 +172,22 @@ pub fn rgba_f32(frame: &VideoFrame) -> Result<(Vec<f32>, u32, u32, String, bool)
         chroma_height: ch,
     };
 
-    let plane = |i: usize, pw: u32, ph: u32| -> Result<Vec<f32>, String> {
+    // Straight from the decoder's planes: same arithmetic as the reference
+    // conversion, checked against it in cine-gpu.
+    let mut planes: [&[u8]; 3] = [&[], &[], &[]];
+    let mut strides = [0usize; 3];
+    for i in 0..3 {
+        let (pw, ph) = if i == 0 { (w as usize, h as usize) } else { (cw as usize, ch as usize) };
         let (data, stride) = frame
             .plane(i)
             .ok_or_else(|| format!("picture has no plane {i}"))?;
-        let (pw, ph) = (pw as usize, ph as usize);
         if data.len() < stride * (ph - 1) + pw {
             return Err(format!("plane {i} is too small for {pw}x{ph}"));
         }
-        Ok((0..ph)
-            .flat_map(|row| (0..pw).map(move |col| f32::from(data[row * stride + col]) / 255.0))
-            .collect())
-    };
-    let rgba = yuv_to_rgb_cpu(
-        &conversion,
-        &plane(0, w, h)?,
-        &plane(1, cw, ch)?,
-        &plane(2, cw, ch)?,
-    );
+        planes[i] = data;
+        strides[i] = stride;
+    }
+    let rgba = yuv8_to_rgb_cpu(&conversion, planes, strides);
 
     Ok((
         rgba,

@@ -88,28 +88,42 @@ pub fn resize_region(
     let (rx, ry, rw, rh) = region;
     let cols = weights(src.width, out_w, rx, rw);
     let rows = weights(src.height, out_h, ry, rh);
-    // Horizontal pass: src.height rows of out_w.
+    // Horizontal pass: src.height rows of out_w. The accumulator is a fixed
+    // four-channel array for the usual images, which lets the inner loop run
+    // without bounds checks on every sample; anything wider takes the general
+    // path.
     let mut mid = vec![0.0f32; src.height * out_w * nc];
     for y in 0..src.height {
         let line = &src.data[y * src.width * nc..(y + 1) * src.width * nc];
         for (x, (lo, w)) in cols.iter().enumerate() {
             let o = (y * out_w + x) * nc;
-            for (k, wk) in w.iter().enumerate() {
-                let s = (lo + k) * nc;
-                for c in 0..nc {
-                    mid[o + c] += wk * line[s + c];
+            let taps = &line[lo * nc..(lo + w.len()) * nc];
+            if nc <= 4 {
+                let mut acc = [0.0f32; 4];
+                for (px, wk) in taps.chunks_exact(nc).zip(w) {
+                    for (a, v) in acc.iter_mut().zip(px) {
+                        *a += wk * v;
+                    }
+                }
+                mid[o..o + nc].copy_from_slice(&acc[..nc]);
+            } else {
+                for (px, wk) in taps.chunks_exact(nc).zip(w) {
+                    for (m, v) in mid[o..o + nc].iter_mut().zip(px) {
+                        *m += wk * v;
+                    }
                 }
             }
         }
     }
-    // Vertical pass.
-    let mut data = vec![0.0f32; out_h * out_w * nc];
+    // Vertical pass: whole rows, which are contiguous.
+    let stride = out_w * nc;
+    let mut data = vec![0.0f32; out_h * stride];
     for (y, (lo, w)) in rows.iter().enumerate() {
+        let out = &mut data[y * stride..(y + 1) * stride];
         for (k, wk) in w.iter().enumerate() {
-            let s = (lo + k) * out_w * nc;
-            let o = y * out_w * nc;
-            for i in 0..out_w * nc {
-                data[o + i] += wk * mid[s + i];
+            let row = &mid[(lo + k) * stride..(lo + k + 1) * stride];
+            for (o, v) in out.iter_mut().zip(row) {
+                *o += wk * v;
             }
         }
     }

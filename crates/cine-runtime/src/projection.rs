@@ -297,6 +297,7 @@ pub fn media(graph: &Graph) -> J {
                         "decodable": s.decodable,
                     })),
                     "streams": streams,
+                    "proxies": crate::proxy::proxies_json(graph, n.id),
                 })
             })
             .collect(),
@@ -353,8 +354,13 @@ pub fn structure(graph: &Graph) -> J {
 /// Composition is answered by [`crate::playlist`], the same list the native
 /// player plays. A gap answers `black`; a clip whose asset declares no available
 /// range answers with no index, because which picture it plays cannot be known.
-pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result<J, String> {
-    let list = crate::playlist::edit_list(graph, timeline)?;
+pub fn picture_at(
+    graph: &Graph,
+    timeline: EntityId,
+    at: RationalTime,
+    preference: cine_pipeline::session::MediaPreference,
+) -> Result<J, String> {
+    let list = crate::playlist::edit_list_for(graph, timeline, preference)?;
     let Some(entry) = list.at(at) else {
         return Ok(json!({ "black": true }));
     };
@@ -378,6 +384,10 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
         "name": entry.name,
         "asset": entry.asset,
         "online": entry.online,
+        // The proxy read in place of the original, when one is; the picture
+        // index is the same in either.
+        "proxy": entry.proxy,
+        "substitution": entry.substitution,
         "speed": entry.timing.as_ref().map(|t| timing_json(&t.map)),
         "playable": entry.unplayable().is_none(),
         "why_not": entry.unplayable(),
@@ -387,8 +397,12 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
 }
 
 /// The flattened edit list, for players and for inspection.
-pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<J, String> {
-    let list = crate::playlist::edit_list(graph, timeline)?;
+pub fn edit_list(
+    graph: &Graph,
+    timeline: EntityId,
+    preference: cine_pipeline::session::MediaPreference,
+) -> Result<J, String> {
+    let list = crate::playlist::edit_list_for(graph, timeline, preference)?;
     Ok(json!({
         "timeline": list.timeline,
         "name": list.name,
@@ -396,12 +410,27 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<J, String> {
         "rate_den": list.rate.den(),
         "end": time(list.end),
         "transitions_played_as_cuts": list.transitions,
+        "sound": list.sound.iter().map(|e| json!({
+            "record": range(e.record),
+            "clip": e.clip,
+            "name": e.name,
+            "asset": e.asset,
+            "offset": e.offset.map(time),
+            "speed": e.timing.as_ref().map(|t| timing_json(&t.map)),
+            "keep_pitch": e.keep_pitch,
+            "playable": e.unplayable().is_none(),
+            "why_not": e.unplayable(),
+            "proxy": e.proxy,
+            "substitution": e.substitution,
+        })).collect::<Vec<_>>(),
         "entries": list.entries.iter().map(|e| json!({
             "record": range(e.record),
             "clip": e.clip,
             "name": e.name,
             "asset": e.asset,
             "offset": e.offset.map(time),
+            "proxy": e.proxy,
+            "substitution": e.substitution,
             "speed": e.timing.as_ref().map(|t| timing_json(&t.map)),
             "playable": e.unplayable().is_none(),
             "why_not": e.unplayable(),

@@ -499,10 +499,12 @@ fn serve_render_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
 fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     let mut media = None;
     let mut index = 0usize;
+    let mut proxy = None;
     for pair in query.split('&') {
         match pair.split_once('=') {
             Some(("media", v)) => media = ucg_core::EntityId::parse(v),
             Some(("index", v)) => index = v.parse().unwrap_or(0),
+            Some(("proxy", v)) => proxy = ucg_core::EntityId::parse(v),
             _ => {}
         }
     }
@@ -515,20 +517,34 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
         );
         return;
     };
-    // The path comes from the graph, never from the request.
+    // The path comes from the graph, never from the request. A proxy is
+    // served only when it is that media's own proxy and it is current, so a
+    // stale stand-in can never be shown as the picture.
     let path = {
         let g = runtime.project.engine.read();
-        g.node(media)
-            .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH).map(str::to_string))
+        match proxy {
+            None => g
+                .node(media)
+                .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH).map(str::to_string))
+                .ok_or("no media with that id in this project"),
+            Some(p) if !crate::proxy::proxies_of(&g, media).contains(&p) => {
+                Err("that proxy is not a proxy of that media")
+            }
+            Some(p) if crate::proxy::status(&g, p, false).state != "current" => {
+                Err("that proxy is not current; ask for the original")
+            }
+            Some(p) => g
+                .node(p)
+                .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH).map(str::to_string))
+                .ok_or("that proxy has no file"),
+        }
     };
-    let Some(path) = path else {
-        respond(
-            stream,
-            "404 Not Found",
-            "text/plain; charset=utf-8",
-            b"no media with that id in this project",
-        );
-        return;
+    let path = match path {
+        Ok(p) => p,
+        Err(why) => {
+            respond(stream, "404 Not Found", "text/plain; charset=utf-8", why.as_bytes());
+            return;
+        }
     };
     match runtime.frames.picture(std::path::Path::new(&path), index) {
         Ok(picture) => {
