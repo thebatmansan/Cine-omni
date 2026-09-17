@@ -50,6 +50,7 @@ pub mod graph;
 pub mod linked;
 pub mod otio;
 pub mod otio_json;
+pub mod scc;
 pub mod session;
 pub mod sync;
 pub mod three_point;

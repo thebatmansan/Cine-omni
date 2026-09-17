@@ -22,6 +22,7 @@
 //! about correctness, not a snapshot to accept.
 
 use cine_timeline::captions::{read_srt, write_imsc, Caption, CaptionTrack, Placement};
+use cine_timeline::scc::{scc_rate, write_scc};
 use std::path::PathBuf;
 use ucg_core::{Rate, RationalTime, TimeRange};
 
@@ -112,5 +113,114 @@ fn ttconv_reads_our_frame_times_as_the_frames_we_wrote() {
             report.snapped, 0,
             "{name}: nothing ttconv wrote was off a frame by a millisecond or more"
         );
+    }
+}
+
+/// SCC for the oracle: timing at 29.97 drop-frame over an hour, two lines, a
+/// top caption, and every character 608 can carry that this writer maps.
+fn scc_tracks() -> Vec<(&'static str, CaptionTrack)> {
+    let rate = scc_rate();
+    let at = |f: i64| RationalTime::exact(f, rate);
+    let mut timing = CaptionTrack::new("en", rate);
+    timing.captions.push(Caption::new(
+        TimeRange::new(at(45), at(60)),
+        "We ride at dawn.",
+    ));
+    timing.captions.push(Caption::new(
+        TimeRange::new(at(120), at(75)),
+        "Not before.\nNot ever.",
+    ));
+    let mut top = Caption::new(TimeRange::new(at(300), at(45)), "HARBOUR OFFICE");
+    top.placement = Placement::Top;
+    timing.captions.push(top);
+    // Past ten minutes and an hour, where drop-frame counting matters.
+    timing.captions.push(Caption::new(
+        TimeRange::new(at(18_000), at(60)),
+        "Ten minutes in.",
+    ));
+    timing.captions.push(Caption::new(
+        TimeRange::new(at(107_900), at(60)),
+        "An hour in.",
+    ));
+
+    let mut characters = CaptionTrack::new("en", rate);
+    let sets = [
+        "Basic: áéíóú çÑñ÷",
+        "Special: ®°½¿™¢£♪ àèâêîôû",
+        "Quotes: ‘’“” —•©℠ ¡*",
+        "ÁÉÓÚÜü ÀÂÇÈÊËëÎÏïÔÙùÛ«»",
+        "ÃãÍÌìÒòÕõ {}\\^_|~",
+        "ÄäÖöß¥¤¦ÅåØø ┌┐└┘",
+    ];
+    for (i, text) in sets.iter().enumerate() {
+        characters.captions.push(Caption::new(
+            TimeRange::new(at(30 + 150 * i as i64), at(90)),
+            text,
+        ));
+    }
+    vec![("scc_timing", timing), ("scc_characters", characters)]
+}
+
+#[test]
+fn the_committed_scc_is_what_the_writer_produces() {
+    let write = std::env::var_os("CINE_WRITE_CAPTION_FIXTURES").is_some();
+    for (name, track) in scc_tracks() {
+        let (scc, _) = write_scc(&track).expect("608 can carry these");
+        let path = data(&format!("{name}.scc"));
+        if write {
+            std::fs::write(&path, &scc).expect("write fixture");
+            continue;
+        }
+        let committed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is missing ({e}); see the module note", path.display()));
+        assert_eq!(
+            scc, committed,
+            "{name}: the writer changed; regenerate the oracle"
+        );
+    }
+}
+
+/// Eight 608 characters that ttconv and this crate spell with different
+/// Unicode code points. ttconv's own source names each the same 608 character
+/// this crate's table does — "plain single quote", "em dash", "caret",
+/// "vertical bar" and four box corners — so these are two spellings of one
+/// character, not an encoding disagreement, and the comparison treats them so.
+fn same_608_character(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\'' => '’',
+            '━' => '—',
+            'ʌ' => '^',
+            '┃' => '¦',
+            '┏' => '┌',
+            '┓' => '┐',
+            '┗' => '└',
+            '┛' => '┘',
+            other => other,
+        })
+        .collect()
+}
+
+/// ttconv reads the SCC this writes: every caption appears on the 29.97 frame
+/// it was written for, clears when it should, and says what it said.
+#[test]
+fn ttconv_reads_our_scc_as_we_wrote_it() {
+    for (name, track) in scc_tracks() {
+        let path = data(&format!("{name}.scc.ttconv.srt"));
+        let srt = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is missing ({e}); see the module note", path.display()));
+        let (back, report) = read_srt(&srt, "en", scc_rate()).expect("ttconv's SRT reads");
+        assert!(report.skipped.is_empty(), "{name}: {:?}", report.skipped);
+        assert_eq!(back.captions.len(), track.captions.len(), "{name}");
+        for (ours, theirs) in track.captions.iter().zip(&back.captions) {
+            assert_eq!(
+                theirs.record,
+                ours.record,
+                "{name}: `{}` shows on different frames after ttconv read it",
+                ours.lines.join(" / ")
+            );
+            let norm = |l: &[String]| l.iter().map(|x| same_608_character(x)).collect::<Vec<_>>();
+            assert_eq!(norm(&theirs.lines), norm(&ours.lines), "{name}: the text");
+        }
     }
 }

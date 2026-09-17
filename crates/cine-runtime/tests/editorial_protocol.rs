@@ -915,6 +915,30 @@ fn captions_are_authored_checked_imported_and_exported() {
     assert!(xml.contains("begin=\"24f\" end=\"73f\""), "{xml}");
     assert!(xml.contains("ttm:agent=\"TOBIAS\""), "{xml}");
 
+    // SCC for broadcast: 608 pop-on at 29.97, re-quantised from 24 fps and
+    // saying so, and read back by the same import.
+    let scc = c.call(
+        "export_captions",
+        json!({ "timeline": tl, "language": "en", "format": "scc" }),
+    );
+    assert!(scc["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("Scenarist_SCC V1.0"));
+    assert!(
+        scc["requantised"].as_u64().unwrap() > 0,
+        "24 fps times moved onto 29.97"
+    );
+    let r = c.call(
+        "import_captions",
+        json!({ "timeline": tl, "language": "en-scc", "text": scc["text"] }),
+    );
+    assert_eq!(r["track"]["captions"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        r["track"]["captions"][0]["lines"],
+        json!(["We ride at dawn."])
+    );
+
     // An SRT from elsewhere replaces the track, and what moved is reported.
     let r = c.call(
         "import_captions",
@@ -928,7 +952,7 @@ fn captions_are_authored_checked_imported_and_exported() {
     );
     assert_eq!(r["report"]["skipped"].as_array().unwrap().len(), 1);
     let both = c.call("captions", json!({ "timeline": tl }));
-    assert_eq!(both["languages"], json!(["en", "fr"]));
+    assert_eq!(both["languages"], json!(["en", "en-scc", "fr"]));
 
     // Removing is a commit like any other, and undo brings it back.
     c.call(

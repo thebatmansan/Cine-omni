@@ -11,3 +11,8 @@ for ttml in *.ttml; do
   uvx --from 'ttconv==1.2.3' tt convert -i "$ttml" -o "$out" --itype TTML --otype SRT
   echo "wrote $out"
 done
+for scc in *.scc; do
+  out="${scc}.ttconv.srt"
+  uvx --from 'ttconv==1.2.3' tt convert -i "$scc" -o "$out" --itype SCC --otype SRT
+  echo "wrote $out"
+done

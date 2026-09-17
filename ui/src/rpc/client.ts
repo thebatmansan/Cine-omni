@@ -140,7 +140,7 @@ export interface CaptionsView {
   track: CaptionTrackView | null;
 }
 
-export type CaptionFormat = "imsc" | "srt" | "vtt";
+export type CaptionFormat = "imsc" | "srt" | "vtt" | "scc";
 
 /** One angle of a multicam clip at an instant, as the runtime resolved it. */
 export interface AngleAt {

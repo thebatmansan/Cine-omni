@@ -380,7 +380,22 @@ projection the tab reads, so where a caption sits against the cut is visible;
 one that needs review against the script, or has delivery issues, is marked,
 and clicking it moves the playhead there and opens it in the tab.
 
-Not here: burn-in (the compositor has no text renderer) and SCC.
+SCC, for North American broadcast, is written as CEA-608 pop-on captions and
+read back by the same import. What SCC inherits from the line-21 wire is handled
+rather than approximated: a caption appears when its End Of Caption code
+arrives, so each line starts as many frames early as it has byte pairs ahead of
+EOC; a caption's erase goes inside the next caption's load when that load has
+already begun; rows hold 32 characters and a longer line is refused by name;
+curly quotes, dashes and accents go out as 608's special and extended
+characters with their fallbacks, and a character 608 has no form for is
+refused; and a sequence at another rate is re-quantised onto 29.97 drop-frame
+with the largest move reported. ttconv decodes every caption onto the frame it
+was written for — at ten minutes and an hour, where drop-frame counting matters
+— and every mapped character. It also found the one real bug: a caption whose
+successor started loading before it should clear stayed up until the successor
+appeared, because the erase had been left out.
+
+Not here: burn-in (the compositor has no text renderer).
 
 ### Speed
 

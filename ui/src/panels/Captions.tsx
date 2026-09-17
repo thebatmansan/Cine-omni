@@ -121,7 +121,7 @@ export function Captions({
               Add at {marks.in != null ? "marks" : "playhead"}
             </button>
             <button aria-pressed={importing} onClick={() => setImporting((v) => !v)}>
-              Import SRT…
+              Import SRT / SCC…
             </button>
             <button
               title="Link each caption to the line of dialogue it reads exactly, among the scenes under it. Ambiguous ones are left alone."
@@ -134,7 +134,7 @@ export function Captions({
               Link to script
             </button>
             <span className="spacer" />
-            {(["imsc", "srt", "vtt"] as CaptionFormat[]).map((f) => (
+            {(["imsc", "srt", "vtt", "scc"] as CaptionFormat[]).map((f) => (
               <button key={f} disabled={!track?.captions.length} onClick={() => void download(f)}>
                 {f.toUpperCase()}
               </button>
@@ -146,7 +146,7 @@ export function Captions({
           <div className="import">
             <textarea
               rows={6}
-              placeholder="Paste SubRip text. It replaces this language's captions; times are moved onto the sequence's frames and anything that moved is reported."
+              placeholder="Paste SubRip or SCC text. It replaces this language's captions; times are moved onto the sequence's frames and anything that moved is reported."
               value={srt}
               onChange={(e) => setSrt(e.target.value)}
             />

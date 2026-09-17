@@ -1105,8 +1105,24 @@ pub fn dispatch_with(
                 let g = p.engine.read();
                 sequence_rate(&g, timeline)?
             };
-            let (imported, report) = cine_timeline::captions::read_srt(&text, &language, rate)
-                .map_err(|e| e.to_string())?;
+            // SCC is recognised by its header; anything else is read as SubRip.
+            let (imported, report) = if text.trim_start().starts_with("Scenarist_SCC") {
+                let scc =
+                    cine_timeline::scc::read_scc(&text, &language).map_err(|e| e.to_string())?;
+                // SCC is timed at 29.97; the sequence may not be. Every time is
+                // moved onto the sequence's frames through SubRip's rounding
+                // rule, which reports what moved.
+                let (srt, _) = cine_timeline::captions::write_srt(&scc);
+                let mut back = cine_timeline::captions::read_srt(&srt, &language, rate)
+                    .map_err(|e| e.to_string())?;
+                for (c, s) in back.0.captions.iter_mut().zip(&scc.captions) {
+                    c.placement = s.placement;
+                }
+                back
+            } else {
+                cine_timeline::captions::read_srt(&text, &language, rate)
+                    .map_err(|e| e.to_string())?
+            };
             let mut out = with_captions(p, timeline, &language, "import captions", |track| {
                 *track = imported;
                 Ok(())
@@ -1231,7 +1247,15 @@ pub fn dispatch_with(
                     json!({ "text": text, "mime": "text/vtt", "extension": "vtt",
                             "largest_rounding_us": report.largest_rounding_us })
                 }
-                other => return Err(format!("no caption format `{other}` (imsc, srt, vtt)")),
+                "scc" => {
+                    let (text, report) =
+                        cine_timeline::scc::write_scc(&track).map_err(|e| e.to_string())?;
+                    json!({ "text": text, "mime": "text/x-scc", "extension": "scc",
+                            "requantised": report.requantised,
+                            "largest_move_ms": report.largest_move_ms,
+                            "late": report.late, "latest_frames": report.latest_frames })
+                }
+                other => return Err(format!("no caption format `{other}` (imsc, srt, vtt, scc)")),
             }
         }
         "jobs" => {
