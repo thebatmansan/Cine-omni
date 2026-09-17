@@ -36,6 +36,10 @@ pub struct OmniProject {
     /// Background work for this project, once a runtime has started it with
     /// the runners that need media. Unset in a bare project.
     pub jobs: std::sync::OnceLock<cine_jobs::JobSystem>,
+    /// The directory the application runs this project in: where its jobs
+    /// journal, derived media and caches live. Set by the runtime; unset in a
+    /// bare project, which has nowhere to put derived media.
+    pub directory: std::sync::OnceLock<std::path::PathBuf>,
 }
 
 impl OmniProject {
@@ -51,6 +55,7 @@ impl OmniProject {
             disk: None,
             session: Default::default(),
             jobs: Default::default(),
+            directory: Default::default(),
         })
     }
 
@@ -68,6 +73,7 @@ impl OmniProject {
             disk: Some(disk),
             session: Default::default(),
             jobs: Default::default(),
+            directory: Default::default(),
         })
     }
 
@@ -90,6 +96,7 @@ impl OmniProject {
             disk: Some(disk),
             session: Default::default(),
             jobs: Default::default(),
+            directory: Default::default(),
         };
         project.migrate()?;
         Ok(project)

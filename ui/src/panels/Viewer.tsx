@@ -71,7 +71,7 @@ export function Viewer({
         const colour = response.headers.get("x-cine-colour");
         setNote(
           colour
-            ? { text: colour, assumed: response.headers.get("x-cine-colour-assumed") === "true" }
+            ? { text: decodeHeader(colour), assumed: response.headers.get("x-cine-colour-assumed") === "true" }
             : null,
         );
         const ms = response.headers.get("x-cine-decode-ms");
@@ -179,4 +179,13 @@ export function Viewer({
       )}
     </div>
   );
+}
+
+/** A header value the runtime percent-encoded; shown as is if it was not. */
+function decodeHeader(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

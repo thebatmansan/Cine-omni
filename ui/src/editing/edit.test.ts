@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Time, TimelineItem, TimelineTrack } from "../rpc/client";
-import { canTrim, editFor, newCaptionSpan, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel, renderParams } from "./edit";
+import { canTrim, editFor, newCaptionSpan, frameAt, framesIn, leftOfCut, markSecondsOf, snap, frameLabel, renderParams, parseSize, DEFAULT_RENDER } from "./edit";
 
 const R24 = { num: 24, den: 1 };
 const NTSC = { num: 24000, den: 1001 };
@@ -211,16 +211,42 @@ describe("a new caption's span", () => {
 
 describe("renderParams", () => {
   it("renders the whole cut unless both marks are set", () => {
-    expect(renderParams("t", "as_decoded", null, { in: 10, out: null })).toEqual({ timeline: "t", look: "as_decoded" });
-    expect(renderParams("t", "as_decoded", null, { in: null, out: null })).toEqual({ timeline: "t", look: "as_decoded" });
+    expect(renderParams("t", DEFAULT_RENDER, { in: 10, out: null })).toEqual({ timeline: "t", look: "as_decoded", output: "png8" });
+    expect(renderParams("t", DEFAULT_RENDER, { in: null, out: null })).toEqual({ timeline: "t", look: "as_decoded", output: "png8" });
   });
   it("includes the out-marked picture", () => {
-    expect(renderParams("t", "project_view", "en", { in: 10, out: 33 })).toEqual({
+    expect(renderParams("t", { ...DEFAULT_RENDER, look: "project_view", captions: "en" }, { in: 10, out: 33 })).toEqual({
       timeline: "t",
       look: "project_view",
+      output: "png8",
       captions: "en",
       start_frame: 10,
       end_frame: 34,
     });
+  });
+  it("sends sound only for a movie, and only when it was decided", () => {
+    const none = { in: null, out: null };
+    expect(renderParams("t", { ...DEFAULT_RENDER, output: "movie" }, none)).not.toHaveProperty("sound");
+    expect(renderParams("t", { ...DEFAULT_RENDER, output: "movie", sound: "off" }, none).sound).toBe(false);
+    expect(renderParams("t", { ...DEFAULT_RENDER, output: "png8", sound: "on" }, none)).not.toHaveProperty("sound");
+  });
+  it("sends a size with its fit, and no fit without a size", () => {
+    const none = { in: null, out: null };
+    expect(renderParams("t", { ...DEFAULT_RENDER, fit: "crop" }, none)).not.toHaveProperty("fit");
+    expect(renderParams("t", { ...DEFAULT_RENDER, size: { width: 1920, height: 1080 }, fit: "letterbox" }, none)).toMatchObject({
+      width: 1920,
+      height: 1080,
+      fit: "letterbox",
+    });
+  });
+});
+
+describe("parseSize", () => {
+  it("reads a width and height and refuses anything else", () => {
+    expect(parseSize("1920x1080")).toEqual({ width: 1920, height: 1080 });
+    expect(parseSize(" 1280 × 720 ")).toEqual({ width: 1280, height: 720 });
+    expect(parseSize("1920")).toBeNull();
+    expect(parseSize("0x100")).toBeNull();
+    expect(parseSize("99999x10")).toBeNull();
   });
 });

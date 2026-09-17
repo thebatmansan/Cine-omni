@@ -155,6 +155,37 @@ fn probe_isobmff(path: &Path, hash: ContentHash) -> Result<MediaFile> {
     }
     streams.sort_by_key(|s| s.index);
 
+    // The `mp4` crate names only AAC sound. Uncompressed sound in a QuickTime
+    // movie (`lpcm`, `sowt`, `in24`, ...) is named and described by the
+    // demuxer that decodes it, so the stream says what it is rather than
+    // "unknown" and undecodable while it decodes perfectly well.
+    if streams
+        .iter()
+        .any(|s| s.kind == StreamKind::Audio && s.codec == "unknown")
+    {
+        if let Ok(other) = probe_with_symphonia(path, hash.clone(), ContainerKind::IsoBmff, "mov") {
+            let found: Vec<&StreamInfo> = other
+                .streams
+                .iter()
+                .filter(|s| s.codec != "unknown")
+                .collect();
+            for s in streams
+                .iter_mut()
+                .filter(|s| s.kind == StreamKind::Audio && s.codec == "unknown")
+            {
+                // Symphonia numbers tracks by position from zero; MP4 track
+                // ids conventionally count the same tracks from one.
+                if let Some(m) = found.iter().find(|m| m.index + 1 == s.index) {
+                    s.codec = m.codec.clone();
+                    s.decodable = m.decodable;
+                    s.audio = m.audio;
+                    s.time_base = m.time_base;
+                    s.duration_ticks = m.duration_ticks;
+                }
+            }
+        }
+    }
+
     Ok(MediaFile {
         path: path.to_path_buf(),
         hash,

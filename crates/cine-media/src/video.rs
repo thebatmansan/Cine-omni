@@ -152,13 +152,17 @@ impl VideoReader {
             .map(|(display, _)| display)
             .collect();
 
-        // Colour is what the stream declares in its SPS video signal type.
-        // Unspecified code points stay absent rather than being assumed; a
-        // parameter set that cannot be read leaves everything absent and the
-        // viewer says the interpretation is assumed.
-        let color = crate::h264_sps::parse(&sps)
-            .map(|s| s.color())
-            .unwrap_or_default();
+        // Colour is what the stream declares in its SPS video signal type,
+        // with anything it leaves out taken from the container's `colr`.
+        // Unspecified code points stay absent rather than being assumed; when
+        // neither declares, the viewer says the interpretation is assumed.
+        let parsed = crate::h264_sps::parse(&sps);
+        let stream_declares_range = parsed.as_ref().is_ok_and(|s| s.vui.is_some());
+        let color = crate::colr::merge(
+            parsed.map(|s| s.color()).unwrap_or_default(),
+            stream_declares_range,
+            crate::colr::container_colour(&info.path, track_id),
+        );
         let decoder: Box<dyn VideoDecoder> = Box::new(H264Decoder::new(&sps, &pps, color));
 
         Ok(VideoReader {

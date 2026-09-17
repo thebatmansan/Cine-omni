@@ -184,6 +184,8 @@ fn handle_connection(
     match route {
         "/frame" => serve_frame(&mut stream, &runtime, query),
         "/thumbnail" => serve_thumbnail(&mut stream, &runtime, query),
+        "/render-file" => serve_render_file(&mut stream, &runtime, query),
+        "/render-frame" => serve_render_frame(&mut stream, &runtime, query),
         "/callsheet" => serve_call_sheet(&mut stream, &runtime, query),
         "/health" => {
             let body = serde_json::json!({
@@ -373,6 +375,121 @@ fn serve_thumbnail(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     }
 }
 
+/// Where a render lives, from `?timeline=<id>&render=<directory name>`.
+///
+/// Only a render directory of this project's own `derived/render/`, named as
+/// renders are named: the query cannot name a path, so this cannot become a
+/// file-read endpoint.
+fn render_dir(runtime: &Runtime, query: &str) -> Result<PathBuf, &'static str> {
+    let mut timeline = None;
+    let mut render = None;
+    for pair in query.split('&') {
+        match pair.split_once('=') {
+            Some(("timeline", v)) => timeline = ucg_core::EntityId::parse(v),
+            Some(("render", v)) => render = Some(v.to_string()),
+            _ => {}
+        }
+    }
+    let timeline = timeline.ok_or("`timeline` must be an entity id")?;
+    let render = render.ok_or("missing `render`")?;
+    let plain = !render.is_empty()
+        && !render.starts_with('.')
+        && render.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !plain {
+        return Err("`render` must be a render's directory name");
+    }
+    let dir = crate::render::render_root(&runtime.root_dir, timeline).join(render);
+    if !dir.is_dir() {
+        return Err("no such render");
+    }
+    Ok(dir)
+}
+
+/// One file of a render, streamed: `?timeline=&render=&file=` where `file` is
+/// `manifest.json`, the movie, or a frame.
+fn serve_render_file(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
+    let dir = match render_dir(runtime, query) {
+        Ok(d) => d,
+        Err(why) => return respond(stream, "404 Not Found", "text/plain; charset=utf-8", why.as_bytes()),
+    };
+    let file = query
+        .split('&')
+        .find_map(|p| p.strip_prefix("file="))
+        .unwrap_or("");
+    let is_frame = file.len() == "frame_000000.png".len()
+        && file.starts_with("frame_")
+        && file.ends_with(".png")
+        && file[6..12].chars().all(|c| c.is_ascii_digit());
+    let content_type = match file {
+        "manifest.json" => "application/json",
+        crate::render::MOVIE_FILE => "video/quicktime",
+        _ if is_frame => "image/png",
+        _ => {
+            return respond(
+                stream,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                b"`file` must be manifest.json, movie.mov or a frame",
+            )
+        }
+    };
+    let path = dir.join(file);
+    let Ok(mut f) = std::fs::File::open(&path) else {
+        return respond(stream, "404 Not Found", "text/plain; charset=utf-8", b"no such file in that render");
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {len}\r\nCache-Control: no-cache\r\n"
+    );
+    if file == crate::render::MOVIE_FILE {
+        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        head.push_str(&format!("Content-Disposition: attachment; filename=\"{name}.mov\"\r\n"));
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    if stream.write_all(head.as_bytes()).is_ok() {
+        // Streamed: a movie is not read into memory to be sent.
+        let _ = std::io::copy(&mut f, stream);
+        let _ = stream.flush();
+    }
+}
+
+/// Picture `index` of a render as PNG: `?timeline=&render=&index=`. For frames
+/// the index is the record frame; for a movie it is the movie's own picture,
+/// decoded from the movie — what was delivered, not what the cut is now.
+fn serve_render_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
+    let dir = match render_dir(runtime, query) {
+        Ok(d) => d,
+        Err(why) => return respond(stream, "404 Not Found", "text/plain; charset=utf-8", why.as_bytes()),
+    };
+    let index: i64 = query
+        .split('&')
+        .find_map(|p| p.strip_prefix("index="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let movie = dir.join(crate::render::MOVIE_FILE);
+    if movie.is_file() {
+        let png = cine_media::VideoReader::open_path(&movie)
+            .map_err(|e| e.to_string())
+            .and_then(|mut r| {
+                r.frame_at_index(index.max(0) as usize)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("the movie has no picture {index}"))
+            })
+            .and_then(|f| {
+                let (rgba, w, h, _, _) = crate::frames::rgba8(&f)?;
+                crate::frames::png(&rgba, w, h)
+            });
+        return match png {
+            Ok(bytes) => respond(stream, "200 OK", "image/png", &bytes),
+            Err(e) => respond(stream, "404 Not Found", "text/plain; charset=utf-8", e.as_bytes()),
+        };
+    }
+    match std::fs::read(dir.join(crate::render::frame_file(index))) {
+        Ok(bytes) => respond(stream, "200 OK", "image/png", &bytes),
+        Err(_) => respond(stream, "404 Not Found", "text/plain; charset=utf-8", b"no such frame in that render"),
+    }
+}
+
 /// Handle one JSON-RPC line. `None` means the request was a notification.
 /// One decoded picture, as a PNG.
 ///
@@ -422,7 +539,7 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
                 picture.png.len(),
                 picture.index,
                 picture.decode_ms,
-                picture.colour,
+                crate::http::header_text(&picture.colour),
                 picture.colour_assumed,
             );
             let _ = stream.write_all(headers.as_bytes());

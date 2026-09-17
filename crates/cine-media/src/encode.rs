@@ -46,7 +46,7 @@ impl Default for H264Settings {
 }
 
 /// NAL units of an Annex-B access unit, without their start codes.
-fn nal_units(annex_b: &[u8]) -> Vec<&[u8]> {
+pub(crate) fn nal_units(annex_b: &[u8]) -> Vec<&[u8]> {
     let mut out = Vec::new();
     let mut i = 0;
     let mut start: Option<usize> = None;

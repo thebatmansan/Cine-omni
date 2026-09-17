@@ -10,6 +10,7 @@ pub mod filter;
 pub mod keyer;
 pub mod merge;
 pub mod procedural;
+pub mod resample;
 pub mod roto;
 pub mod transform;
 

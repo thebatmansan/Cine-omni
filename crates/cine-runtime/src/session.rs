@@ -52,6 +52,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(project: OmniProject, root_dir: std::path::PathBuf) -> Arc<Runtime> {
         let project = Arc::new(project);
+        let _ = project.directory.set(root_dir.clone());
         // Background work needs the project and its media, so it starts here
         // rather than in the bare project. Failing to start it is reported, and
         // the `jobs` capability says so; the project still opens.

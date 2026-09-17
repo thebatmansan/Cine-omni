@@ -425,6 +425,8 @@ export function App() {
                   render={
                     timeline
                       ? {
+                          client,
+                          revision,
                           timeline,
                           languages: captions?.languages ?? [],
                           marks: recordMarks[timeline.id] ?? NO_MARKS,

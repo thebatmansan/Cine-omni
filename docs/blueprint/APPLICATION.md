@@ -395,35 +395,121 @@ was written for — at ten minutes and an hour, where drop-frame counting matter
 successor started loading before it should clear stayed up until the successor
 appeared, because the erase had been left out.
 
-### Rendering the cut, with captions burned in
+### Rendering the cut: frames or a movie, with its sound
 
 **Jobs → Render** renders the open sequence — the marked frames when both
-record marks are set, otherwise the whole cut — as a PNG sequence, as decoded
-or through the project's display and view, optionally with one language's
-captions burned in. The form only chooses; the job is `render.sequence`, and
-the finished row says how many frames, at what size, through what look, with
-captions on how many frames, and where it wrote.
+record marks are set, otherwise the whole cut. The form chooses four things,
+each explicit: the output (PNG frames at 8 or 16 bits per channel, or a movie:
+H.264 picture and 24-bit PCM sound in a QuickTime file); for a movie, the sound
+(the cut's, required, or none); the look (as decoded, or through the project's
+display and view); and an output size with how pictures of another shape fit
+it (refuse, letterbox, crop, stretch). Captions of one language can be burned
+in. The form decides nothing about what is possible: the job is
+`render.sequence`, and the runtime's refusal, shown on the job and in the
+render list, is the answer.
 
-Every record frame is resolved by the same edit list and the same picture
-arithmetic the record monitor uses (`playlist::picture_index`, now shared by
-both), so a retimed clip or a switched angle renders as it plays. The view is
-the bake the native window uses (`cine_color::view`, moved out of the window
-for this), so a render and the window cannot disagree about colour; the
-manifest records the transforms and the lattice's measured worst error.
-Captions are drawn on the grid the exported IMSC declares, from a system font.
+Below the form, **Renders of this sequence** lists every render on disk with a
+state — `current`, `stale`, `invalid` or `failed` — and the reasons. Each can be
+previewed (a picture decoded from the delivered movie, not from the cut),
+downloaded, and its manifest opened.
 
-What it refuses, by name: an offline clip, a picture the decoder does not
-produce, a cut of mixed picture sizes (it does not scale), a view some clip
-cannot be baked into, captions in a language the sequence does not have, and a
-caption line wider than the safe area. None of these becomes black, stretched
-or untransformed output. Checked in `render_protocol.rs` on H.264 written by the
-build's own encoder: every compared frame is byte-identical to the file's own
-picture through the reference conversion, the gap is opaque black, a caption
-changes only the lower half, and a view render equals the bake applied to the
-file independently.
+**How a frame is made.** Every record frame is resolved by the same edit list
+and the same picture arithmetic the record monitor uses
+(`playlist::picture_index`), so a retimed clip or a switched angle renders as
+it plays. Then: decode → the project view, by the bake the native window uses
+(`cine_color::view`), with its measured lattice error recorded → fit to the
+output size by a Lanczos-3 resampler that averages rather than skips when it
+shrinks (`cine_comp::ops::resample`), with what was kept and where it went
+recorded per source → captions on the IMSC grid → written.
 
-Not yet: a movie file (the H.264 writer exists, unused by renders), sound, and
-knowing when a render has gone stale — the manifest records enough to tell.
+**How the sound is made.** The mixer the native window plays
+(`cine_media::sequence_audio`), at 48 kHz stereo: retimed clips as varispeed
+or with pitch kept, as their retime says; files at other rates converted by the
+same kernel; muted tracks excluded. Sound is divided among pictures by absolute
+sequence position — picture `k` carries the samples from
+`floor(k·den·48000/num)` to `floor((k+1)·den·48000/num)` — so a movie never
+drifts from its picture by a sample and a marked range carries exactly the
+samples a whole-cut movie carries for those frames. Clipped samples are counted
+in the manifest and shown, never limited silently.
+
+**Where precision is lost, traced:**
+
+| Stage | Precision | Evidence |
+|---|---|---|
+| Decode | 8-bit 4:2:0 — all this build decodes | `capability.rs` |
+| YUV → RGB | 32-bit float, unclamped (limited-range excursions kept) | `frames::rgba_f32` |
+| View | float through a 33³ trilinear lattice; worst error measured per bake and recorded | `cine_color::view` |
+| Scale, captions | float, unclamped | `resample.rs`, `captions.rs` |
+| PNG 16 | clamped to [0, 1], 1/65535 | `render_movie.rs`: every sample equals the view's output at 16 bits; none lies on the 8-bit grid |
+| PNG 8 | clamped, 1/255 | |
+| Movie | clamped, 8-bit BT.709 limited range, chroma averaged over 2×2, lossy H.264 | `rgb_to_yuv8_cpu` inverts the reference conversion within one code value |
+
+The first stage is the limit for camera originals: nothing downstream can add
+precision the decoder did not produce. A 10-bit or float source path is a
+decoder capability this build does not have.
+
+**What it refuses, by name:** an offline clip or a picture the decoder does not
+produce (never black in its place); pictures of different sizes with no output
+size, or a different shape with no fit chosen (never a silent stretch or crop);
+a view some clip cannot be baked into; sound asked for where the cut has none
+(never a silent track presented as its sound), a sound clip that cannot be
+played, or sound in PNG frames; a movie through a display whose primaries it
+cannot declare — P3, Rec.2100 — rather than a Rec.709 label on it; an odd movie
+size; captions in a language the sequence does not have.
+
+**Colour the movie declares.** Samples are BT.709 matrix, limited range. As
+decoded, the primaries and transfer are those the sources declare when they all
+agree, otherwise "unspecified" (H.273 code 2) — not a guess. Through a view,
+those of the display: sRGB (transfer 13) or Rec.1886/709 (transfer 1).
+
+**Whether a render is still current** (`provenance.rs`). The manifest records
+one fingerprint per thing the render read: the part of each clip inside the
+rendered range and the media at its start, each file's content hash and path,
+the captions in range, and the colour (config, the display and view pinned at
+render time, inputs and grades). Asking later recomputes the same fingerprints
+and re-hashes each file on disk. So a trim where the range does not reach, a
+new sequence or a script edit leaves a render `current`; a trim that changes a
+rendered frame makes it `stale` with "the cut of … changed", undoing it makes it
+`current` again, a changed file on disk is named, and a whole-cut render also
+goes stale when the cut's length changes. A render whose files are missing is
+`invalid`; a job that produced nothing is `failed` with its refusal.
+
+**Checked, and where:**
+
+* `render_movie.rs` — a movie of A, a gap and B read back picture by picture
+  (bar positions) and sample by sample: A's and B's sound bit-exact, the gap
+  silent; a marked range has exactly its sound; `sound: false` writes no sound
+  track; a 2× varispeed clip shows every second picture and its ticks land
+  **0 samples** from their pictures; scaling, letterbox bars and the recorded
+  placement; 16-bit precision; cancel mid-render leaves nothing; staleness as
+  described; the served movie is byte-identical to the file; path traversal
+  refused.
+* `mov_roundtrip.rs` — the movie writer against this build's decoders and
+  against GStreamer's `qtdemux`, an independent implementation, which reports
+  the same tracks, rate and duration and returns the exact sound bytes.
+* `ui/e2e/render.mjs` — the real application: `cine new`, `cine bars`,
+  `cine start`, and headless Chrome over the DevTools protocol choosing a movie
+  in the Jobs tab, rendering, previewing, downloading, being refused a
+  different shape, watching the render go stale after an edit and current after
+  undo, with no uncaught page errors.
+
+**Measured** (dev profile, 320×180, this laptop): 46 frames with sound in
+1,171 ms; submit to a current movie visible in the browser, 48 frames with
+sound, 1,074 ms and 3,302 ms in two runs of `render.mjs` — the spread is this
+laptop under load, and neither is a claim about rendering speed. Nothing here says anything about 1080p or 4K rendering speed,
+which has not been measured.
+
+**Defects found on the way.** Reading 24-bit sound — the ordinary format of
+production audio — produced frames with no channels, heard as silence; 8-bit,
+unsigned and 64-bit float layouts likewise (`sound_formats.rs`). The container's
+`colr` atom was never read, so files declaring colour only there — including
+every movie this build writes — decoded as "BT.601, assumed" at SD heights. A
+colour description sent in an HTTP header arrived in the browser as `Â·`. A
+whole-cut render re-derived its range from the current cut, so its staleness
+reason named the wrong frames. Each has a regression test.
+
+Not yet: other codecs (ProRes, DNxHR, AAC), sound other than 48 kHz stereo
+24-bit, more than 8-bit sources, timecode tracks, and rendering on the GPU.
 
 ### Speed
 

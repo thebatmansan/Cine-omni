@@ -9,7 +9,7 @@
 
 use cine_color::lut::Lut3D;
 use cine_color::ocio::Config;
-use cine_media::{EditEntry, SoundEntry};
+use cine_media::EditEntry;
 use cine_runtime::Runtime;
 use cine_shell::link::{ProjectLink, SequencePlan, Viewing};
 use cine_timeline::session::TrackState;
@@ -175,22 +175,7 @@ impl ProjectLink for RuntimeLink {
                 name: e.name.clone(),
             })
             .collect();
-        let sound = list
-            .sound
-            .iter()
-            .map(|e| SoundEntry {
-                record: e.record,
-                path: e.unplayable().is_none().then(|| e.path.clone()).flatten(),
-                offset: e.offset,
-                name: e.name.clone(),
-                // Read at its speed by the mixer: varispeed, or stretched with
-                // its pitch kept, as the clip's retime says.
-                // A sound entry is the whole clip, so its map is anchored at the
-                // entry's own start, where `offset` is measured.
-                map: e.timing.as_ref().map(|t| t.map.clone()),
-                keep_pitch: e.keep_pitch,
-            })
-            .collect();
+        let sound = cine_runtime::playlist::sound_entries(&list);
         Some(SequencePlan {
             sound,
             id,

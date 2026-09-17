@@ -299,7 +299,14 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             }
             node.get_str(attrs::NAME).unwrap_or("sequence").to_string()
         };
-        let mut label = format!("Render · {name}");
+        let mut label = format!(
+            "Render {} · {name}",
+            match request.output {
+                crate::render::Output::Movie => "movie",
+                crate::render::Output::Png8 => "PNG 8-bit",
+                crate::render::Output::Png16 => "PNG 16-bit",
+            }
+        );
         if let Some(language) = &request.captions {
             label.push_str(&format!(" · {language} captions burned in"));
         }

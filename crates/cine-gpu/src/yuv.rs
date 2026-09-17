@@ -231,9 +231,100 @@ pub fn yuv_to_rgb_cpu(
     out
 }
 
+/// The inverse of [`yuv_to_rgb_cpu`], for encoding: RGBA code values to 8-bit
+/// 4:2:0 planes under `conv`'s matrix and range.
+///
+/// Chroma is the mean of each 2×2 block. That is the least-squares choice for
+/// the reference conversion, which reads one chroma sample for its whole block,
+/// so a picture converted here and back through [`yuv_to_rgb_cpu`] is as close
+/// to the original as 4:2:0 at 8 bits allows. RGB outside the range the
+/// encoding can carry is clipped at the code-value limits; the count of clipped
+/// samples is returned so a caller can report it.
+pub fn rgb_to_yuv8_cpu(conv: &YuvConversion, rgba: &[f32]) -> ([Vec<u8>; 3], u64) {
+    let m = conv.choice.matrix();
+    let (w, h) = (conv.width as usize, conv.height as usize);
+    let (cw, ch) = (conv.chroma_width as usize, conv.chroma_height as usize);
+    let kg = m.kg();
+    let (ylo, yspan, cmid, cspan) = match conv.range {
+        Range::Limited => (16.0f64, 219.0f64, 128.0f64, 224.0f64),
+        Range::Full => (0.0, 255.0, 128.0, 255.0),
+    };
+    let mut clipped = 0u64;
+    let mut code = |v: f64| -> u8 {
+        let r = v.round();
+        if !(0.0..=255.0).contains(&r) {
+            clipped += 1;
+        }
+        r.clamp(0.0, 255.0) as u8
+    };
+    let mut plane_y = vec![0u8; w * h];
+    let mut sum_cb = vec![0.0f64; cw * ch];
+    let mut sum_cr = vec![0.0f64; cw * ch];
+    let mut count = vec![0u32; cw * ch];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            let (r, g, b) = (
+                f64::from(rgba[i]),
+                f64::from(rgba[i + 1]),
+                f64::from(rgba[i + 2]),
+            );
+            let luma = f64::from(m.kr) * r + f64::from(kg) * g + f64::from(m.kb) * b;
+            plane_y[y * w + x] = code(ylo + yspan * luma);
+            let cb = (b - luma) / (2.0 * (1.0 - f64::from(m.kb)));
+            let cr = (r - luma) / (2.0 * (1.0 - f64::from(m.kr)));
+            let cx = (x * cw / w).min(cw.saturating_sub(1));
+            let cy = (y * ch / h).min(ch.saturating_sub(1));
+            let ci = cy * cw + cx;
+            sum_cb[ci] += cb;
+            sum_cr[ci] += cr;
+            count[ci] += 1;
+        }
+    }
+    let mut plane_u = vec![0u8; cw * ch];
+    let mut plane_v = vec![0u8; cw * ch];
+    for ci in 0..cw * ch {
+        let n = f64::from(count[ci].max(1));
+        plane_u[ci] = code(cmid + cspan * sum_cb[ci] / n);
+        plane_v[ci] = code(cmid + cspan * sum_cr[ci] / n);
+    }
+    ([plane_y, plane_u, plane_v], clipped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Encoding and decoding again lands every sample within one code value of
+    /// where it started, for pictures whose chroma is constant per 2×2 block —
+    /// the pictures 4:2:0 can carry exactly.
+    #[test]
+    fn rgb_to_yuv_inverts_the_reference_conversion() {
+        for m in [Matrix::BT601, Matrix::BT709, Matrix::BT2020_NCL] {
+            for range in [Range::Limited, Range::Full] {
+                let (w, h) = (16u32, 8u32);
+                let c = conv(m, range, w, h);
+
+                // Planes chosen in the encoded domain so the RGB is in gamut.
+                let luma: Vec<u8> = (0..w * h)
+                    .map(|i| match range {
+                        Range::Limited => 60 + (i * 7 % 120) as u8,
+                        Range::Full => 50 + (i * 11 % 150) as u8,
+                    })
+                    .collect();
+                let cb: Vec<u8> = (0..(w / 2) * (h / 2)).map(|i| 120 + (i % 16) as u8).collect();
+                let cr: Vec<u8> = (0..(w / 2) * (h / 2)).map(|i| 124 + (i * 3 % 12) as u8).collect();
+                let f = |v: &[u8]| v.iter().map(|b| f32::from(*b) / 255.0).collect::<Vec<_>>();
+                let rgb = yuv_to_rgb_cpu(&c, &f(&luma), &f(&cb), &f(&cr));
+                let ([y2, u2, v2], clipped) = rgb_to_yuv8_cpu(&c, &rgb);
+                assert_eq!(clipped, 0);
+                let close = |a: &[u8], b: &[u8]| a.iter().zip(b).all(|(p, q)| p.abs_diff(*q) <= 1);
+                assert!(close(&luma, &y2), "{m:?} {range:?} luma");
+                assert!(close(&cb, &u2), "{m:?} {range:?} cb");
+                assert!(close(&cr, &v2), "{m:?} {range:?} cr");
+            }
+        }
+    }
 
     fn conv(matrix: Matrix, range: Range, w: u32, h: u32) -> YuvConversion {
         YuvConversion {

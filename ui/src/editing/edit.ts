@@ -225,6 +225,30 @@ export function frameLabel(frames: number): string {
 
 /** How a render colours its pictures: as decoded, or through the project's view. */
 export type RenderLook = "as_decoded" | "project_view";
+/** What a render writes. */
+export type RenderOutput = "png8" | "png16" | "movie";
+/** How a picture of another shape goes into the output frame. */
+export type RenderFit = "refuse" | "letterbox" | "crop" | "stretch";
+
+export interface RenderOptions {
+  look: RenderLook;
+  captions: string | null;
+  output: RenderOutput;
+  /** Movie sound: the cut's sound when it has some (`auto`), required, or left out. */
+  sound: "auto" | "on" | "off";
+  /** The output size; the sources' own when `null`. */
+  size: { width: number; height: number } | null;
+  fit: RenderFit;
+}
+
+export const DEFAULT_RENDER: RenderOptions = {
+  look: "as_decoded",
+  captions: null,
+  output: "png8",
+  sound: "auto",
+  size: null,
+  fit: "refuse",
+};
 
 /**
  * The parameters of a `render.sequence` job.
@@ -232,19 +256,42 @@ export type RenderLook = "as_decoded" | "project_view";
  * With both record marks set, the render is the marked frames — the out mark
  * is on a picture that belongs to the range, so the end is one past it. With
  * either mark missing it is the whole cut: a half-marked range is not a range,
- * and guessing its other end would render something nobody asked for.
+ * and guessing its other end would render something nobody asked for. Sound
+ * is only ever sent for a movie; `auto` sends nothing and lets the runtime
+ * decide from the cut.
  */
-export function renderParams(
-  timeline: string,
-  look: RenderLook,
-  captions: string | null,
-  marks: FrameMarks,
-): Record<string, unknown> {
-  const params: Record<string, unknown> = { timeline, look };
-  if (captions) params.captions = captions;
+export function renderParams(timeline: string, o: RenderOptions, marks: FrameMarks): Record<string, unknown> {
+  const params: Record<string, unknown> = { timeline, look: o.look, output: o.output };
+  if (o.captions) params.captions = o.captions;
+  if (o.output === "movie" && o.sound !== "auto") params.sound = o.sound === "on";
+  if (o.size) {
+    params.width = o.size.width;
+    params.height = o.size.height;
+    params.fit = o.fit;
+  }
   if (marks.in != null && marks.out != null && marks.out >= marks.in) {
     params.start_frame = marks.in;
     params.end_frame = marks.out + 1;
   }
   return params;
+}
+
+/** A size typed as `1920x1080` (or `1920×1080`), or `null` when it is not one. */
+export function parseSize(text: string): { width: number; height: number } | null {
+  const m = /^\s*(\d{1,5})\s*[x×]\s*(\d{1,5})\s*$/i.exec(text);
+  if (!m) return null;
+  const width = Number(m[1]);
+  const height = Number(m[2]);
+  if (width < 1 || height < 1 || width > 16384 || height > 16384) return null;
+  return { width, height };
+}
+
+/** The URL of one file of a render, as the runtime serves it. */
+export function renderFileUrl(timeline: string, render: string, file: string): string {
+  return `/render-file?timeline=${encodeURIComponent(timeline)}&render=${encodeURIComponent(render)}&file=${encodeURIComponent(file)}`;
+}
+
+/** The URL of one picture of a render: a record frame, or a movie's own picture. */
+export function renderFrameUrl(timeline: string, render: string, index: number): string {
+  return `/render-frame?timeline=${encodeURIComponent(timeline)}&render=${encodeURIComponent(render)}&index=${index}`;
 }

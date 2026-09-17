@@ -244,14 +244,20 @@ writes derived media into a project. Against the gates in §3:
 2. **Bound — not applicable, deliberately.** A render is retained derived media,
    not a cache (§1). Its size is known before it starts — frames × width ×
    height, compressed — and it is not evicted.
-3. **Stale detection — recorded, not yet acted on.** The manifest records the
-   request, the project revision, every source clip, asset and path, the look
-   (display, view, transforms, measured lattice error) and the caption language
-   and font. That is enough to tell a stale render from a current one. No
-   surface does so yet; until one does, a render is a record of the revision it
-   names, and the Jobs panel shows that path, not a claim of currency.
+3. **Stale detection — met.** The manifest records one fingerprint per
+   dependency the render read (the clips in its range, each file's content
+   hash, the captions, the colour) and the renderer version; the `renders`
+   call recomputes them and re-hashes the files, and the Jobs tab shows each
+   render `current`, `stale` (with what changed), `invalid` (files missing) or
+   `failed`. An unrelated change does not make a render stale
+   (`render_movie.rs`).
 4. **Release — manual only.** There is no delete path in the application. A
    render is removed by a person, on disk.
 
-Measured in `render_protocol.rs` (dev profile, 320×180 H.264 written by
-`cine_media::encode`): 46 frames with burned-in captions in 389 ms.
+A movie render is one `movie.mov` beside its manifest, written streaming:
+only the sample tables are held in memory. Measured sizes, 320×180 at
+quality 18: 48 frames with 48 kHz 24-bit stereo sound, 582 KB — of which
+576 KB is the sound (96,000 sample frames at 6 bytes each) and 6 KB the
+picture of still bars and the index. Uncompressed sound dominates short
+low-resolution renders; it is the right trade for a deliverable whose sound
+must not be altered.

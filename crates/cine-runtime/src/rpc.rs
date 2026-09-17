@@ -238,15 +238,18 @@ fn capabilities() -> J {
         }),
         json!({
             "id": "delivery.render",
-            "name": "Render the cut to pictures",
+            "name": "Render the cut: frames or a movie with its sound",
             "group": "Delivery",
             "state": "degraded",
-            "detail": "A background job writes the cut as a PNG sequence with a manifest under \
-                       derived/render/: retimes and angles as the monitor plays them, as decoded \
-                       or through the project's view by the window's own bake, captions burned \
-                       in with a system font. Checked picture for picture against the files \
-                       (render_protocol.rs). 8-bit, picture only: no movie file, no sound, no \
-                       scaling, and a cut of mixed picture sizes is refused",
+            "detail": "A background job writes the cut under derived/render/ as PNG frames \
+                       (8 or 16-bit) or a QuickTime movie: H.264 constrained baseline and \
+                       24-bit PCM stereo 48 kHz from the player's own mixer, sample-exact per \
+                       picture. Retimes and angles as the monitor plays them; as decoded or \
+                       through the project's view; an explicit output size and fit; captions \
+                       burned in. Each render knows whether it is still current from what it \
+                       depended on. Checked against the files picture by picture and sample by \
+                       sample, and against GStreamer (render_movie.rs, mov_roundtrip.rs). \
+                       8-bit sources only; no ProRes, DNxHR or AAC; no timecode track; CPU only",
         }),
         json!({
             "id": "colour.scopes",
@@ -1294,6 +1297,18 @@ pub fn dispatch_with(
             let spec = crate::jobs::spec_for(p, kind, params)?;
             let id = jobs.submit(spec);
             crate::jobs::record_json(&jobs.get(id).ok_or("the job vanished")?)
+        }
+        "renders" => {
+            let root = p
+                .directory
+                .get()
+                .ok_or("renders live in a project directory, and this project has none")?;
+            let timeline = params
+                .get("timeline")
+                .and_then(J::as_str)
+                .map(|t| EntityId::parse(t).ok_or("`timeline` must be an entity id"))
+                .transpose()?;
+            crate::provenance::renders(p, root, timeline)
         }
         "job_cancel" | "job_retry" => {
             let jobs = p

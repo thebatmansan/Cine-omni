@@ -124,6 +124,18 @@ impl SequenceAudio {
         }
     }
 
+    /// Open every entry's file now rather than at first read, so a caller that
+    /// must not be silent by accident learns which entries would be before it
+    /// starts. Returns [`SequenceAudio::refusals`].
+    pub fn open_all(&mut self) -> &HashMap<String, String> {
+        for entry in self.entries.clone() {
+            if let Some(path) = &entry.path {
+                let _ = self.open(path, &entry.name);
+            }
+        }
+        &self.refusals
+    }
+
     /// Entries that are silent and why.
     pub fn refusals(&self) -> &HashMap<String, String> {
         &self.refusals

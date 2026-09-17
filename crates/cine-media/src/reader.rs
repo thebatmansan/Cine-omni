@@ -306,19 +306,41 @@ fn to_audio_frame(buf: AudioBufferRef<'_>, pts: Timestamp) -> AudioFrame {
                 (b.chan(c)[i] as f32 - 128.0) / 128.0
             })
         }
-        other => {
-            // Every remaining symphonia sample type is convertible, but rather
-            // than silently emitting silence for one we have not handled, the
-            // frame is empty and the caller sees zero samples.
-            let spec = match &other {
-                AudioBufferRef::F64(b) => b.spec().rate,
-                _ => 48_000,
-            };
-            AudioFrame {
-                pts,
-                sample_rate: spec,
-                channels: Vec::new(),
-            }
+        // Every sample type symphonia produces, and no wildcard: a type added
+        // later fails to compile here rather than reading as silence. Integers
+        // are scaled by 2^(bits-1), the convention the other types above use,
+        // so a full-scale negative sample is exactly -1.
+        AudioBufferRef::S8(b) => {
+            let (rate, ch, len) = (b.spec().rate, b.spec().channels.count(), b.frames());
+            planar(rate, ch, len, pts, |c, i| f32::from(b.chan(c)[i]) / 128.0)
+        }
+        AudioBufferRef::S24(b) => {
+            let (rate, ch, len) = (b.spec().rate, b.spec().channels.count(), b.frames());
+            planar(rate, ch, len, pts, |c, i| {
+                (f64::from(b.chan(c)[i].inner()) / 8_388_608.0) as f32
+            })
+        }
+        AudioBufferRef::U16(b) => {
+            let (rate, ch, len) = (b.spec().rate, b.spec().channels.count(), b.frames());
+            planar(rate, ch, len, pts, |c, i| {
+                (f32::from(b.chan(c)[i]) - 32_768.0) / 32_768.0
+            })
+        }
+        AudioBufferRef::U24(b) => {
+            let (rate, ch, len) = (b.spec().rate, b.spec().channels.count(), b.frames());
+            planar(rate, ch, len, pts, |c, i| {
+                ((f64::from(b.chan(c)[i].inner()) - 8_388_608.0) / 8_388_608.0) as f32
+            })
+        }
+        AudioBufferRef::U32(b) => {
+            let (rate, ch, len) = (b.spec().rate, b.spec().channels.count(), b.frames());
+            planar(rate, ch, len, pts, |c, i| {
+                ((f64::from(b.chan(c)[i]) - 2_147_483_648.0) / 2_147_483_648.0) as f32
+            })
+        }
+        AudioBufferRef::F64(b) => {
+            let (rate, ch, len) = (b.spec().rate, b.spec().channels.count(), b.frames());
+            planar(rate, ch, len, pts, |c, i| b.chan(c)[i] as f32)
         }
     }
 }

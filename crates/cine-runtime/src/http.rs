@@ -264,3 +264,34 @@ mod tests {
         d
     }
 }
+
+/// Text for an HTTP header value: percent-encoded outside printable ASCII.
+///
+/// Header bytes are not UTF-8 to a browser; it reads them as Latin-1, so a
+/// `·` sent raw arrives as `Â·`. Encoding makes the value exact at the other
+/// end with `decodeURIComponent`, and leaves plain ASCII readable as it is.
+pub fn header_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if (0x20..0x7F).contains(&b) && b != b'%' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::header_text;
+
+    #[test]
+    fn non_ascii_is_encoded_and_ascii_is_left_alone() {
+        assert_eq!(header_text("BT.709 · limited range"), "BT.709 %C2%B7 limited range");
+        assert_eq!(header_text("50%"), "50%25");
+        assert_eq!(header_text("plain"), "plain");
+        assert!(header_text("ASSUMED — no matrix\r\n").is_ascii());
+        assert!(!header_text("a\r\nInjected: yes").contains('\n'));
+    }
+}

@@ -48,6 +48,7 @@ pub mod jobs;
 pub mod lock;
 pub mod playlist;
 pub mod projection;
+pub mod provenance;
 pub mod render;
 pub mod rpc;
 pub mod server;

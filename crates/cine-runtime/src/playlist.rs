@@ -195,3 +195,36 @@ pub fn picture_index(graph: &Graph, entry: &Entry, at: RationalTime) -> (Option<
     });
     (offset, index.filter(|i| *i >= 0))
 }
+
+/// The sound a list plays, as the mixer reads it: each audible clip's file,
+/// where in it the clip starts, and how its media runs against record time.
+///
+/// An entry that cannot be played keeps its place with no file, so the mixer
+/// is silent there — and [`EditList::sound_refusals`] says so, so a caller that
+/// must not be silent by accident can refuse instead.
+pub fn sound_entries(list: &EditList) -> Vec<cine_media::sequence_audio::SoundEntry> {
+    list.sound
+        .iter()
+        .map(|e| cine_media::sequence_audio::SoundEntry {
+            record: e.record,
+            path: e.unplayable().is_none().then(|| e.path.clone()).flatten(),
+            offset: e.offset,
+            name: e.name.clone(),
+            // A sound entry is the whole clip, so its map is anchored at the
+            // entry's own start, where `offset` is measured: varispeed, or
+            // stretched with its pitch kept, as the clip's retime says.
+            map: e.timing.as_ref().map(|t| t.map.clone()),
+            keep_pitch: e.keep_pitch,
+        })
+        .collect()
+}
+
+impl EditList {
+    /// Sound clips that cannot be played, by name, with why.
+    pub fn sound_refusals(&self) -> Vec<(String, &'static str)> {
+        self.sound
+            .iter()
+            .filter_map(|e| e.unplayable().map(|why| (e.name.clone(), why)))
+            .collect()
+    }
+}

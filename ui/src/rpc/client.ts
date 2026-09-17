@@ -477,6 +477,37 @@ export interface JobView {
   params: Record<string, unknown>;
 }
 
+export type RenderState = "current" | "stale" | "invalid" | "failed";
+
+/** One render on disk, with whether it still matches the project. */
+export interface RenderView {
+  state: RenderState;
+  reasons: string[];
+  name: string;
+  timeline: string;
+  path: string;
+  movie: boolean;
+  output: "png8" | "png16" | "movie" | null;
+  frames: { first: number; count: number } | null;
+  width: number | null;
+  height: number | null;
+  fit: string | null;
+  look: { kind: string; display?: string; view?: string; worst_lattice_error?: number } | null;
+  sound: { frames: number; sample_rate: number; channels: number; clipped_samples: number } | null;
+  captions: { language: string; frames_burned: number } | null;
+  revision: number | null;
+  elapsed_ms: number | null;
+  precision: string | null;
+}
+
+export interface FailedRender {
+  state: "failed";
+  job: number;
+  label: string;
+  reasons: (string | null)[];
+  request: Record<string, unknown>;
+}
+
 export interface ChecksumRecord {
   algorithm: string;
   sha256: string;
@@ -956,6 +987,10 @@ export class RpcClient {
     return this.call<CascadeResult>("move_strip", { document, scene, day });
   }
   jobs(limit = 100) { return this.call<JobView[]>("jobs", { limit }); }
+  /** Renders of a sequence on disk, newest first, each with whether it is still current. */
+  renders(timeline: string) {
+    return this.call<{ renders: RenderView[]; failed: FailedRender[] }>("renders", { timeline });
+  }
   submitJob(kind: string, params: Record<string, unknown>) { return this.call<JobView>("job_submit", { kind, ...params }); }
   cancelJob(id: number) { return this.call<JobView>("job_cancel", { id }); }
   retryJob(id: number) { return this.call<JobView>("job_retry", { id }); }
