@@ -29,6 +29,8 @@ function item(index: number, start: number, dur: number, kind: TimelineItem["kin
     handles: null,
     link: null,
     speed: null,
+    angles: null,
+    angle: null,
     needs_conform: false,
     conform_reason: null,
     scenes: [],

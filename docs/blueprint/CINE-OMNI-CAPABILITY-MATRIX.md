@@ -121,7 +121,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Multi-selection & track targeting | All NLEs | Range and multi-clip selection | **MISSING** | — | FE · BE multi-op tx | selection (session, not project) | — | — | M | P0 | — |
 | Markers | All NLEs | Clip and timeline markers with colour/notes | **PARTIAL** | modelled + projected; not editable | RPC · FE | nle.marker | — | — | S | P1 | — |
 | Transitions | All NLEs | Dissolves, wipes, handle check | **PARTIAL** | modelled; **no handle check** | BE check · render | nle.transition | — | — | M | P1 | unrenderable dissolve refused |
-| Multicam | Resolve, Premiere, Avid | Sync by TC/audio, angle switching live | **PLANNED** | R16 §A.7 | BE · FE · M multi-decode | multicam clip | — | 4 angles live | L | P1 | switch cut accuracy |
+| Multicam — angles and switching | Resolve, Premiere, Avid | Sync by TC/audio, angle switching live | **IMPLEMENTED** (angles, switching) / **MISSING** (live multi-angle view, automatic sync) | an angle is one of the clip's own media references, so nothing is a special kind of clip: `add_angles` binds every angle's asset to the clip (a change to any of them reaches the cut), `switch_angle` splits at the point asked for and plays the new angle from there, and an angle whose camera was not rolling over that part of the take is refused with how many frames are missing rather than cut to black. Angle chips in the inspector, `1`..`9` at the playhead, the angle on the clip badge | a quad view needs several decoders at once; alignment must already be in each asset's available range | reference keys + `nle.angles` | — | — | L | P1 | 6 model/graph + 1 protocol test |
 | Nested / compound sequences | All NLEs | Sequences as clips | **MISSING** | OTIO stacks exist | BE · FE | nle.stack | — | — | M | P1 | — |
 | Keyframes & effects | All NLEs | Opacity, position, speed, audio levels; curves | **MISSING** | — | BE · FE · G | animated params | — | — | L | P1 | — |
 | Retiming — constant speed | All NLEs | Speed changes, freeze frames, reverse | **VERIFIED** (constant) / **MISSING** (ramps) | a retime is an exact pair — the media consumed and the track time it takes — never a float scalar; composition, the OTIO file (with `LinearTimeWarp` for other tools), the graph, the flattened picture list, `picture_at`, the EDL's `M2` record and fit-to-fill all carry it; trims/rolls/joins refuse a retimed clip rather than guess; reverse is modelled and the decoder says it cannot play it yet | speed *ramps* need a curve, not a constant | `nle.retime_played` | — | — | M | P2 | 12 unit + 1 protocol test |
@@ -276,10 +276,10 @@ Counted from the tables above (154 rows; where a row has two states, the first i
 | Status | Count |
 |---|---:|
 | VERIFIED | 20 |
-| IMPLEMENTED | 5 |
+| IMPLEMENTED | 6 |
 | PARTIAL | 50 |
 | PROTOTYPE | 3 |
-| PLANNED | 6 |
+| PLANNED | 5 |
 | MISSING | 53 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |

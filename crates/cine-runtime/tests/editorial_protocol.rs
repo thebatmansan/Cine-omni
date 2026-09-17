@@ -720,3 +720,94 @@ fn a_clip_can_be_retimed_and_the_cut_follows() {
         .unwrap()
         .contains("a speed of 2/1"));
 }
+
+/// Multicam over the protocol: angles attached to a clip, a switch that cuts
+/// at the playhead, and an angle without the media refused by name.
+#[test]
+fn angles_can_be_attached_and_cut_between() {
+    let h = Harness::start();
+    let mut c = h.client();
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Multicam", "rate_num": 24, "rate_den": 1 }),
+    );
+    let tl = made["id"].as_str().unwrap().to_string();
+    let v1 = c.call("timeline", json!({ "id": tl }))["tracks"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let media = c.call("media", json!({}));
+    let assets: Vec<(String, String)> = media
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| {
+            m["video"].is_object() || m["name"].as_str().is_some_and(|n| n.contains(".mov"))
+        })
+        .map(|m| {
+            (
+                m["name"].as_str().unwrap_or_default().to_string(),
+                m["id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        assets.len() >= 2,
+        "the fixture has several files: {assets:?}"
+    );
+
+    // One angle on the track, 96 frames of it.
+    c.call(
+        "three_point",
+        json!({ "tracks": [v1], "media": assets[0].1, "mode": "insert",
+                "source": { "in": frames(0), "out": frames(96) },
+                "record": { "in": frames(0) } }),
+    );
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let clip = seq["tracks"][0]["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        seq["tracks"][0]["items"][0]["angles"].is_null(),
+        "one reference, no angles"
+    );
+
+    c.call(
+        "add_angles",
+        json!({ "clip": clip, "angles": [ { "key": "B", "media": assets[1].1 } ] }),
+    );
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let item = &seq["tracks"][0]["items"][0];
+    assert_eq!(item["angles"].as_array().unwrap().len(), 2);
+    assert_eq!(item["angle"], "DEFAULT_MEDIA");
+
+    // Cut to B at frame 24: one switch is one new event.
+    let r = c.call(
+        "switch_angle",
+        json!({ "track": v1, "at": frames(24), "key": "B" }),
+    );
+    assert!(r["clip"].is_string());
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let items = seq["tracks"][0]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["angle"], "DEFAULT_MEDIA");
+    assert_eq!(items[0]["at"]["duration"]["ticks"], 24);
+    assert_eq!(items[1]["angle"], "B");
+    assert_eq!(items[1]["at"]["start"]["ticks"], 24);
+    assert_eq!(
+        seq["duration"]["ticks"], 96,
+        "a switch is a cut, not a change of length"
+    );
+
+    // An angle nobody defined is refused as such, and nothing is cut.
+    let e = c
+        .call_result(
+            "switch_angle",
+            json!({ "track": v1, "at": frames(48), "key": "Z" }),
+        )
+        .expect_err("no angle Z");
+    assert!(e.contains("not one of this clip's references"), "{e}");
+    let seq = c.call("timeline", json!({ "id": tl }));
+    assert_eq!(seq["tracks"][0]["items"].as_array().unwrap().len(), 2);
+}

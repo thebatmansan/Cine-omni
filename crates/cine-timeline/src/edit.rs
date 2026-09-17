@@ -373,6 +373,22 @@ pub fn slide(track: &mut Track, index: usize, delta: RationalTime) -> Result<Rat
 // splitting / joining
 // ---------------------------------------------------------------------------
 
+/// Split at `time` if there is no boundary there, and return the index of the
+/// item that *starts* at it — the one a multicam switch changes.
+///
+/// Refused at the end of the track: there is nothing after the last frame to
+/// cut to.
+pub fn split_for_switch(track: &mut Track, time: RationalTime) -> Result<usize> {
+    let index = commit(track, |t| split_in_place(t, time))?;
+    if index >= track.children.len() {
+        return Err(Error::Edit(format!(
+            "there is nothing at {} to switch",
+            time.to_timecode()
+        )));
+    }
+    Ok(index)
+}
+
 /// Split the clip or gap under `time` into two so that an item boundary
 /// lies exactly at `time`. Returns the index of the item that *starts* at
 /// `time` (`children.len()` when `time` is the end of the track). If a

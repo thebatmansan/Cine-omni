@@ -13,6 +13,7 @@ export function Inspector({
   onUnbind,
   onJob,
   onRetime,
+  onAngle,
 }: {
   timeline: TimelineView | null;
   selection: { item: TimelineItem; track: TimelineTrack } | null;
@@ -23,6 +24,7 @@ export function Inspector({
   onUnbind?(clip: string, scene: string): void;
   onJob?(kind: string, params: Record<string, unknown>): void;
   onRetime?(clip: string, played: ExactTime | null, reversed: boolean): void;
+  onAngle?(clip: string, key: string): void;
 }) {
   return (
     <div className="inspector">
@@ -30,6 +32,9 @@ export function Inspector({
         {selection && (
           <>
             <ClipDetail item={selection.item} track={selection.track} />
+            {selection.item.kind === "clip" && selection.item.id && onAngle && (
+              <Angles item={selection.item} clip={selection.item.id} onAngle={onAngle} />
+            )}
             {selection.item.kind === "clip" && selection.item.id && onRetime && (
               <Speed item={selection.item} clip={selection.item.id} onRetime={onRetime} />
             )}
@@ -64,6 +69,46 @@ export function Inspector({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The angles a multicam clip could play.
+ *
+ * Choosing one here changes this clip only — it does not cut. Cutting between
+ * angles is `1`..`9` at the playhead, which splits and plays the new angle from
+ * that point, because that is what a multicam switch is.
+ */
+function Angles({
+  item,
+  clip,
+  onAngle,
+}: {
+  item: TimelineItem;
+  clip: string;
+  onAngle(clip: string, key: string): void;
+}) {
+  if (!item.angles || item.angles.length < 2) return null;
+  return (
+    <>
+      <div className="section-title">Angles</div>
+      <div className="chips" role="group" aria-label="angles">
+        {item.angles.map((key) => (
+          <button
+            key={key}
+            className="chip"
+            aria-pressed={key === item.angle}
+            onClick={() => onAngle(clip, key)}
+          >
+            {key}
+          </button>
+        ))}
+      </div>
+      <div className="note">
+        An angle the runtime refuses is one whose camera was not rolling over this
+        part of the take; it says how much is missing rather than cutting to black.
+      </div>
+    </>
   );
 }
 

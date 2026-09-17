@@ -163,6 +163,36 @@ export function App() {
     [client, marks, media, mismatch, playhead, rate, recordMarks, session, timeline],
   );
 
+  /**
+   * A multicam switch: cut at the playhead and play the angle from there.
+   *
+   * `1`..`9` pick the angle by its place in the clip's own list, which is what
+   * the number keys have always meant in a cutting room. The runtime decides
+   * whether that angle has the media; if it does not it refuses by name and
+   * nothing is cut.
+   */
+  const switchAngle = useCallback(
+    (position: number) => {
+      if (!timeline || !playhead) return;
+      const under = timeline.tracks
+        .filter((t) => t.kind === "video" && !t.locked)
+        .flatMap((t) =>
+          t.items
+            .filter((i) => i.kind === "clip" && i.angles)
+            .map((i) => ({ track: t, item: i })),
+        )
+        .find(
+          ({ item }) =>
+            item.at.start.ticks <= playheadTicks && playheadTicks < item.at.end.ticks,
+        );
+      if (!under?.track.id) return;
+      const key = under.item.angles?.[position - 1];
+      if (!key) return;
+      void session.run(`angle ${key}`, () => client.switchAngle(under.track.id!, playhead, key));
+    },
+    [client, playhead, playheadTicks, session, timeline],
+  );
+
   const removeSelected = useCallback(
     (how: "lift" | "extract") => {
       if (!selection || selection.item.kind === "transition") return;
@@ -219,6 +249,7 @@ export function App() {
     place: (mode) => void place(mode),
     remove: removeSelected,
     split: splitAtPlayhead,
+    angle: switchAngle,
     undo: session.undo,
     redo: session.redo,
     save: session.save,
@@ -346,6 +377,9 @@ export function App() {
                   onJob={(kind, params) => void session.run(kind, () => client.submitJob(kind, params))}
                   onRetime={(clip, played, reversed) =>
                     void session.run("retime", () => client.retime(clip, played, reversed))
+                  }
+                  onAngle={(clip, key) =>
+                    void session.run(`angle ${key}`, () => client.setAngle(clip, key))
                   }
                 />
               ) : rightTab === "jobs" ? (
@@ -769,6 +803,7 @@ function useKeyboard(on: {
   place(mode: "insert" | "overwrite"): void;
   remove(how: "lift" | "extract"): void;
   split(): void;
+  angle(position: number): void;
   undo(): Promise<void>;
   redo(): Promise<void>;
   save(): Promise<void>;
@@ -809,6 +844,8 @@ function useKeyboard(on: {
         on.place("insert");
       } else if (e.key === ".") {
         on.place("overwrite");
+      } else if (key >= "1" && key <= "9" && !e.shiftKey && !e.altKey) {
+        on.angle(Number(key));
       } else if (key === "s") {
         on.snap();
       } else if (key === "l" && e.shiftKey) {

@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 use crate::otio::*;
 use crate::otio_json;
 use serde_json::Value as J;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use ucg_core::{EdgeKind, EntityId, Graph, Tx, Value};
 use ucg_core::{RationalTime, TimeRange};
 use ucg_schema::{attrs, kinds, ClipRef, Component};
@@ -44,6 +44,11 @@ pub mod nle_attrs {
     /// A retimed clip's length on the track. Absent means real time.
     pub const RETIME_PLAYED: &str = "nle.retime_played";
     pub const RETIME_REVERSED: &str = "nle.retime_reversed";
+    /// A multicam clip's angles: `{ key: entity id }`. Absent on the ordinary
+    /// single-reference clip, which is nearly every clip.
+    pub const ANGLES: &str = "nle.angles";
+    /// Which key in [`ANGLES`] is playing.
+    pub const ANGLE: &str = "nle.angle";
 }
 
 /// An edit applied to a track node by [`apply_edit`]. See [`crate::edit`]
@@ -482,7 +487,7 @@ fn write_item(
                 nle_attrs::RETIME_REVERSED,
                 clip.retime.map(|r| r.reversed),
             )?;
-            let media = write_media_reference(tx, id, &clip.media_reference)?;
+            let (media, _angles) = write_media(tx, id, clip)?;
             let clip_ref = ClipRef {
                 media,
                 source_range: clip.trimmed_range().unwrap_or_default(),
@@ -512,53 +517,94 @@ fn write_item(
 
 /// Bind `clip` to the media asset for `reference`; returns the media entity
 /// for external references.
-fn write_media_reference(
+/// Write a clip's media: the reference it plays, every angle it could play,
+/// and exactly the `Binds` edges those need.
+///
+/// The binding is done **once, for the whole set**, and that is not a tidiness
+/// preference. Writing the active reference with its own rebind and then
+/// linking the angles afterwards would unbind and relink every angle on every
+/// identical re-write, and a graph writer that produces ops when nothing
+/// changed breaks reactor convergence. So the assets are resolved first —
+/// created or found, no edges touched — and one pass reconciles the edges.
+///
+/// Returns the active asset and the angle map.
+fn write_media(
+    tx: &mut Tx,
+    clip: EntityId,
+    c: &Clip,
+) -> Result<(Option<EntityId>, BTreeMap<String, EntityId>)> {
+    let active = ensure_asset(tx, clip, &c.media_reference)?;
+    let mut angles: BTreeMap<String, EntityId> = BTreeMap::new();
+    if let Some(m) = active {
+        angles.insert(c.active_media_reference_key.clone(), m);
+        tx.remove_attr(clip, nle_attrs::MEDIA_REF)?;
+    } else {
+        tx.set(
+            clip,
+            nle_attrs::MEDIA_REF,
+            Value::from_json(otio_json::media_reference_value(&c.media_reference)),
+        )?;
+    }
+    for (key, reference) in &c.alternate_media_references {
+        // Only a real file can be an angle: there is nothing to cut to in a
+        // generator or a missing reference, and one is not invented.
+        if let Some(m) = ensure_asset(tx, clip, reference)? {
+            angles.insert(key.clone(), m);
+        }
+    }
+    let keep: BTreeSet<EntityId> = angles.values().copied().collect();
+    bind_exactly(tx, clip, &keep)?;
+    if angles.len() > 1 {
+        let map: serde_json::Map<String, J> = angles
+            .iter()
+            .map(|(k, v)| (k.clone(), J::String(v.to_string())))
+            .collect();
+        tx.set(clip, nle_attrs::ANGLES, Value::from_json(J::Object(map)))?;
+        tx.set(
+            clip,
+            nle_attrs::ANGLE,
+            c.active_media_reference_key.as_str(),
+        )?;
+    } else {
+        tx.remove_attr(clip, nle_attrs::ANGLES)?;
+        tx.remove_attr(clip, nle_attrs::ANGLE)?;
+    }
+    Ok((active, angles))
+}
+
+/// The `asset.media` for one reference, created or found. No edges are
+/// touched: binding is [`bind_exactly`]'s job.
+fn ensure_asset(
     tx: &mut Tx,
     clip: EntityId,
     reference: &MediaReference,
 ) -> Result<Option<EntityId>> {
-    let media_id = match reference {
-        MediaReference::External {
-            target_url,
-            available_range,
-        } => {
-            let media = EntityId::from_key(&format!("media:{target_url}"));
-            // An asset already known by another identity — ingested and keyed
-            // by content — is bound as it is. A clip is derived material: it
-            // must not mint a second identity for the same file, and it must
-            // not rewrite what ingest recorded about it.
-            if !tx.graph().contains(media) {
-                if let Some(existing) = asset_at_path(tx.graph(), clip, target_url) {
-                    tx.remove_attr(clip, nle_attrs::MEDIA_REF)?;
-                    rebind(tx, clip, existing)?;
-                    return Ok(Some(existing));
-                }
-            }
-            ensure_kind(tx, media, kinds::ASSET_MEDIA)?;
-            tx.set(media, attrs::MEDIA_PATH, target_url.as_str())?;
-            tx.set(
-                media,
-                attrs::NAME,
-                target_url.rsplit('/').next().unwrap_or(target_url),
-            )?;
-            set_opt(tx, media, attrs::AVAILABLE_RANGE, *available_range)?;
-            tx.remove_attr(clip, nle_attrs::MEDIA_REF)?;
-            Some(media)
-        }
-        other => {
-            tx.set(
-                clip,
-                nle_attrs::MEDIA_REF,
-                Value::from_json(otio_json::media_reference_value(other)),
-            )?;
-            None
-        }
+    let MediaReference::External {
+        target_url,
+        available_range,
+    } = reference
+    else {
+        return Ok(None);
     };
-    match media_id {
-        Some(m) => rebind(tx, clip, m)?,
-        None => unbind_all(tx, clip, None)?,
+    let media = EntityId::from_key(&format!("media:{target_url}"));
+    // An asset already known by another identity — ingested and keyed by
+    // content — is used as it is. A clip is derived material: it must not mint
+    // a second identity for the same file, and it must not rewrite what
+    // ingest recorded about it.
+    if !tx.graph().contains(media) {
+        if let Some(existing) = asset_at_path(tx.graph(), clip, target_url) {
+            return Ok(Some(existing));
+        }
     }
-    Ok(media_id)
+    ensure_kind(tx, media, kinds::ASSET_MEDIA)?;
+    tx.set(media, attrs::MEDIA_PATH, target_url.as_str())?;
+    tx.set(
+        media,
+        attrs::NAME,
+        target_url.rsplit('/').next().unwrap_or(target_url),
+    )?;
+    set_opt(tx, media, attrs::AVAILABLE_RANGE, *available_range)?;
+    Ok(Some(media))
 }
 
 /// The asset whose recorded path is `path`: the one the clip is already bound
@@ -582,31 +628,36 @@ fn asset_at_path(graph: &Graph, clip: EntityId, path: &str) -> Option<EntityId> 
         })
 }
 
-/// Exactly one `Binds` edge from `clip` to an asset, and it goes to `media`.
-fn rebind(tx: &mut Tx, clip: EntityId, media: EntityId) -> Result<()> {
-    unbind_all(tx, clip, Some(media))?;
-    tx.link(clip, media, EdgeKind::Binds)?;
+/// The clip's `Binds` edges to assets are exactly `keep`, and no more.
+///
+/// Set-wise so that re-running with the same set produces no ops: an edge that
+/// is wanted and present is left alone.
+fn bind_exactly(tx: &mut Tx, clip: EntityId, keep: &BTreeSet<EntityId>) -> Result<()> {
+    let bound: Vec<EntityId> = bound_assets(tx.graph(), clip);
+    for m in &bound {
+        if !keep.contains(m) {
+            tx.unlink(clip, *m, EdgeKind::Binds)?;
+        }
+    }
+    for m in keep {
+        if !bound.contains(m) {
+            tx.link(clip, *m, EdgeKind::Binds)?;
+        }
+    }
     Ok(())
 }
 
-fn unbind_all(tx: &mut Tx, clip: EntityId, keep: Option<EntityId>) -> Result<()> {
-    let bound: Vec<EntityId> = tx
-        .graph()
+fn bound_assets(graph: &Graph, clip: EntityId) -> Vec<EntityId> {
+    graph
         .targets(clip, EdgeKind::Binds)
         .into_iter()
         .filter(|m| {
-            tx.graph()
+            graph
                 .node(*m)
                 .map(|n| n.kind.as_str() == kinds::ASSET_MEDIA)
                 .unwrap_or(false)
         })
-        .collect();
-    for m in bound {
-        if Some(m) != keep {
-            tx.unlink(clip, m, EdgeKind::Binds)?;
-        }
-    }
-    Ok(())
+        .collect()
 }
 
 fn write_markers(tx: &mut Tx, owner: EntityId, markers: &[Marker]) -> Result<Vec<EntityId>> {
@@ -719,21 +770,23 @@ pub fn export_item(graph: &Graph, id: EntityId) -> Result<Item> {
     let item = match node.kind.as_str() {
         kinds::NLE_CLIP => {
             let media_reference = match media_of_clip(graph, id) {
-                Some(m) => {
-                    let mn = graph.require(m)?;
-                    MediaReference::External {
-                        target_url: mn
-                            .get_str(attrs::MEDIA_PATH)
-                            .unwrap_or_default()
-                            .to_string(),
-                        available_range: mn.get(attrs::AVAILABLE_RANGE).and_then(Value::as_range),
-                    }
-                }
+                Some(m) => reference_of_asset(graph, m)?,
                 None => match node.get(nle_attrs::MEDIA_REF) {
                     Some(v) => otio_json::read_media_reference(&v.to_json())?,
                     None => MediaReference::Missing,
                 },
             };
+            // Angles: every other reference the clip carries, rebuilt from the
+            // assets it is bound to.
+            let angles = angles_of_clip(graph, id);
+            let active_key =
+                angle_of_clip(graph, id).unwrap_or_else(|| DEFAULT_MEDIA_KEY.to_string());
+            let mut alternates = BTreeMap::new();
+            for (key, asset) in &angles {
+                if *key != active_key {
+                    alternates.insert(key.clone(), reference_of_asset(graph, *asset)?);
+                }
+            }
             let mut markers = Vec::new();
             for c in graph.children(id) {
                 if graph
@@ -758,10 +811,8 @@ pub fn export_item(graph: &Graph, id: EntityId) -> Result<Item> {
                 markers,
                 metadata,
                 enabled: node.get_bool(nle_attrs::ENABLED).unwrap_or(true),
-                // The graph currently stores one reference per clip. Multiple
-                // references survive an OTIO round-trip but are not yet
-                // represented as graph nodes; see the Phase 3 blueprint.
-                ..Default::default()
+                active_media_reference_key: active_key,
+                alternate_media_references: alternates,
             })
         }
         kinds::NLE_GAP => {
@@ -885,13 +936,50 @@ pub fn clip_track_range(graph: &Graph, clip: EntityId) -> Option<TimeRange> {
     graph.attr(clip, attrs::RANGE).and_then(Value::as_range)
 }
 
-/// The `asset.media` the clip is bound to.
+/// The `asset.media` the clip is **playing**.
+///
+/// A multicam clip is bound to every angle, so "the asset this clip plays" is
+/// the one the active angle names, not whichever edge happens to come first.
 pub fn media_of_clip(graph: &Graph, clip: EntityId) -> Option<EntityId> {
-    graph.targets(clip, EdgeKind::Binds).into_iter().find(|m| {
-        graph
-            .node(*m)
-            .map(|n| n.kind.as_str() == kinds::ASSET_MEDIA)
-            .unwrap_or(false)
+    let bound = bound_assets(graph, clip);
+    if bound.len() > 1 {
+        if let Some(active) = angle_of_clip(graph, clip)
+            .and_then(|key| angles_of_clip(graph, clip).get(&key).copied())
+        {
+            if bound.contains(&active) {
+                return Some(active);
+            }
+        }
+    }
+    bound.into_iter().next()
+}
+
+/// A clip's angles by key. Empty for the ordinary single-reference clip.
+pub fn angles_of_clip(graph: &Graph, clip: EntityId) -> BTreeMap<String, EntityId> {
+    let mut out = BTreeMap::new();
+    let Some(J::Object(map)) = graph.attr(clip, nle_attrs::ANGLES).map(Value::to_json) else {
+        return out;
+    };
+    for (key, id) in map {
+        if let Some(id) = id.as_str().and_then(EntityId::parse) {
+            out.insert(key, id);
+        }
+    }
+    out
+}
+
+/// Which angle is playing, when the clip has more than one.
+pub fn angle_of_clip(graph: &Graph, clip: EntityId) -> Option<String> {
+    graph
+        .attr(clip, nle_attrs::ANGLE)
+        .and_then(|v| v.as_str().map(str::to_string))
+}
+
+fn reference_of_asset(graph: &Graph, media: EntityId) -> Result<MediaReference> {
+    let n = graph.require(media)?;
+    Ok(MediaReference::External {
+        target_url: n.get_str(attrs::MEDIA_PATH).unwrap_or_default().to_string(),
+        available_range: n.get(attrs::AVAILABLE_RANGE).and_then(Value::as_range),
     })
 }
 
@@ -1103,19 +1191,8 @@ pub fn place_material(
 /// would end up consuming no picture at all.
 pub fn set_clip_retime(tx: &mut Tx, clip: EntityId, retime: Option<Retime>) -> Result<()> {
     require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;
-    let track = tx.graph().parent(clip).ok_or(Error::MissingAttr {
-        id: clip,
-        attr: "a track",
-    })?;
+    let (track, index) = place_of_item(tx.graph(), clip)?;
     let mut t = export_track(tx.graph(), track)?;
-    let index = t
-        .children
-        .iter()
-        .position(|i| i.ucg_id() == Some(clip))
-        .ok_or(Error::MissingAttr {
-            id: clip,
-            attr: "a place on its track",
-        })?;
     crate::session::ensure_unlocked(&t)?;
     let Item::Clip(c) = &mut t.children[index] else {
         return Err(Error::NotAnItem(index));
@@ -1134,10 +1211,99 @@ pub fn set_clip_retime(tx: &mut Tx, clip: EntityId, retime: Option<Retime>) -> R
         }
     }
     c.retime = retime;
-    t.validate()?;
+    write_one_track(tx, track, &t)
+}
+
+/// Give a clip more angles: assets it could play instead of the one it plays.
+///
+/// This is how a multicam clip comes into being — place one angle, then attach
+/// the others by the names a production calls them. The assets must already be
+/// in the project, because an angle is a file somebody ingested, not a path
+/// somebody typed.
+///
+/// The angles are not re-synced here. Alignment is carried by each asset's own
+/// available range: two angles are in sync when their ranges are in the same
+/// time base, which is what timecode gives and what [`crate::sync`] measures.
+/// An angle whose range does not cover this clip is accepted — it is still an
+/// angle — and refused later, by name, when somebody tries to cut to it.
+pub fn add_angles(tx: &mut Tx, clip: EntityId, angles: &[(String, EntityId)]) -> Result<()> {
+    require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;
+    let (track, index) = place_of_item(tx.graph(), clip)?;
+    let mut t = export_track(tx.graph(), track)?;
+    crate::session::ensure_unlocked(&t)?;
+    let Item::Clip(c) = &mut t.children[index] else {
+        return Err(Error::NotAnItem(index));
+    };
+    for (key, asset) in angles {
+        require_kind(tx.graph(), *asset, kinds::ASSET_MEDIA)?;
+        if *key == c.active_media_reference_key {
+            return Err(Error::Edit(format!(
+                "`{key}` is already the angle this clip is playing"
+            )));
+        }
+        c.alternate_media_references
+            .insert(key.clone(), reference_of_asset(tx.graph(), *asset)?);
+    }
+    write_one_track(tx, track, &t)
+}
+
+/// Cut to another angle at `at`: split there if there is no boundary, then
+/// play `key` from that point to the end of what was one clip.
+///
+/// That is what a multicam switch is — each switch is an event, and the
+/// material before it keeps playing the angle it was playing.
+pub fn switch_angle(tx: &mut Tx, track: EntityId, at: RationalTime, key: &str) -> Result<EntityId> {
+    let mut t = export_track(tx.graph(), track)?;
+    crate::session::ensure_unlocked(&t)?;
+    let index = crate::edit::split_for_switch(&mut t, at)?;
+    let Item::Clip(c) = &mut t.children[index] else {
+        return Err(Error::NotAnItem(index));
+    };
+    c.play_reference(key).map_err(Error::Edit)?;
     let prefix = item_key_prefix(tx.graph(), track);
     let ids = assign_item_ids(tx.graph(), track, &t, &prefix, true);
-    write_track_items(tx, track, &t, &ids)
+    let id = ids[index];
+    write_track_items(tx, track, &t, &ids)?;
+    Ok(id)
+}
+
+/// Play a different angle on one clip, without splitting anything.
+pub fn set_clip_angle(tx: &mut Tx, clip: EntityId, key: &str) -> Result<()> {
+    require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;
+    let (track, index) = place_of_item(tx.graph(), clip)?;
+    let mut t = export_track(tx.graph(), track)?;
+    crate::session::ensure_unlocked(&t)?;
+    let Item::Clip(c) = &mut t.children[index] else {
+        return Err(Error::NotAnItem(index));
+    };
+    c.play_reference(key).map_err(Error::Edit)?;
+    write_one_track(tx, track, &t)
+}
+
+/// The track an item is on and where it sits on it.
+fn place_of_item(graph: &Graph, item: EntityId) -> Result<(EntityId, usize)> {
+    let track = graph.parent(item).ok_or(Error::MissingAttr {
+        id: item,
+        attr: "a track",
+    })?;
+    let t = export_track(graph, track)?;
+    let index = t
+        .children
+        .iter()
+        .position(|i| i.ucg_id() == Some(item))
+        .ok_or(Error::MissingAttr {
+            id: item,
+            attr: "a place on its track",
+        })?;
+    Ok((track, index))
+}
+
+/// Write a track back after changing it in memory.
+fn write_one_track(tx: &mut Tx, track: EntityId, t: &Track) -> Result<()> {
+    t.validate()?;
+    let prefix = item_key_prefix(tx.graph(), track);
+    let ids = assign_item_ids(tx.graph(), track, t, &prefix, true);
+    write_track_items(tx, track, t, &ids)
 }
 
 /// Put a clip into a link group (or take it out with `None`).

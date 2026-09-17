@@ -493,6 +493,10 @@ export interface TimelineItem {
   link: string | null;
   /** `null` when the clip plays in real time, which is nearly always. */
   speed: ClipSpeed | null;
+  /** Every angle this clip could play; `null` when it carries one reference. */
+  angles: string[] | null;
+  /** Which of them is playing. */
+  angle: string | null;
   needs_conform: boolean;
   conform_reason: string | null;
   /** Scenes (or shots) this clip is bound to. */
@@ -720,6 +724,18 @@ export class RpcClient {
       mode,
       mismatch,
     });
+  }
+  /** Give a clip more angles: assets it could play instead of the one it plays. */
+  addAngles(clip: string, angles: { key: string; media: string }[]) {
+    return this.call<CascadeResult>("add_angles", { clip, angles });
+  }
+  /** Play a different angle on one clip, without cutting. */
+  setAngle(clip: string, key: string) {
+    return this.call<CascadeResult>("set_angle", { clip, key });
+  }
+  /** Cut to another angle at a point on the track: the multicam switch. */
+  switchAngle(track: string, at: ExactTime, key: string) {
+    return this.call<CascadeResult & { clip: string }>("switch_angle", { track, at, key });
   }
   /** Set a clip's speed by saying how long it should play; `null` removes it. */
   retime(clip: string, played: ExactTime | null, reversed = false) {

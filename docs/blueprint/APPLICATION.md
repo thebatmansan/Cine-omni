@@ -290,6 +290,32 @@ between trimming the source at the head or the tail, keeping the source's
 length by moving a timeline point, and *fit to fill* — which keeps both and
 changes the clip's speed.
 
+### Angles
+
+A multicam clip is not a special kind of clip. A clip already carries several
+media references with one of them active, and that is exactly what a set of
+angles is: `add_angles` attaches assets the project already holds under the
+names a production calls its cameras, and switching is choosing a different
+one. Every angle is bound to the clip in the graph, so a change to any camera's
+media reaches the cut and not only the angle somebody happens to be watching.
+
+Cutting between them is a cut. `1`..`9` at the playhead splits the clip there
+and plays the chosen angle from that point on; the material before the switch
+keeps playing what it was playing, and the sequence does not change length. The
+inspector's chips change one clip without cutting, which is the other thing an
+editor wants.
+
+What is refused is the point of the refusal. Angles are aligned by their own
+available ranges — two cameras are in sync when their ranges are in the same
+time base, which is what timecode gives and what `sync` measures — so an angle
+whose camera had not started rolling over this part of the take simply does not
+have the frames. Switching to it is refused by name, with how many frames are
+missing, rather than cut to and discovered black in a screening.
+
+There is no quad view: showing four angles at once needs four decoders running
+together, and that is a separate capability. Nothing here syncs angles
+automatically either; the offsets have to already be in the assets.
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

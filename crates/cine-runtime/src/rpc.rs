@@ -751,6 +751,69 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "add_angles" => {
+            let clip = entity(params, "clip")?;
+            let angles: Vec<(String, EntityId)> = params
+                .get("angles")
+                .and_then(J::as_array)
+                .ok_or("missing param `angles`")?
+                .iter()
+                .map(|v| {
+                    let key = v
+                        .get("key")
+                        .and_then(J::as_str)
+                        .ok_or("an angle needs a `key`")?
+                        .to_string();
+                    let media = v
+                        .get("media")
+                        .and_then(J::as_str)
+                        .and_then(EntityId::parse)
+                        .ok_or("an angle needs a `media` entity id")?;
+                    Ok::<_, String>((key, media))
+                })
+                .collect::<std::result::Result<_, _>>()?;
+            let group = p
+                .engine
+                .transact("add angles", |tx| {
+                    cine_timeline::graph::add_angles(tx, clip, &angles)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                })
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
+        "set_angle" => {
+            let clip = entity(params, "clip")?;
+            let key = str_param(params, "key")?.to_string();
+            let group = p
+                .engine
+                .transact(&format!("angle {key}"), |tx| {
+                    cine_timeline::graph::set_clip_angle(tx, clip, &key)
+                        .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))
+                })
+                .map_err(|x| x.to_string())?;
+            with_impact(p, &group)
+        }
+        "switch_angle" => {
+            let track = entity(params, "track")?;
+            let key = str_param(params, "key")?.to_string();
+            let at: RationalTime =
+                serde_json::from_value(params.get("at").cloned().ok_or("missing param `at`")?)
+                    .map_err(|e| format!("invalid time: {e}"))?;
+            let mut switched = None;
+            let group = p
+                .engine
+                .transact(&format!("angle {key}"), |tx| {
+                    switched = Some(
+                        cine_timeline::graph::switch_angle(tx, track, at, &key)
+                            .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?,
+                    );
+                    Ok(())
+                })
+                .map_err(|x| x.to_string())?;
+            let mut out = with_impact(p, &group);
+            out["clip"] = json!(switched.ok_or("the switch did not run")?);
+            out
+        }
         "jobs" => {
             let jobs = p
                 .jobs

@@ -443,6 +443,7 @@ function Clip({
     item.speed
       ? `Retimed: ${item.speed.media}/${item.speed.track}${item.speed.reversed ? " reversed" : ""}`
       : null,
+    item.angles ? `Angle ${item.angle} of ${item.angles.join(", ")}` : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -475,6 +476,7 @@ function Clip({
           {item.needs_conform && <span className="glyph conform-glyph">!</span>}
           {item.link && <span className="glyph">∞</span>}
           {item.scenes.length > 0 && <span className="glyph">SC</span>}
+          {item.angles && <span className="glyph angle-glyph">{item.angle}</span>}
           {item.speed && <span className="glyph speed-glyph">{item.speed.label}</span>}
           {item.name}
         </div>

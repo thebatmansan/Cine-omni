@@ -140,6 +140,14 @@ pub fn timeline(graph: &Graph, id: EntityId) -> Result<J, String> {
                     .map(|(head, tail)| json!({ "head": time(head), "tail": time(tail) })),
                 "link": clip.and_then(cine_timeline::session::link_of),
                 "speed": clip.and_then(|c| c.speed()).map(speed_json),
+                // Angles, when the clip carries more than one reference. The
+                // active one is `angle`; a clip with one reference has neither.
+                "angles": clip
+                    .map(cine_timeline::Clip::reference_keys)
+                    .filter(|k| k.len() > 1),
+                "angle": clip
+                    .filter(|c| !c.alternate_media_references.is_empty())
+                    .map(|c| c.active_media_reference_key.clone()),
                 "needs_conform": item.ucg_id().and_then(|c| graph.node(c))
                     .and_then(|n| n.get_bool(attrs::NEEDS_CONFORM)).unwrap_or(false),
                 "conform_reason": item.ucg_id().and_then(|c| graph.node(c))

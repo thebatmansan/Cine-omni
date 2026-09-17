@@ -750,6 +750,62 @@ impl Clip {
         self.media_reference.available_range()
     }
 
+    /// Every reference key the clip carries, active first.
+    ///
+    /// For a multicam clip these are the angle names. A clip with one
+    /// reference has one key, which is the ordinary case and is why nothing
+    /// here treats "multicam" as a separate kind of clip: an angle is a
+    /// reference, and switching is choosing a different one.
+    pub fn reference_keys(&self) -> Vec<String> {
+        let mut keys = vec![self.active_media_reference_key.clone()];
+        keys.extend(self.alternate_media_references.keys().cloned());
+        keys
+    }
+
+    /// Play a different reference.
+    ///
+    /// The one that was playing joins the alternates, so switching back is
+    /// symmetric and nothing is lost. Refused when the key is not one the clip
+    /// carries, or when that reference does not have the media the clip is
+    /// playing — an angle that stopped rolling before this part of the take is
+    /// not something to cut to, and the refusal says how much is missing.
+    pub fn play_reference(&mut self, key: &str) -> std::result::Result<(), String> {
+        if key == self.active_media_reference_key {
+            return Ok(());
+        }
+        let Some(wanted) = self.alternate_media_references.get(key).cloned() else {
+            return Err(format!(
+                "`{key}` is not one of this clip's references ({})",
+                self.reference_keys().join(", ")
+            ));
+        };
+        if let (Some(source), Some(available)) = (self.source_range, wanted.available_range()) {
+            if source.start_time < available.start_time {
+                return Err(format!(
+                    "`{key}` starts {} frames after this part of the take",
+                    available
+                        .start_time
+                        .checked_sub(&source.start_time)
+                        .to_frames()
+                ));
+            }
+            if source.end_time_exclusive() > available.end_time_exclusive() {
+                return Err(format!(
+                    "`{key}` runs out {} frames before the end of this part of the take",
+                    source
+                        .end_time_exclusive()
+                        .checked_sub(&available.end_time_exclusive())
+                        .to_frames()
+                ));
+            }
+        }
+        let was = std::mem::replace(&mut self.media_reference, wanted);
+        let was_key = std::mem::replace(&mut self.active_media_reference_key, key.to_string());
+        self.alternate_media_references.remove(key);
+        self.alternate_media_references.insert(was_key, was);
+        Ok(())
+    }
+
     /// The range actually played: `source_range`, else the available range.
     pub fn trimmed_range(&self) -> Option<TimeRange> {
         self.source_range.or_else(|| self.available_range())
