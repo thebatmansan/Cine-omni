@@ -237,7 +237,7 @@ separate process costs weeks and is legally clean.
 | Web / social deliverables | Resolve, Premiere | H.264/HEVC presets | **BLOCKED** | — | M encode | — | patent pools | — | M | P1 | — |
 | DCP (theatrical) | DCP-o-matic, Clipster | SMPTE DCP: JPEG 2000 in MXF, CPL/PKL, ≤250 Mb/s | **MISSING** | — | M J2K encode · MXF | delivery package | **OpenJPEG BSD-2** (verified); SMPTE ST 429 | — | L | P2 | DCP validators |
 | IMF (streaming masters) | Clipster, Resolve | App 2E: J2K + PCM, CPL, Photon-clean | **MISSING** | — | M · MXF | delivery package | **Netflix Photon is open source** (verify licence); OpenJPEG/OpenJPH BSD-2 | — | L | P2 | passes Photon |
-| Timed text | Subtitle Edit, EZTitles | TTML1 / IMSC1.1 (Netflix), SCC, SRT | **MISSING** | — | BE writers · validator | caption track | W3C specs | — | M | P1 | IMSC validator |
+| Timed text | Subtitle Edit, EZTitles | TTML1 / IMSC1.1 (Netflix), SCC, SRT | **PARTIAL** | `cine_timeline::captions`: IMSC 1.1 Text written with frame-exact offsets (`ttp:frameRate` + multiplier, refused for a rate TTML cannot express), SRT read/write and WebVTT write snapped to the sequence's frames, and delivery checks (lines, characters per line, duration, gap, reading speed, overlap). Checked against **ttconv**, an independent TTML reader: at 24000/1001, 30000/1001 and 25, including a half-millisecond tie and an hour in, every caption it decodes lands on the frame written. **Not yet reachable from the product**; no SCC, no IMSC schema validation | graph, protocol and interface; SCC | caption track | W3C specs; ttconv as oracle | — | M | P1 | `captions_oracle.rs` + 7 unit tests |
 | Audio masters & stems | Pro Tools | BWF, ADM BW64, loudness-compliant | **PARTIAL** | stems + loudness | BE writers | audio.stem | — | — | M | P1 | loudness spec per platform |
 | HDR deliverables | Resolve Studio | PQ/HLG with mastering metadata | **MISSING** | — | BE · M | mastering meta | Dolby for DV | — | L | P2 | — |
 | Automated QC | Vidchecker, Baton | Black frames, freezes, loudness, gamut, flashes, spec | **MISSING** | loudness only | BE analysers | QC report | — | faster than real time | L | P2 | known-defect corpus |
@@ -277,10 +277,10 @@ Counted from the tables above (154 rows; where a row has two states, the first i
 |---|---:|
 | VERIFIED | 20 |
 | IMPLEMENTED | 6 |
-| PARTIAL | 50 |
+| PARTIAL | 51 |
 | PROTOTYPE | 3 |
 | PLANNED | 5 |
-| MISSING | 53 |
+| MISSING | 52 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |
 

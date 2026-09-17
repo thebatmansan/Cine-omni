@@ -10,6 +10,8 @@
 //! * [`otio_json`] — lossless `.otio` reader/writer (OTIO 0.15+ schema).
 //! * [`edit`] — frame-exact editing operations with media-bound clamping and
 //!   invariant validation, plus a timeline diff.
+//! * [`captions`] — timed text on the cut: IMSC 1.1 with frame-exact times,
+//!   SRT and WebVTT, and the checks a delivery applies.
 //! * [`three_point`] — source and record marks: give any three of the four
 //!   points and the fourth is arithmetic, with four-point disagreements
 //!   reconciled explicitly rather than quietly.
@@ -38,6 +40,7 @@
 //! assert_eq!(read_otio(&text).unwrap(), timeline);
 //! ```
 
+pub mod captions;
 pub mod edit;
 pub mod edl;
 pub mod error;

@@ -101,3 +101,14 @@ used_by = [
 ]
 modifications = "none; not linked, not shipped. Its outputs are committed as reference values (*.tsv)."
 obligations = "none for the application: compatibility is established by comparing outputs, and nothing from it is compiled in."
+
+[[entry]]
+project = "ttconv"
+url = "https://github.com/sandflow/ttconv"
+version = "1.2.3"
+license = "BSD-2-Clause"
+copyright = "Sandflow Consulting LLC and contributors"
+integration = "oracle"
+used_by = ["crates/cine-timeline/tests/data/captions/oracle.sh"]
+modifications = "none; not linked, not shipped. Run through `uvx` as a separate program to decode the IMSC this crate writes into SRT; its outputs are committed as reference files (*.ttconv.srt) and checked by crates/cine-timeline/tests/captions_oracle.rs."
+obligations = "none for CINE-OMNI: a tool run on test fixtures imposes nothing on what it is run on."

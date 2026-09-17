@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml"
+    xmlns:ttp="http://www.w3.org/ns/ttml#parameter"
+    xmlns:tts="http://www.w3.org/ns/ttml#styling"
+    xmlns:ttm="http://www.w3.org/ns/ttml#metadata"
+    ttp:contentProfiles="http://www.w3.org/ns/ttml/profile/imsc1.1/text"
+    ttp:timeBase="media" ttp:frameRate="30" ttp:frameRateMultiplier="1000 1001"
+    ttp:cellResolution="32 15" xml:lang="en">
+  <head>
+    <styling>
+      <style xml:id="s" tts:textAlign="center" tts:color="white" tts:backgroundColor="black" tts:fontSize="100%"/>
+    </styling>
+    <layout>
+      <region xml:id="bottom" tts:origin="10% 10%" tts:extent="80% 80%" tts:displayAlign="after"/>
+      <region xml:id="top" tts:origin="10% 10%" tts:extent="80% 80%" tts:displayAlign="before"/>
+    </layout>
+  </head>
+  <body style="s">
+    <div>
+      <p xml:id="c1" begin="12f" end="48f" region="bottom">We ride at dawn.</p>
+      <p xml:id="c2" begin="60f" end="115f" region="bottom" ttm:role="dialog" ttm:agent="MAREN">Salt &amp; &lt;pepper&gt;,<br/>and nothing else.</p>
+      <p xml:id="c3" begin="200f" end="240f" region="top">HARBOUR OFFICE</p>
+      <p xml:id="c4" begin="107899f" end="107948f" region="bottom">Not ever.</p>
+    </div>
+  </body>
+</tt>
