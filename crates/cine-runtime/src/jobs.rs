@@ -16,6 +16,11 @@
 //! * **`media.thumbnail`** — one decoded picture, reduced to 320 pixels wide,
 //!   written to the project's cache (`cache/thumbnails/`). Cache class: it may be
 //!   deleted and made again, and nothing in the graph points at it.
+//! * **`multicam.sync`** — lines a multicam clip's angles up by what their
+//!   microphones heard. Each angle's sound is decoded (up to
+//!   [`SYNC_MAX_SECONDS`]), cross-correlated against the active angle's, and an
+//!   angle whose best match is not clearly better than chance is left alone and
+//!   reported rather than moved to a guess. The offsets are one undoable commit.
 
 use cine_jobs::{JobConfig, JobContext, JobId, JobRecord, JobSpec, JobSystem, Resource};
 use cine_media::ContentHash;
@@ -60,11 +65,229 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
             thumbnail(&project, &cache, ctx, spec)
         },
     );
+    let p = Arc::downgrade(project);
+    jobs.register("multicam.sync", move |ctx: &JobContext, spec: &JobSpec| {
+        let project = p.upgrade().ok_or("the project has closed")?;
+        sync_angles(&project, ctx, spec)
+    });
     Ok(jobs)
+}
+
+/// Sound analysed per angle when syncing, in seconds.
+pub const SYNC_MAX_SECONDS: f64 = 600.0;
+/// The rate angles are compared at. Sync needs to be right to well within a
+/// frame (42 ms at 24 fps); 16 kHz resolves 62.5 µs and costs a third of 48 kHz.
+pub const SYNC_RATE: u32 = 16_000;
+/// The least peak-to-mean correlation accepted as a match.
+///
+/// On its own this separates too little. Measured on real WAV files
+/// (`multicam_sync.rs`): angles of the same take scored 20–22, and twelve
+/// unrelated takes scored 4.6–8.7 — so the 6.0 first chosen would have lined up
+/// five strangers. It is kept as a floor, and [`SYNC_MIN_AGREEMENT`] decides.
+pub const SYNC_MIN_CONFIDENCE: f64 = 10.0;
+/// The least agreement — Pearson correlation of the two sounds' loudness
+/// envelopes at the offset found, over their overlap — accepted as a match.
+/// Sound from one take rises and falls together; sound from two does not.
+/// Measured: angles of one take agreed 0.9999; twelve unrelated takes ranged
+/// from -0.09 to 0.43, so 0.5 would have sat too near them.
+pub const SYNC_MIN_AGREEMENT: f64 = 0.8;
+/// Envelope window for agreement: 50 ms at [`SYNC_RATE`].
+const AGREEMENT_WINDOW: usize = 800;
+/// Least overlap, in envelope windows, agreement is judged on: two seconds.
+const AGREEMENT_MIN_OVERLAP: usize = 40;
+
+/// Pearson correlation of two sounds' loudness envelopes when the candidate is
+/// shifted by `offset_samples`, over the part where both exist. `None` when
+/// that overlap is too short to judge.
+pub fn envelope_agreement(
+    reference: &[f32],
+    candidate: &[f32],
+    offset_samples: i64,
+) -> Option<f64> {
+    let r = cine_timeline::sync::rms_envelope(reference, AGREEMENT_WINDOW);
+    let c = cine_timeline::sync::rms_envelope(candidate, AGREEMENT_WINDOW);
+    // Candidate window j corresponds to reference window j - lag.
+    let lag = offset_samples.div_euclid(AGREEMENT_WINDOW as i64);
+    let pairs: Vec<(f64, f64)> = (0..r.len())
+        .filter_map(|i| {
+            let j = i as i64 + lag;
+            (j >= 0 && (j as usize) < c.len()).then(|| (f64::from(r[i]), f64::from(c[j as usize])))
+        })
+        .collect();
+    if pairs.len() < AGREEMENT_MIN_OVERLAP {
+        return None;
+    }
+    let n = pairs.len() as f64;
+    let (mx, my) = pairs
+        .iter()
+        .fold((0.0, 0.0), |(a, b), (x, y)| (a + x / n, b + y / n));
+    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+    for (x, y) in &pairs {
+        sxy += (x - mx) * (y - my);
+        sxx += (x - mx) * (x - mx);
+        syy += (y - my) * (y - my);
+    }
+    if sxx <= 0.0 || syy <= 0.0 {
+        return Some(0.0);
+    }
+    Some(sxy / (sxx * syy).sqrt())
+}
+
+/// What syncing found for one angle.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct AngleSync {
+    pub key: String,
+    /// The media offset to record, when the match was good enough.
+    pub offset: Option<ucg_core::RationalTime>,
+    pub confidence: f64,
+    /// How well the two sounds' loudness agrees at that offset, when judged.
+    pub agreement: Option<f64>,
+    /// Why it was not synced, when it was not.
+    pub why_not: Option<String>,
+}
+
+/// Line angles up by sound: `reference` is the active angle's file, and each
+/// candidate is `(key, file)`. Pure with respect to the project, so it is
+/// testable on its own and the job only records what it returns.
+pub fn sync_offsets(
+    reference: &Path,
+    candidates: &[(String, PathBuf)],
+    keep_going: &mut dyn FnMut(f32) -> bool,
+) -> Result<Vec<AngleSync>, String> {
+    let total = candidates.len() as f32 + 1.0;
+    let reference =
+        cine_media::sound::decode_mono(reference, SYNC_RATE, SYNC_MAX_SECONDS, &mut |f| {
+            keep_going(f / total)
+        })
+        .map_err(|e| format!("the active angle's sound: {e}"))?;
+    let mut out = Vec::new();
+    for (i, (key, path)) in candidates.iter().enumerate() {
+        let base = (i as f32 + 1.0) / total;
+        let candidate =
+            match cine_media::sound::decode_mono(path, SYNC_RATE, SYNC_MAX_SECONDS, &mut |f| {
+                keep_going(base + f / total)
+            }) {
+                Ok(c) => c,
+                Err(e) => {
+                    out.push(AngleSync {
+                        key: key.clone(),
+                        offset: None,
+                        confidence: 0.0,
+                        agreement: None,
+                        why_not: Some(format!("its sound could not be read: {e}")),
+                    });
+                    continue;
+                }
+            };
+        let found =
+            cine_timeline::sync::find_offset(&reference.samples, &candidate.samples, SYNC_RATE);
+        let agreement =
+            envelope_agreement(&reference.samples, &candidate.samples, found.offset_samples);
+        let why_not = if found.confidence < SYNC_MIN_CONFIDENCE {
+            Some(format!(
+                "no clear match in its sound (confidence {:.1}, at least {SYNC_MIN_CONFIDENCE} needed)",
+                found.confidence
+            ))
+        } else {
+            match agreement {
+                None => {
+                    Some("too little of its sound overlaps the active angle's to judge".to_string())
+                }
+                Some(a) if a < SYNC_MIN_AGREEMENT => Some(format!(
+                    "no clear match in its sound: at the best offset its loudness agrees {a:.2}, \
+                     at least {SYNC_MIN_AGREEMENT} needed"
+                )),
+                Some(_) => None,
+            }
+        };
+        out.push(AngleSync {
+            key: key.clone(),
+            offset: why_not.is_none().then(|| {
+                cine_media::sound::media_offset(&reference, &candidate, found.offset_samples)
+            }),
+            confidence: found.confidence,
+            agreement,
+            why_not,
+        });
+    }
+    Ok(out)
+}
+
+fn sync_angles(project: &OmniProject, ctx: &JobContext, spec: &JobSpec) -> Result<J, String> {
+    let clip = spec.params["clip"]
+        .as_str()
+        .and_then(EntityId::parse)
+        .ok_or("the job names no clip")?;
+    let (active, candidates) = {
+        let g = project.engine.read();
+        let item = cine_timeline::graph::export_item(&g, clip).map_err(|e| e.to_string())?;
+        let cine_timeline::Item::Clip(c) = item else {
+            return Err("that is not a clip".into());
+        };
+        let assets = cine_timeline::graph::angles_of_clip(&g, clip);
+        let path_of = |key: &str| -> Option<PathBuf> {
+            assets
+                .get(key)
+                .and_then(|a| g.node(*a))
+                .and_then(|n| n.get_str(attrs::MEDIA_PATH))
+                .map(PathBuf::from)
+        };
+        let active =
+            path_of(&c.active_media_reference_key).ok_or("the active angle has no file")?;
+        let candidates: Vec<(String, PathBuf)> = c
+            .alternate_media_references
+            .keys()
+            .filter_map(|k| path_of(k).map(|p| (k.clone(), p)))
+            .collect();
+        if candidates.is_empty() {
+            return Err("the clip has no other angles to sync".into());
+        }
+        (active, candidates)
+    };
+    let found = sync_offsets(&active, &candidates, &mut |f| {
+        ctx.progress(f, "listening");
+        !ctx.is_cancelled()
+    })?;
+    let offsets: Vec<(String, ucg_core::RationalTime)> = found
+        .iter()
+        .filter_map(|a| a.offset.map(|o| (a.key.clone(), o)))
+        .collect();
+    if !offsets.is_empty() {
+        project
+            .engine
+            .transact("sync angles by sound", |tx| {
+                cine_timeline::graph::set_angle_offsets(tx, clip, &offsets)
+                    .map_err(|e| UcgError::Aborted(e.to_string()))
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(json!({ "synced": offsets.len(), "angles": found }))
 }
 
 /// Build the spec for a kind of work a client asked for.
 pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec, String> {
+    if kind == "multicam.sync" {
+        let clip = params
+            .get("clip")
+            .and_then(J::as_str)
+            .and_then(EntityId::parse)
+            .ok_or("missing entity param `clip`")?;
+        let name = {
+            let g = project.engine.read();
+            let node = g.node(clip).ok_or("no such clip in this project")?;
+            if node.kind.as_str() != ucg_schema::kinds::NLE_CLIP {
+                return Err(format!("{clip} is not a clip"));
+            }
+            node.get_str(attrs::NAME).unwrap_or("clip").to_string()
+        };
+        return Ok(JobSpec::new(
+            kind,
+            &format!("sync:{clip}:{}", project.engine.revision()),
+            &format!("Sync angles by sound · {name}"),
+            Resource::Cpu,
+        )
+        .params(json!({ "clip": clip })));
+    }
     let media = params
         .get("media")
         .and_then(J::as_str)
@@ -101,7 +324,7 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             .attempts(2))
         }
         other => Err(format!(
-            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail)"
+            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, multicam.sync)"
         )),
     }
 }

@@ -312,9 +312,24 @@ whose camera had not started rolling over this part of the take simply does not
 have the frames. Switching to it is refused by name, with how many frames are
 missing, rather than cut to and discovered black in a screening.
 
-There is no quad view: showing four angles at once needs four decoders running
-together, and that is a separate capability. Nothing here syncs angles
-automatically either; the offsets have to already be in the assets.
+Angles are lined up by an **offset** each: where that camera's media sits
+against the take. It is recorded on the clip, not by rewriting the file's
+range, because the same file can be an angle of two takes; switching carries the
+take's moment into the other camera's own media through the difference of the
+two offsets. *Sync by sound* sets them in the background: every angle's sound is
+decoded, cross-correlated with the live angle's, and accepted only if two
+independent tests agree — a correlation peak well above the rest, and the two
+sounds' loudness rising and falling together at that offset. Measured on real
+files, angles of one take agreed 0.9999 and twelve unrelated takes −0.09 to
+0.43. The first threshold chosen, on the peak alone, would have lined up five of
+those twelve strangers; an angle that does not clearly match is now left alone
+and reported.
+
+The record monitor's *Angles* mode shows up to four angles of the clip under the
+playhead at once, each a real decode of the picture that angle's own media has at
+that moment of the take, or the reason it has none — not rolling yet, stopped
+rolling. Clicking one cuts to it there. Like the record monitor it steps; live
+four-angle playback needs four decoders in the native player, and is not done.
 
 ### Captions
 

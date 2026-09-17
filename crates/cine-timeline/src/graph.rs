@@ -1358,6 +1358,120 @@ pub fn switch_angle(tx: &mut Tx, track: EntityId, at: RationalTime, key: &str) -
     Ok(id)
 }
 
+/// Record where each named angle's media sits against the take — what a sync
+/// by sound, or a slate, established. Keys the clip does not carry are refused.
+pub fn set_angle_offsets(
+    tx: &mut Tx,
+    clip: EntityId,
+    offsets: &[(String, RationalTime)],
+) -> Result<()> {
+    require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;
+    let (track, index) = place_of_item(tx.graph(), clip)?;
+    let mut t = export_track(tx.graph(), track)?;
+    crate::session::ensure_unlocked(&t)?;
+    let Item::Clip(c) = &mut t.children[index] else {
+        return Err(Error::NotAnItem(index));
+    };
+    let keys = c.reference_keys();
+    for (key, offset) in offsets {
+        if !keys.contains(key) {
+            return Err(Error::Edit(format!(
+                "`{key}` is not one of this clip's angles ({})",
+                keys.join(", ")
+            )));
+        }
+        c.set_angle_offset(key, *offset);
+    }
+    write_one_track(tx, track, &t)
+}
+
+/// One angle of the multicam clip under an instant.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct AngleAt {
+    pub key: String,
+    pub active: bool,
+    pub asset: Option<EntityId>,
+    pub name: String,
+    /// Where this angle's media sits against the take.
+    pub offset: RationalTime,
+    /// The media time this angle shows at the instant, when it has media there.
+    pub media: Option<RationalTime>,
+    /// Why it shows nothing, when it does not.
+    pub why_not: Option<String>,
+}
+
+/// The angles of the multicam clip showing at `t` on a sequence: for each, the
+/// moment of its own media that corresponds to the take at that instant.
+///
+/// The clip is the one the picture list shows at `t` — the top visible picture
+/// track — so this is the multicam view of exactly what is on screen. `None`
+/// when nothing shows or what shows has one reference.
+pub fn angles_at(
+    graph: &Graph,
+    timeline: EntityId,
+    t: RationalTime,
+) -> Result<Option<(EntityId, Vec<AngleAt>)>> {
+    let composed = export_timeline(graph, timeline)?;
+    let list = crate::flatten::picture_segments(&composed);
+    let Some(segment) = list.segments.iter().find(|s| s.record.contains(t)) else {
+        return Ok(None);
+    };
+    let Some(track) = composed.tracks().nth(segment.track) else {
+        return Ok(None);
+    };
+    let Some(Item::Clip(clip)) = track.children.get(segment.item) else {
+        return Ok(None);
+    };
+    let (Some(id), Some(span)) = (segment.clip, track.range_of_child(segment.item)) else {
+        return Ok(None);
+    };
+    let keys = clip.reference_keys();
+    if keys.len() < 2 {
+        return Ok(None);
+    }
+    let Some(active_media) = clip.media_time_at(span.start_time, t) else {
+        return Ok(None);
+    };
+    let assets = angles_of_clip(graph, id);
+    let active_offset = clip.angle_offset(&clip.active_media_reference_key);
+    let mut out = Vec::new();
+    for key in keys {
+        let active = key == clip.active_media_reference_key;
+        let reference = clip.media_reference_named(&key);
+        let offset = clip.angle_offset(&key);
+        let media = active_media.checked_add(&offset.checked_sub(&active_offset));
+        let available = reference.and_then(MediaReference::available_range);
+        let why_not = match available {
+            None => Some("the file declares no range, so which picture is unknown".to_string()),
+            Some(a) if media < a.start_time => Some(format!(
+                "not rolling yet: starts {} frames later",
+                a.start_time.checked_sub(&media).to_frames()
+            )),
+            Some(a) if media >= a.end_time_exclusive() => Some(format!(
+                "stopped rolling {} frames earlier",
+                media.checked_sub(&a.end_time_exclusive()).to_frames() + 1
+            )),
+            Some(_) => None,
+        };
+        let asset = assets.get(&key).copied();
+        let name = asset
+            .and_then(|a| graph.node(a))
+            .and_then(|n| n.get_str(attrs::NAME))
+            .map(str::to_string)
+            .unwrap_or_else(|| key.clone());
+        out.push(AngleAt {
+            media: why_not.is_none().then_some(media),
+            key,
+            active,
+            asset,
+            name,
+            offset,
+            why_not,
+        });
+    }
+    Ok(Some((id, out)))
+}
+
 /// Play a different angle on one clip, without splitting anything.
 pub fn set_clip_angle(tx: &mut Tx, clip: EntityId, key: &str) -> Result<()> {
     require_kind(tx.graph(), clip, kinds::NLE_CLIP)?;

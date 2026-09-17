@@ -568,6 +568,9 @@ impl From<Transition> for Item {
     }
 }
 
+/// Clip metadata key holding each angle's offset against the take.
+pub const ANGLE_OFFSETS_KEY: &str = "cine_angle_offsets";
+
 /// The key OTIO uses for a clip's primary media reference.
 pub const DEFAULT_MEDIA_KEY: &str = "DEFAULT_MEDIA";
 
@@ -815,7 +818,15 @@ impl Clip {
                 self.reference_keys().join(", ")
             ));
         };
-        if let (Some(source), Some(available)) = (self.source_range, wanted.available_range()) {
+        // The same moment of the take in the other camera's own media time:
+        // shifted by the difference between the two angles' offsets.
+        let shift = self
+            .angle_offset(key)
+            .checked_sub(&self.angle_offset(&self.active_media_reference_key));
+        let shifted = self
+            .source_range
+            .map(|r| TimeRange::new(r.start_time.checked_add(&shift), r.duration));
+        if let (Some(source), Some(available)) = (shifted, wanted.available_range()) {
             if source.start_time < available.start_time {
                 return Err(format!(
                     "`{key}` starts {} frames after this part of the take",
@@ -839,7 +850,41 @@ impl Clip {
         let was_key = std::mem::replace(&mut self.active_media_reference_key, key.to_string());
         self.alternate_media_references.remove(key);
         self.alternate_media_references.insert(was_key, was);
+        self.source_range = shifted;
         Ok(())
+    }
+
+    /// Where an angle's media sits against the take: the time in that angle's
+    /// own media at the take's common zero. Zero for an angle nobody synced,
+    /// which says its media and the take's clock already agree.
+    ///
+    /// Kept in the clip's metadata (`cine_angle_offsets`) rather than on the
+    /// reference, because an offset is a fact about this take's cameras, not
+    /// about the file: the same file can be an angle of two takes. Metadata
+    /// also round-trips through OTIO and the graph unchanged.
+    pub fn angle_offset(&self, key: &str) -> RationalTime {
+        self.metadata
+            .get(ANGLE_OFFSETS_KEY)
+            .and_then(|m| m.get(key))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_else(|| RationalTime::exact(0, ucg_core::Rate::whole(1).expect("1 Hz")))
+    }
+
+    /// Record where an angle's media sits against the take.
+    pub fn set_angle_offset(&mut self, key: &str, offset: RationalTime) {
+        let entry = self
+            .metadata
+            .entry(ANGLE_OFFSETS_KEY.to_string())
+            .or_insert_with(|| serde_json::Value::Object(Default::default()));
+        if !entry.is_object() {
+            *entry = serde_json::Value::Object(Default::default());
+        }
+        if let serde_json::Value::Object(map) = entry {
+            map.insert(
+                key.to_string(),
+                serde_json::to_value(offset).unwrap_or(serde_json::Value::Null),
+            );
+        }
     }
 
     /// The range actually played: `source_range`, else the available range.

@@ -142,6 +142,25 @@ export interface CaptionsView {
 
 export type CaptionFormat = "imsc" | "srt" | "vtt";
 
+/** One angle of a multicam clip at an instant, as the runtime resolved it. */
+export interface AngleAt {
+  key: string;
+  active: boolean;
+  asset: string | null;
+  name: string;
+  /** Where this angle's media sits against the take (set by syncing). */
+  offset: Time;
+  media: Time | null;
+  /** The picture of the file this angle shows, when it has one here. */
+  index: number | null;
+  why_not: string | null;
+}
+
+export interface AnglesAt {
+  clip: string | null;
+  angles: AngleAt[];
+}
+
 /** An edit, exactly as `cine_timeline::EditOp` deserializes it. */
 export type EditOp =
   | { op: "ripple_trim"; index: number; edge: Edge; delta: ExactTime }
@@ -841,6 +860,10 @@ export class RpcClient {
       "export_captions",
       { timeline, language, format },
     );
+  }
+  /** Every angle of the multicam clip on screen at a time: which picture each shows, or why none. */
+  anglesAt(timeline: string, time: ExactTime) {
+    return this.call<AnglesAt>("angles_at", { timeline, time });
   }
   /** Give a clip more angles: assets it could play instead of the one it plays. */
   addAngles(clip: string, angles: { key: string; media: string }[]) {

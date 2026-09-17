@@ -905,6 +905,45 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "angles_at" => {
+            // Every angle of the multicam clip on screen at `time`: which
+            // picture of which file each shows, or why none.
+            let timeline = entity(params, "timeline")?;
+            let at: RationalTime =
+                serde_json::from_value(params.get("time").cloned().ok_or("missing param `time`")?)
+                    .map_err(|e| format!("invalid time: {e}"))?;
+            let g = p.engine.read();
+            match cine_timeline::graph::angles_at(&g, timeline, at).map_err(|e| e.to_string())? {
+                None => json!({ "clip": J::Null, "angles": [] }),
+                Some((clip, angles)) => json!({
+                    "clip": clip,
+                    "angles": angles.iter().map(|a| {
+                        let available = a.asset
+                            .and_then(|id| g.node(id))
+                            .and_then(|n| n.get(attrs::AVAILABLE_RANGE))
+                            .and_then(Value::as_range);
+                        // Pictures are counted at the rate the file declares
+                        // its range in, as the record monitor counts them.
+                        let index = a.media.zip(available).map(|(m, r)| {
+                            m.checked_sub(&r.start_time)
+                                .rescale_checked(r.start_time.rate_exact(), ucg_core::Rounding::Floor)
+                                .0
+                                .ticks()
+                        });
+                        json!({
+                            "key": a.key,
+                            "active": a.active,
+                            "asset": a.asset,
+                            "name": a.name,
+                            "offset": crate::projection::time(a.offset),
+                            "media": a.media.map(crate::projection::time),
+                            "index": index,
+                            "why_not": a.why_not,
+                        })
+                    }).collect::<Vec<_>>(),
+                }),
+            }
+        }
         "add_angles" => {
             let clip = entity(params, "clip")?;
             let angles: Vec<(String, EntityId)> = params

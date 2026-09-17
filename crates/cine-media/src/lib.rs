@@ -32,6 +32,7 @@ pub mod probe;
 pub mod reader;
 pub mod schedule;
 pub mod sequence_audio;
+pub mod sound;
 pub mod time;
 pub mod ucg;
 pub mod video;

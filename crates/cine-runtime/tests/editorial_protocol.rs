@@ -822,6 +822,21 @@ fn angles_can_be_attached_and_cut_between() {
     assert_eq!(item["angles"].as_array().unwrap().len(), 2);
     assert_eq!(item["angle"], "DEFAULT_MEDIA");
 
+    // Every angle at an instant: which picture of which file each shows.
+    let view = c.call("angles_at", json!({ "timeline": tl, "time": frames(10) }));
+    assert_eq!(view["clip"], clip.as_str());
+    let angles = view["angles"].as_array().unwrap();
+    assert_eq!(angles.len(), 2);
+    let active = angles.iter().find(|a| a["active"] == true).unwrap();
+    assert_eq!(active["asset"], assets[0].1.as_str());
+    assert_eq!(active["index"], 10, "ten frames into the cut is picture 10");
+    let other = angles.iter().find(|a| a["key"] == "B").unwrap();
+    assert_eq!(other["asset"], assets[1].1.as_str());
+    assert!(
+        other["index"].is_number() || other["why_not"].is_string(),
+        "{other}"
+    );
+
     // Cut to B at frame 24: one switch is one new event.
     let r = c.call(
         "switch_angle",

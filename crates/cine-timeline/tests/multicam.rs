@@ -329,3 +329,98 @@ fn angles_survive_an_otio_round_trip() {
     assert_eq!(c.active_media_reference_key, "DEFAULT_MEDIA");
     assert_eq!(back, timeline, "and nothing else moved");
 }
+
+/// Camera B started rolling two seconds after A. With that offset recorded, a
+/// switch lands on the same moment of the take in B's own media, and the view
+/// of every angle at an instant says which picture each shows or why none.
+#[test]
+fn offsets_put_every_angle_on_the_same_moment_of_the_take() {
+    use cine_timeline::graph::{angles_at, set_angle_offsets};
+    let (engine, video, ids) = setup(0);
+    let clip = engine.read().children(video)[0];
+    attach(&engine, clip, &[("B", ids[1]), ("C", ids[2])]).expect("attached");
+    // B's media is 48 frames behind the take's: moment 100 of A is 52 of B.
+    engine
+        .transact("sync", |tx| {
+            set_angle_offsets(tx, clip, &[("B".into(), f(-48))])
+                .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .unwrap();
+
+    // What each angle shows ten frames into the cut.
+    let seq = engine
+        .read()
+        .parent(engine.read().parent(video).unwrap())
+        .unwrap();
+    let (at_clip, angles) = angles_at(&engine.read(), seq, f(10))
+        .unwrap()
+        .expect("a multicam clip");
+    assert_eq!(at_clip, clip);
+    let by = |k: &str| angles.iter().find(|a| a.key == k).unwrap().clone();
+    assert!(by("DEFAULT_MEDIA").active);
+    assert_eq!(by("DEFAULT_MEDIA").media, Some(f(10)));
+    assert_eq!(by("C").media, Some(f(10)), "C shares A's clock");
+    assert_eq!(by("B").media, None, "B was not rolling ten frames in");
+    assert!(
+        by("B")
+            .why_not
+            .as_deref()
+            .unwrap()
+            .contains("starts 38 frames later"),
+        "{:?}",
+        by("B").why_not
+    );
+    assert_eq!(by("B").asset, Some(ids[1]));
+
+    // A switch to B at frame 60 plays B's picture 12, the same moment.
+    engine
+        .transact("switch", |tx| {
+            switch_angle(tx, video, f(60), "B")
+                .map(|_| ())
+                .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .expect("B is rolling by then");
+    let track = export_track(&engine.read(), video).unwrap();
+    let b = track.children[1].as_clip().unwrap();
+    assert_eq!(b.active_media_reference_key, "B");
+    assert_eq!(
+        b.source_range,
+        Some(TimeRange::from_frames(12, 36, 24.0)),
+        "the take's frame 60 is B's frame 12"
+    );
+    // And switching back puts it back on A's clock exactly.
+    engine
+        .transact("back", |tx| {
+            switch_angle(tx, video, f(60), "DEFAULT_MEDIA")
+                .map(|_| ())
+                .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .unwrap();
+    let track = export_track(&engine.read(), video).unwrap();
+    assert_eq!(
+        track.children[1].as_clip().unwrap().source_range,
+        Some(TimeRange::from_frames(60, 36, 24.0))
+    );
+
+    // Before B rolled, switching to it is refused with how far off it is.
+    let e = engine
+        .transact("too early", |tx| {
+            switch_angle(tx, video, f(24), "B")
+                .map(|_| ())
+                .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .expect_err("B had not started");
+    assert!(e.to_string().contains("24 frames"), "{e}");
+
+    // An angle the clip does not carry cannot be given an offset.
+    let e = engine
+        .transact("bad key", |tx| {
+            set_angle_offsets(tx, clip, &[("Z".into(), f(1))])
+                .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .expect_err("no angle Z");
+    assert!(
+        e.to_string().contains("not one of this clip's angles"),
+        "{e}"
+    );
+}

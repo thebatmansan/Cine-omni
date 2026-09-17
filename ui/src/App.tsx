@@ -355,6 +355,17 @@ export function App() {
             active={monitor === "record"}
             onActivate={() => setMonitor("record")}
             onStep={stepRecord}
+            onSwitchAngle={(key) => {
+              if (!timeline || !playhead) return;
+              const track = timeline.tracks.find(
+                (t) =>
+                  t.kind === "video" &&
+                  t.items.some(
+                    (i) => i.angles && i.at.start.ticks <= playheadTicks && playheadTicks < i.at.end.ticks,
+                  ),
+              );
+              if (track?.id) void session.run(`angle ${key}`, () => client.switchAngle(track.id!, playhead, key));
+            }}
           />
           <div className="right-stack">
             <div className="panel tabs-panel">

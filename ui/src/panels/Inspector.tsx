@@ -39,7 +39,12 @@ export function Inspector({
           <>
             <ClipDetail item={selection.item} track={selection.track} />
             {selection.item.kind === "clip" && selection.item.id && onAngle && (
-              <Angles item={selection.item} clip={selection.item.id} onAngle={onAngle} />
+              <Angles
+                item={selection.item}
+                clip={selection.item.id}
+                onAngle={onAngle}
+                onSync={onJob ? (clip) => onJob("multicam.sync", { clip }) : undefined}
+              />
             )}
             {selection.item.kind === "clip" && selection.item.id && onRetime && (
               <Speed item={selection.item} clip={selection.item.id} onRetime={onRetime} />
@@ -89,10 +94,12 @@ function Angles({
   item,
   clip,
   onAngle,
+  onSync,
 }: {
   item: TimelineItem;
   clip: string;
   onAngle(clip: string, key: string): void;
+  onSync?(clip: string): void;
 }) {
   if (!item.angles || item.angles.length < 2) return null;
   return (
@@ -110,6 +117,16 @@ function Angles({
           </button>
         ))}
       </div>
+      {onSync && (
+        <div className="row">
+          <button
+            title="Line the angles up by what their microphones heard. Runs in the background; an angle whose sound does not clearly match is left alone and reported."
+            onClick={() => onSync(clip)}
+          >
+            Sync by sound
+          </button>
+        </div>
+      )}
       <div className="note">
         An angle the runtime refuses is one whose camera was not rolling over this
         part of the take; it says how much is missing rather than cutting to black.
