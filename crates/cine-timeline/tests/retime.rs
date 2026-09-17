@@ -275,11 +275,17 @@ fn the_picture_list_says_how_fast_the_media_runs() {
     let s = &list.segments[0];
     assert_eq!(s.record, TimeRange::from_frames(0, 24, 24.0));
     assert_eq!(s.source_start, f(100));
-    let speed = s.speed.expect("a speed");
-    assert_eq!((speed.media, speed.track, speed.reversed), (2, 1, false));
+    let timing = s.timing.as_ref().expect("a timing");
+    assert!(timing.map.is_constant() && !timing.map.reversed);
+    assert_eq!(
+        (timing.record, timing.media),
+        (f(0), f(100)),
+        "anchored at the clip"
+    );
     // Ten frames in is twenty media frames in, floored onto real pictures.
-    assert_eq!(speed.media_offset(f(10), Rate::whole(24).unwrap()), f(20));
-    assert_eq!(speed.media_offset(f(1), Rate::whole(24).unwrap()), f(2));
+    let r24 = Rate::whole(24).unwrap();
+    assert_eq!(timing.media_at(f(10), r24), f(120));
+    assert_eq!(timing.media_at(f(1), r24), f(102));
 
     // Reversed, the offset runs the other way from a segment start that is
     // already the last frame of the range.
@@ -289,8 +295,8 @@ fn the_picture_list_says_how_fast_the_media_runs() {
     ));
     let list = picture_segments(&back);
     assert_eq!(list.segments[0].source_start, f(147));
-    let speed = list.segments[0].speed.unwrap();
-    assert_eq!(speed.media_offset(f(7), Rate::whole(24).unwrap()), f(-7));
+    let timing = list.segments[0].timing.as_ref().unwrap();
+    assert_eq!(timing.media_at(f(7), Rate::whole(24).unwrap()), f(140));
 }
 
 /// An EDL writes the speed as an M2 record, the record columns as the track
@@ -455,5 +461,172 @@ fn keeping_pitch_survives_otio_and_reaches_the_sound_segment() {
     assert_eq!(back, timeline);
     let sound = cine_timeline::sound_segments(&back);
     assert!(sound[0].keep_pitch);
-    assert_eq!(sound[0].speed.map(|s| (s.media, s.track)), Some((2, 1)));
+    assert_eq!(
+        sound[0].timing.as_ref().map(|t| t.map.consumed()),
+        Some(ucg_core::Q::int(2)),
+        "48 media frames at 24 fps, over one second of track"
+    );
+}
+
+/// A speed ramp: real time to double speed across two seconds of track.
+fn ramped(name: &str) -> Clip {
+    use ucg_core::{Ramp, Ratio};
+    let mut c = clip(name);
+    // 1x -> 2x over 48 frames of track consumes 72 frames of media.
+    c.source_range = Some(TimeRange::from_frames(100, 72, 24.0));
+    c.retime = Some(Retime {
+        ramp: Some(vec![Ramp {
+            length: f(48),
+            from: Ratio::new(1, 1),
+            to: Ratio::new(2, 1),
+        }]),
+        ..Retime::new(f(48), false)
+    });
+    c
+}
+
+/// A ramp is exact: the picture at each instant is the integral of the speed,
+/// floored onto real frames, and it speeds up as it goes.
+#[test]
+fn a_ramp_shows_the_picture_the_integral_of_its_speed_says() {
+    let c = ramped("A");
+    assert!(c.is_ramped());
+    assert_eq!(c.duration(), f(48));
+    let at = |n: i64| c.media_time_at(f(0), f(n)).unwrap();
+    assert_eq!(at(0), f(100), "starts on the in point");
+    // Halfway (1 s): 1·1 + 1·1²/(2·2) = 1.25 s = 30 frames in.
+    assert_eq!(at(24), f(130));
+    // Near the end the speed is nearly 2: consecutive frames skip.
+    assert_eq!(at(47).checked_sub(&at(46)), f(2));
+    // And early on it is nearly 1: consecutive frames advance by one.
+    assert_eq!(at(2).checked_sub(&at(1)), f(1));
+    // It never reads past the range.
+    assert!(at(47) < f(172));
+}
+
+/// A ramp survives the OTIO file and the graph, exactly.
+#[test]
+fn a_ramp_survives_otio_and_the_flattened_list_reads_it() {
+    let mut timeline = Timeline::new("t");
+    timeline.tracks.children.push(Composable::Track(
+        Track::new("V1", TrackKind::Video)
+            .with(ramped("A"))
+            .with(clip("B")),
+    ));
+    let text = write_otio(&timeline);
+    assert!(text.contains("\"ramp\""), "{text}");
+    assert!(
+        text.contains("\"time_scalar\": 1.5"),
+        "the average for other tools: {text}"
+    );
+    let back = read_otio(&text).unwrap();
+    assert_eq!(back, timeline);
+
+    let list = picture_segments(&back);
+    let t = list.segments[0].timing.as_ref().expect("timed");
+    let r24 = Rate::whole(24).unwrap();
+    assert_eq!(
+        t.media_at(f(24), r24),
+        f(130),
+        "the list reads the ramp, not an average"
+    );
+    assert_eq!(
+        list.segments[1].record.start_time,
+        f(48),
+        "and the next clip starts after it"
+    );
+}
+
+/// Cutting inside a ramp is refused, with the reason, rather than approximated.
+#[test]
+fn a_cut_inside_a_ramp_is_refused_with_the_reason() {
+    let mut track = Track::new("V1", TrackKind::Video).with(ramped("A"));
+    let e = split_at(&mut track, f(10)).expect_err("inside the ramp");
+    assert!(e.to_string().contains("speed ramp"), "{e}");
+    assert_eq!(track.children.len(), 1, "and nothing was cut");
+}
+
+/// Through the graph: setting a ramp decides the track length and the media
+/// consumed, and a ramp that would read past the shot is refused.
+#[test]
+fn setting_a_ramp_decides_both_lengths_and_refuses_media_that_is_not_there() {
+    use ucg_core::{Ramp, Ratio};
+    let engine = Engine::new();
+    let project = EntityId::from_key("project:test");
+    let asset = EntityId::from_key("media:file:shot");
+    let mut video = EntityId::nil();
+    engine
+        .transact("setup", |tx| {
+            tx.create_with_id(project, kinds::PROJECT)?;
+            tx.create_with_id(asset, kinds::ASSET_MEDIA)?;
+            tx.set(asset, attrs::MEDIA_PATH, "/footage/A001C001.mov")?;
+            tx.set(
+                asset,
+                attrs::AVAILABLE_RANGE,
+                TimeRange::from_frames(0, 240, 24.0),
+            )?;
+            let seq = create_sequence(tx, project, "Ramp", Rate::whole(24).unwrap())
+                .map_err(|e| UcgError::Aborted(e.to_string()))?;
+            let stack = tx.graph().children(seq)[0];
+            let first = tx
+                .graph()
+                .children(stack)
+                .into_iter()
+                .find(|c| tx.graph().node(*c).unwrap().kind.as_str() == kinds::NLE_TRACK)
+                .unwrap();
+            video = sibling_tracks(tx.graph(), first).unwrap()[0];
+            cine_timeline::graph::place_material(
+                tx,
+                &[video],
+                f(0),
+                &cine_timeline::graph::ClipSpec {
+                    media: asset,
+                    source_range: TimeRange::from_frames(100, 48, 24.0),
+                    name: None,
+                },
+                false,
+            )
+            .map(|_| ())
+            .map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .unwrap();
+    let clip = engine.read().children(video)[0];
+    let ramp = |to: i64| Retime {
+        ramp: Some(vec![Ramp {
+            length: f(48),
+            from: Ratio::new(1, 1),
+            to: Ratio::new(to, 1),
+        }]),
+        ..Retime::new(f(1), false)
+    };
+    engine
+        .transact("ramp", |tx| {
+            set_clip_retime(tx, clip, Some(ramp(2))).map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .unwrap();
+    let track = export_track(&engine.read(), video).unwrap();
+    let c = track.children[0].as_clip().unwrap();
+    assert_eq!(
+        c.duration(),
+        f(48),
+        "the ramp's segments decide the track length"
+    );
+    assert_eq!(
+        c.source_range,
+        Some(TimeRange::from_frames(100, 72, 24.0)),
+        "and what they consume decides the media"
+    );
+    assert!(c.is_ramped());
+
+    // 1x -> 10x over two seconds consumes 11 s = 264 frames; the shot has 140
+    // after the in point.
+    let e = engine
+        .transact("too far", |tx| {
+            set_clip_retime(tx, clip, Some(ramp(10))).map_err(|e| UcgError::Aborted(e.to_string()))
+        })
+        .expect_err("past the end of the shot");
+    assert!(
+        e.to_string().contains("more media than the shot has"),
+        "{e}"
+    );
 }

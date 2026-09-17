@@ -35,6 +35,20 @@ pub fn time(t: RationalTime) -> J {
     })
 }
 
+/// How a retimed stretch runs, for a client: a constant speed as its exact
+/// ratio, a ramp as its segments with the fastest speed for a badge.
+fn timing_json(map: &ucg_core::TimeMap) -> J {
+    match map.constant_speed() {
+        Some(r) => json!({ "media": r.num, "track": r.den, "reversed": map.reversed }),
+        None => json!({
+            "ramp": true,
+            "reversed": map.reversed,
+            "fastest": map.max_speed(),
+            "segments": map.segments.len(),
+        }),
+    }
+}
+
 /// A clip's speed: the exact ratio, and a label for a badge.
 ///
 /// The label is display only — `2x`, `-1x`, `0.3333x` — and the ratio beside
@@ -139,8 +153,25 @@ pub fn timeline(graph: &Graph, id: EntityId) -> Result<J, String> {
                     .and_then(cine_timeline::session::handles)
                     .map(|(head, tail)| json!({ "head": time(head), "tail": time(tail) })),
                 "link": clip.and_then(cine_timeline::session::link_of),
-                "speed": clip.and_then(|c| c.speed()).map(speed_json),
-                "keep_pitch": clip.and_then(|c| c.retime).is_some_and(|r| r.keep_pitch),
+                // For a ramp the ratio is its average, and the badge says ramp.
+                "speed": clip.and_then(|c| c.speed().map(|s| {
+                    let mut j = speed_json(s);
+                    if c.is_ramped() {
+                        j["label"] = json!("ramp");
+                        j["ramp"] = json!(true);
+                    }
+                    j
+                })),
+                "keep_pitch": clip.and_then(|c| c.retime.as_ref()).is_some_and(|r| r.keep_pitch),
+                // A ramp's segments as an editor reads them: length in frames of
+                // the clip's track time, and each end's speed as an exact ratio.
+                "ramp": clip.and_then(|c| c.retime.as_ref()).and_then(|r| r.ramp.as_ref()).map(|ramp| {
+                    ramp.iter().map(|s| json!({
+                        "length": time(s.length),
+                        "from": [s.from.num, s.from.den],
+                        "to": [s.to.num, s.to.den],
+                    })).collect::<Vec<_>>()
+                }),
                 // Angles, when the clip carries more than one reference. The
                 // active one is `angle`; a clip with one reference has neither.
                 "angles": clip
@@ -338,13 +369,11 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
     // floors onto the asset's frame grid, so this never invents a picture
     // between two pictures.
     let into = at.checked_sub(&entry.record.start_time);
-    let offset = entry.offset.map(|o| {
-        let media = match (entry.speed, available) {
-            (Some(s), Some(a)) => s.media_offset(into, a.start_time.rate_exact()),
-            _ => into,
-        };
-        o.checked_add(&media)
-    });
+    let offset = match (&entry.timing, available) {
+        // Anchored at the clip's start, so a ramp is read from its beginning.
+        (Some(t), Some(a)) => Some(t.media_at(at, a.start_time.rate_exact())),
+        _ => entry.offset.map(|o| o.checked_add(&into)),
+    };
     let index = offset.zip(available).map(|(o, a)| {
         // Pictures are counted at the rate the asset declares its range in.
         let (t, _) = o.rescale_checked(a.start_time.rate_exact(), Rounding::Floor);
@@ -360,9 +389,7 @@ pub fn picture_at(graph: &Graph, timeline: EntityId, at: RationalTime) -> Result
         "name": entry.name,
         "asset": entry.asset,
         "online": entry.online,
-        "speed": entry.speed.map(|s| json!({
-            "media": s.media, "track": s.track, "reversed": s.reversed,
-        })),
+        "speed": entry.timing.as_ref().map(|t| timing_json(&t.map)),
         "playable": entry.unplayable().is_none(),
         "why_not": entry.unplayable(),
         "source": offset.zip(available).map(|(o, a)| time(a.start_time.checked_add(&o))),
@@ -386,9 +413,7 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<J, String> {
             "name": e.name,
             "asset": e.asset,
             "offset": e.offset.map(time),
-            "speed": e.speed.map(|s| json!({
-                "media": s.media, "track": s.track, "reversed": s.reversed,
-            })),
+            "speed": e.timing.as_ref().map(|t| timing_json(&t.map)),
             "playable": e.unplayable().is_none(),
             "why_not": e.unplayable(),
         })).collect::<Vec<_>>(),

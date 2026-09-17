@@ -48,7 +48,7 @@ use cine_audio::speed::{cutoff_for, KernelTable, Stepper, HALF};
 use cine_audio::stretch::{Stretch, FRAME};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use ucg_core::{Rate, RationalTime, Rounding, Speed, TimeRange};
+use ucg_core::{Rate, RationalTime, Rounding, TimeMap, TimeRange};
 
 /// One clip's sound on the sequence.
 #[derive(Clone, Debug, PartialEq)]
@@ -60,8 +60,9 @@ pub struct SoundEntry {
     /// backwards from there.
     pub offset: Option<RationalTime>,
     pub name: String,
-    /// How fast the media runs against record time. `None` is real time.
-    pub speed: Option<Speed>,
+    /// How the media runs against record time, anchored at `record.start_time`
+    /// and `offset`: a constant speed or a ramp. `None` is real time.
+    pub map: Option<TimeMap>,
     /// Keep pitch while the speed changes (a time stretch) instead of
     /// varispeed. Ignored at real time.
     pub keep_pitch: bool,
@@ -269,19 +270,36 @@ impl AudioSource for SequenceAudio {
                 continue;
             };
             let file_rate = track.rate;
-            let (media, per, reversed) = match entry.speed {
-                Some(s) => (s.media, s.track, s.reversed),
-                None => (1, 1, false),
+            let reversed = entry.map.as_ref().is_some_and(|m| m.reversed);
+            // A constant speed is one exact ratio, stepped in integer arithmetic;
+            // a ramp is evaluated per sample from its exact map. Both land on the
+            // same positions for a constant map.
+            let constant = match &entry.map {
+                None => Some((1i64, 1i64)),
+                Some(m) => m.constant_speed().map(|r| (r.num, r.den)),
             };
-            let stepper = Stepper::for_speed(
-                (media, per),
-                (file_rate.num(), file_rate.den()),
-                (rate.num(), rate.den()),
-            );
+            let stepper = constant.map(|(media, per)| {
+                Stepper::for_speed(
+                    (media, per),
+                    (file_rate.num(), file_rate.den()),
+                    (rate.num(), rate.den()),
+                )
+            });
+            let map = entry.map.clone();
+            let position = move |u: i64| -> (i64, f64) {
+                match (&stepper, &map) {
+                    (Some(s), _) => s.position(u),
+                    (None, Some(m)) => m.sample_position(u, rate, file_rate),
+                    (None, None) => (u, 0.0),
+                }
+            };
+            let fastest = entry.map.as_ref().map_or(1.0, TimeMap::max_speed)
+                * (f64::from(file_rate.num()) / f64::from(file_rate.den()))
+                / (f64::from(rate.num()) / f64::from(rate.den()));
             let start = track.anchor + offset.rescale_checked(file_rate, Rounding::Floor).0.ticks();
             let dest = |s: i64| base + (s - from) as usize * 2;
 
-            if stepper.is_identity() && !reversed {
+            if stepper.is_some_and(|s| s.is_identity()) && !reversed {
                 // One-for-one from a file at the output rate: the samples
                 // themselves, with no kernel in the way.
                 let file_from = start + (a - e0);
@@ -294,7 +312,7 @@ impl AudioSource for SequenceAudio {
                 continue;
             }
 
-            if entry.keep_pitch && entry.speed.is_some() {
+            if entry.keep_pitch && entry.map.is_some() {
                 // A time stretch: the file read at the output rate (converted
                 // through the kernel when its rate differs), then stretched by
                 // the clip's speed with its pitch kept. Reversed, the input is
@@ -304,7 +322,18 @@ impl AudioSource for SequenceAudio {
                     (file_rate.num(), file_rate.den()),
                     (rate.num(), rate.den()),
                 );
-                let speed = Stepper::new(i128::from(media), i128::from(per));
+                // Output-rate index read at output index `u`: the clip's own speed,
+                // before any rate conversion, which `file_at` does.
+                let speed_map = entry.map.clone().expect("checked above");
+                let speed_step = speed_map
+                    .constant_speed()
+                    .map(|r| Stepper::new(i128::from(r.num), i128::from(r.den)));
+                let speed = move |u: i64| -> i64 {
+                    match &speed_step {
+                        Some(s) => s.position(u).0,
+                        None => speed_map.sample_position(u, rate, rate).0,
+                    }
+                };
                 let file_at = move |j: i64| -> (i64, f64) {
                     let (c, f) = conv.position(j);
                     if reversed {
@@ -319,8 +348,7 @@ impl AudioSource for SequenceAudio {
                 };
                 // Everything any frame covering [a, b) may read, in file samples.
                 let reach = (FRAME + 256) as i64;
-                let (j0, _) = speed.position(a - e0);
-                let (j1, _) = speed.position(b - e0);
+                let (j0, j1) = (speed(a - e0), speed(b - e0));
                 let (f0, _) = file_at(j0 - reach);
                 let (f1, _) = file_at(j1 + reach);
                 let (lo, hi) = if f0 <= f1 { (f0, f1) } else { (f1, f0) };
@@ -383,7 +411,7 @@ impl AudioSource for SequenceAudio {
             // Every other case reads between samples. The positions of the
             // first and last output sample bound what must be decoded.
             let at = |u: i64| -> (i64, f64) {
-                let (c, f) = stepper.position(u);
+                let (c, f) = position(u);
                 if reversed {
                     // Backwards from `start`: position -(c + f).
                     if f == 0.0 {
@@ -403,7 +431,7 @@ impl AudioSource for SequenceAudio {
                 (last, first)
             };
             track.cover(lo - HALF as i64, hi + HALF as i64 + 1)?;
-            let cutoff = cutoff_for(stepper.per_output());
+            let cutoff = cutoff_for(fastest);
             let kernel = self
                 .kernels
                 .entry(cutoff.to_bits())

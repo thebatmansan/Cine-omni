@@ -29,7 +29,6 @@
 //! plosives flam. The test measures how many and how far apart rather than
 //! claiming it away.
 
-use crate::speed::Stepper;
 use rustfft::num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 use std::f32::consts::PI;
@@ -83,10 +82,10 @@ impl Stretch {
     }
 
     /// Where synthesis frame `k` reads its input: the first input index of the
-    /// `FRAME + MEASURE` samples it needs.
-    pub fn input_start(&self, k: i64, speed: &Stepper) -> i64 {
-        let (in_centre, _) = speed.position(k * HOP as i64);
-        in_centre - (FRAME / 2) as i64
+    /// `FRAME + MEASURE` samples it needs. `position` maps an output index to
+    /// the input index it reads — a constant ratio, or a speed ramp.
+    pub fn input_start(&self, k: i64, position: &dyn Fn(i64) -> i64) -> i64 {
+        position(k * HOP as i64) - (FRAME / 2) as i64
     }
 
     /// Input samples a frame reads: `FRAME + MEASURE` from [`Stretch::input_start`].
@@ -96,9 +95,9 @@ impl Stretch {
     /// [`Stretch::INPUT`] samples starting at [`Stretch::input_start`]. The
     /// result is `FRAME` windowed, normalised samples for output positions
     /// `[k × HOP − FRAME/2, k × HOP + FRAME/2)`.
-    pub fn frame_from(&self, k: i64, speed: &Stepper, input: &[f32]) -> Vec<f32> {
+    pub fn frame_from(&self, k: i64, position: &dyn Fn(i64) -> i64, input: &[f32]) -> Vec<f32> {
         let out_centre = k * HOP as i64;
-        let (in_centre, _) = speed.position(out_centre);
+        let in_centre = position(out_centre);
         let a = self.spectrum(&input[..FRAME]);
         let b = self.spectrum(&input[MEASURE..MEASURE + FRAME]);
 
@@ -148,10 +147,15 @@ impl Stretch {
     }
 
     /// Synthesis frame `k`, reading its input through `input`.
-    pub fn frame(&self, k: i64, speed: &Stepper, input: &mut impl FnMut(i64) -> f32) -> Vec<f32> {
-        let start = self.input_start(k, speed);
+    pub fn frame(
+        &self,
+        k: i64,
+        position: &dyn Fn(i64) -> i64,
+        input: &mut impl FnMut(i64) -> f32,
+    ) -> Vec<f32> {
+        let start = self.input_start(k, position);
         let samples: Vec<f32> = (0..Self::INPUT).map(|i| input(start + i as i64)).collect();
-        self.frame_from(k, speed, &samples)
+        self.frame_from(k, position, &samples)
     }
 
     /// The frames covering output samples `[from, to)`.
@@ -179,12 +183,12 @@ impl Stretch {
         &self,
         from: i64,
         to: i64,
-        speed: &Stepper,
+        position: &dyn Fn(i64) -> i64,
         mut input: impl FnMut(i64) -> f32,
         out: &mut [f32],
     ) {
         for k in Self::frames_for(from, to) {
-            let frame = self.frame(k, speed, &mut input);
+            let frame = self.frame(k, position, &mut input);
             Self::add(k, &frame, from, out);
         }
     }
@@ -199,6 +203,7 @@ fn wrap(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::speed::Stepper;
 
     const RATE: f64 = 48_000.0;
 
@@ -224,7 +229,7 @@ mod tests {
 
     fn render(speed: Stepper, len: i64, input: impl FnMut(i64) -> f32) -> Vec<f32> {
         let mut out = vec![0.0f32; len as usize];
-        Stretch::new().render(0, len, &speed, input, &mut out);
+        Stretch::new().render(0, len, &|u| speed.position(u).0, input, &mut out);
         out
     }
 
@@ -264,7 +269,13 @@ mod tests {
         let speed = Stepper::new(3, 4);
         let whole = render(speed, 48_000, tone(733.0));
         let mut part = vec![0.0f32; 5_000];
-        Stretch::new().render(20_000, 25_000, &speed, tone(733.0), &mut part);
+        Stretch::new().render(
+            20_000,
+            25_000,
+            &|u| speed.position(u).0,
+            tone(733.0),
+            &mut part,
+        );
         let worst = part
             .iter()
             .zip(&whole[20_000..25_000])

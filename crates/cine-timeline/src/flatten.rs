@@ -17,18 +17,18 @@ use crate::otio::{Clip, Item, Timeline, TrackKind};
 use crate::session::{any_solo_of, is_audible, is_visible};
 use ucg_core::{EntityId, RationalTime, TimeRange};
 
-/// How fast media time runs against record time on one segment.
-///
-/// [`ucg_core::Speed`]: the same type the player uses, so there is one answer
-/// to "which picture is showing" rather than two that can drift apart.
-pub use ucg_core::Speed;
+/// How a retimed clip's media runs against record time: [`ucg_core::Timing`],
+/// the same type every player uses, so there is one answer to "which picture
+/// is showing" — constant speed or ramp — rather than several that can drift.
+pub use ucg_core::Timing;
 
-fn speed_of(clip: &Clip) -> Option<Speed> {
-    let ((media, track), reversed) = clip.speed()?;
-    Some(Speed {
+/// A retimed clip's timing, anchored where it starts on the record and at the
+/// media shown there.
+fn timing_of(clip: &Clip, record: RationalTime, media: RationalTime) -> Option<Timing> {
+    Some(Timing {
+        map: clip.time_map()?,
+        record,
         media,
-        track,
-        reversed,
     })
 }
 
@@ -46,9 +46,11 @@ pub struct PictureSegment {
     /// The media time shown at `record.start_time`, in the clip's source
     /// coordinates (the same coordinates as its `source_range`).
     pub source_start: RationalTime,
-    /// How fast the media runs here. `None` is real time — the overwhelmingly
-    /// common case, and a player that ignores this field is then still right.
-    pub speed: Option<Speed>,
+    /// How the media runs against record time, when the clip is retimed —
+    /// anchored at the clip's own start, so a ramp is read from its beginning
+    /// whichever part of the clip this segment shows. `None` is real time, the
+    /// overwhelmingly common case, and a player that ignores it is then right.
+    pub timing: Option<Timing>,
 }
 
 /// The flattened picture of a sequence.
@@ -142,7 +144,9 @@ pub fn picture_segments(timeline: &Timeline) -> PictureList {
             item: *ii,
             clip: *clip,
             source_start,
-            speed: speed_of(media),
+            timing: media
+                .media_time_at(span.start_time, span.start_time)
+                .and_then(|origin| timing_of(media, span.start_time, origin)),
         });
     }
     PictureList {
@@ -163,8 +167,9 @@ pub struct SoundSegment {
     /// Media time heard at `record.start_time`, in source coordinates. For a
     /// reversed clip this is the end of its range: it is read backwards.
     pub source_start: RationalTime,
-    /// How fast the media runs, for the mixer to read it at.
-    pub speed: Option<Speed>,
+    /// How the media runs against record time, for the mixer to read it at;
+    /// anchored at `record.start_time` and `source_start`.
+    pub timing: Option<Timing>,
     /// Keep pitch while the speed changes, rather than varispeed.
     pub keep_pitch: bool,
 }
@@ -186,7 +191,12 @@ pub fn sound_segments(timeline: &Timeline) -> Vec<SoundSegment> {
             let (Some(span), Some(source)) = (track.range_of_child(ii), c.trimmed_range()) else {
                 continue;
             };
-            let speed = speed_of(c);
+            let reversed = c.retime.as_ref().is_some_and(|r| r.reversed);
+            let source_start = if reversed {
+                source.end_time_exclusive()
+            } else {
+                source.start_time
+            };
             out.push(SoundSegment {
                 record: span,
                 track: ti,
@@ -196,13 +206,9 @@ pub fn sound_segments(timeline: &Timeline) -> Vec<SoundSegment> {
                 // backwards it starts at the *end* of its range and reads down
                 // to the start, so the first thing heard is the last instant
                 // of the range, not the start of its last frame.
-                source_start: if speed.is_some_and(|s| s.reversed) {
-                    source.end_time_exclusive()
-                } else {
-                    source.start_time
-                },
-                speed,
-                keep_pitch: c.retime.is_some_and(|r| r.keep_pitch),
+                source_start,
+                timing: timing_of(c, span.start_time, source_start),
+                keep_pitch: c.retime.as_ref().is_some_and(|r| r.keep_pitch),
             });
         }
     }

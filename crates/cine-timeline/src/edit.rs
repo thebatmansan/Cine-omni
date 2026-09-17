@@ -454,7 +454,18 @@ fn split_in_place(t: &mut Track, time: RationalTime) -> Result<usize> {
 /// would leave a half with no media at all is refused rather than made.
 fn split_item(item: &mut Item, offset: RationalTime) -> Result<Item> {
     let tr = item.trimmed_range().unwrap_or_default();
-    let (first, second) = match item.as_clip().and_then(|c| c.retime.map(|r| (c, r))) {
+    if item.as_clip().is_some_and(|c| c.is_ramped()) {
+        return Err(Error::Edit(format!(
+            "`{}` has a speed ramp, and a cut inside it would put the media boundary \
+             partway through a picture, which a source range cannot hold; set the ramp \
+             so a segment ends where you want to cut, or remove the ramp first",
+            item.name()
+        )));
+    }
+    let (first, second) = match item
+        .as_clip()
+        .and_then(|c| c.retime.clone().map(|r| (c, r)))
+    {
         None => (
             TimeRange::new(tr.start_time, offset),
             TimeRange::new(

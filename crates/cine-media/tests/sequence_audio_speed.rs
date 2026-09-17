@@ -9,7 +9,25 @@ use cine_audio::{write_wav, AudioBuffer, WavFormat};
 use cine_media::sequence_audio::{SequenceAudio, SoundEntry};
 use cine_media::AudioSource;
 use std::path::{Path, PathBuf};
-use ucg_core::{Rate, RationalTime, Speed, TimeRange};
+use ucg_core::{Rate, Ratio, RationalTime, TimeMap, TimeRange};
+
+/// A constant speed for a test: media per track, and whether backwards.
+#[derive(Clone, Copy)]
+struct Speed {
+    media: i64,
+    track: i64,
+    reversed: bool,
+}
+
+impl Speed {
+    fn new(media: i64, track: i64, reversed: bool) -> Speed {
+        Speed {
+            media,
+            track,
+            reversed,
+        }
+    }
+}
 
 fn r48() -> Rate {
     Rate::whole(48_000).unwrap()
@@ -80,7 +98,8 @@ fn entry(path: &Path, record: TimeRange, offset: RationalTime, speed: Option<Spe
         path: Some(path.to_path_buf()),
         offset: Some(offset),
         name: "tone".into(),
-        speed,
+        map: speed
+            .map(|s| TimeMap::constant(record.duration, Ratio::new(s.media, s.track), s.reversed)),
         keep_pitch: false,
     }
 }
@@ -333,6 +352,86 @@ fn a_seek_into_a_stretched_clip_hears_what_playback_hears() {
         .map(|(x, y)| (x - y).abs())
         .fold(0.0f32, f32::max);
     assert!(worst < 1e-4, "a seek lands {worst} away");
+}
+
+fn ramp_entry(path: &Path, keep_pitch: bool) -> SoundEntry {
+    use ucg_core::Ramp;
+    SoundEntry {
+        record: TimeRange::new(secs(0, 1), secs(2, 1)),
+        path: Some(path.to_path_buf()),
+        offset: Some(secs(0, 1)),
+        name: "ramp".into(),
+        // Real time to double speed over two seconds: three seconds of media.
+        map: Some(TimeMap {
+            segments: vec![Ramp {
+                length: secs(2, 1),
+                from: Ratio::new(1, 1),
+                to: Ratio::new(2, 1),
+            }],
+            reversed: false,
+        }),
+        keep_pitch,
+    }
+}
+
+/// Varispeed through a ramp: the pitch rises with the speed, from the tone's
+/// own frequency at the start to twice it at the end.
+#[test]
+fn a_varispeed_ramp_rises_in_pitch_with_its_speed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wav(dir.path(), "ramp.wav", 48_000, 4.0, tone(1_000.0));
+    let (out, _) = render(vec![ramp_entry(&path, false)], secs(2, 1), 0, 96_000);
+    // Speed over a window centred at t is 1 + t/2 for this ramp.
+    let early = frequency(&out[2_400..7_200], 48_000.0); // around t = 0.1 s
+    let late = frequency(&out[88_800..93_600], 48_000.0); // around t = 1.9 s
+    assert!(
+        (early - 1_050.0).abs() < 10.0,
+        "near the start: {early:.1} Hz"
+    );
+    assert!((late - 1_950.0).abs() < 10.0, "near the end: {late:.1} Hz");
+}
+
+/// Keeping pitch through a ramp: the tone stays put, and the media still
+/// arrives when the integral of the speed says — a change 2.25 s into the file
+/// is heard at t where t + t²/4 = 2.25, which is √13 − 2 = 1.6056 s.
+#[test]
+fn a_ramp_with_pitch_kept_holds_the_tone_and_follows_the_integral() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wav(dir.path(), "ramp2.wav", 48_000, 4.0, |t| {
+        if t < 2.25 {
+            tone(700.0)(t)
+        } else {
+            tone(1_400.0)(t)
+        }
+    });
+    let (out, _) = render(vec![ramp_entry(&path, true)], secs(2, 1), 0, 96_000);
+    let early = frequency(&out[4_800..28_800], 48_000.0);
+    let late = frequency(&out[84_000..94_000], 48_000.0);
+    assert!(
+        (early - 700.0).abs() < 2.0,
+        "pitch held early: {early:.1} Hz"
+    );
+    assert!(
+        (late - 1_400.0).abs() < 2.0,
+        "pitch held late: {late:.1} Hz"
+    );
+    // Where the change lands: the last window still at 700 Hz and the first at
+    // 1,400 Hz bracket 1.6056 s to within a tenth of a second.
+    let window = 2_400;
+    let freq_at = |centre: f64| {
+        let c = (centre * 48_000.0) as usize;
+        frequency(&out[c - window / 2..c + window / 2], 48_000.0)
+    };
+    assert!(
+        (freq_at(1.50) - 700.0).abs() < 20.0,
+        "before: {:.1}",
+        freq_at(1.50)
+    );
+    assert!(
+        (freq_at(1.72) - 1_400.0).abs() < 40.0,
+        "after: {:.1}",
+        freq_at(1.72)
+    );
 }
 
 /// What reading at a speed costs, against real time.

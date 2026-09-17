@@ -23,7 +23,13 @@ export function Inspector({
   onBind?(clip: string, scene: string): void;
   onUnbind?(clip: string, scene: string): void;
   onJob?(kind: string, params: Record<string, unknown>): void;
-  onRetime?(clip: string, played: ExactTime | null, reversed: boolean, keepPitch: boolean): void;
+  onRetime?(
+    clip: string,
+    played: ExactTime | null,
+    reversed: boolean,
+    keepPitch: boolean,
+    ramp?: RampRow[] | null,
+  ): void;
   onAngle?(clip: string, key: string): void;
 }) {
   return (
@@ -112,6 +118,88 @@ function Angles({
   );
 }
 
+/** One ramp segment as sent to the runtime: speeds exactly as typed. */
+export interface RampRow {
+  length: ExactTime;
+  from: string;
+  to: string;
+}
+
+/**
+ * A speed ramp, segment by segment.
+ *
+ * Each row is a length in frames and the speed at its start and end, typed as
+ * an editor types it — `100%`, `3/2`, `1.5`. The browser does no arithmetic on
+ * them: the runtime parses each exactly, works out the media the ramp consumes
+ * and the length it takes, and refuses a speed it cannot read or a ramp that
+ * runs past the shot, saying which.
+ */
+function RampEditor({ item, onApply }: { item: TimelineItem; onApply(rows: RampRow[]): void }) {
+  const rate = { num: item.at.duration.rate_num, den: item.at.duration.rate_den };
+  const ratio = ([n, d]: [number, number]) => (d === 1 ? `${n}` : `${n}/${d}`);
+  const fromItem = () =>
+    item.ramp?.map((s) => ({ frames: String(s.length.ticks), from: ratio(s.from), to: ratio(s.to) })) ?? [
+      { frames: String(item.at.duration.ticks), from: "100%", to: "200%" },
+    ];
+  const [rows, setRows] = useState(fromItem);
+  const [open, setOpen] = useState(item.ramp != null);
+  const set = (i: number, key: "frames" | "from" | "to", v: string) =>
+    setRows((r) => r.map((row, j) => (j === i ? { ...row, [key]: v } : row)));
+  const valid = rows.length > 0 && rows.every((r) => Number.isInteger(Number(r.frames)) && Number(r.frames) > 0);
+
+  if (!open) {
+    return (
+      <div className="row">
+        <button onClick={() => setOpen(true)}>Speed ramp…</button>
+      </div>
+    );
+  }
+  return (
+    <div className="ramp">
+      <div className="ramp-row head">
+        <span>frames</span>
+        <span>from</span>
+        <span>to</span>
+        <span />
+      </div>
+      {rows.map((r, i) => (
+        <div className="ramp-row" key={i}>
+          <input aria-label={`segment ${i + 1} frames`} value={r.frames} onChange={(e) => set(i, "frames", e.target.value)} />
+          <input aria-label={`segment ${i + 1} start speed`} value={r.from} onChange={(e) => set(i, "from", e.target.value)} />
+          <input aria-label={`segment ${i + 1} end speed`} value={r.to} onChange={(e) => set(i, "to", e.target.value)} />
+          <button aria-label={`remove segment ${i + 1}`} disabled={rows.length === 1} onClick={() => setRows(rows.filter((_, j) => j !== i))}>
+            ×
+          </button>
+        </div>
+      ))}
+      <div className="row">
+        <button
+          onClick={() => {
+            const last = rows[rows.length - 1];
+            setRows([...rows, { frames: "24", from: last?.to ?? "100%", to: last?.to ?? "100%" }]);
+          }}
+        >
+          Add segment
+        </button>
+        <button
+          disabled={!valid}
+          onClick={() =>
+            onApply(
+              rows.map((r) => ({
+                length: { ticks: Number(r.frames), rate_num: rate.num, rate_den: rate.den },
+                from: r.from,
+                to: r.to,
+              })),
+            )
+          }
+        >
+          Apply ramp
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * A clip's speed.
  *
@@ -128,7 +216,13 @@ function Speed({
 }: {
   item: TimelineItem;
   clip: string;
-  onRetime(clip: string, played: ExactTime | null, reversed: boolean, keepPitch: boolean): void;
+  onRetime(
+    clip: string,
+    played: ExactTime | null,
+    reversed: boolean,
+    keepPitch: boolean,
+    ramp?: RampRow[] | null,
+  ): void;
 }) {
   const [frames, setFrames] = useState("");
   if (!item.source_range) return null;
@@ -183,6 +277,7 @@ function Speed({
           Real time
         </button>
       </div>
+      <RampEditor item={item} onApply={(rows) => onRetime(clip, null, item.speed?.reversed ?? false, item.keep_pitch, rows)} />
       {item.speed && (
         <label className="row" title="Keep the sound's pitch while its speed changes (a time stretch), rather than varispeed">
           <input

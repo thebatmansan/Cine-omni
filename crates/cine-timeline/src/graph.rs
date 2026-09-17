@@ -45,6 +45,8 @@ pub mod nle_attrs {
     pub const RETIME_PLAYED: &str = "nle.retime_played";
     pub const RETIME_REVERSED: &str = "nle.retime_reversed";
     pub const RETIME_KEEP_PITCH: &str = "nle.retime_keep_pitch";
+    /// A speed ramp's segments, when the speed changes over the clip.
+    pub const RETIME_RAMP: &str = "nle.retime_ramp";
     /// A multicam clip's angles: `{ key: entity id }`. Absent on the ordinary
     /// single-reference clip, which is nearly every clip.
     pub const ANGLES: &str = "nle.angles";
@@ -490,19 +492,30 @@ fn write_item(
                 tx,
                 id,
                 nle_attrs::RETIME_PLAYED,
-                clip.retime.map(|r| r.played),
+                clip.retime.as_ref().map(|r| r.played),
             )?;
             set_opt(
                 tx,
                 id,
                 nle_attrs::RETIME_REVERSED,
-                clip.retime.map(|r| r.reversed),
+                clip.retime.as_ref().map(|r| r.reversed),
             )?;
             set_opt(
                 tx,
                 id,
                 nle_attrs::RETIME_KEEP_PITCH,
-                clip.retime.filter(|r| r.keep_pitch).map(|_| true),
+                clip.retime.as_ref().filter(|r| r.keep_pitch).map(|_| true),
+            )?;
+            set_opt(
+                tx,
+                id,
+                nle_attrs::RETIME_RAMP,
+                clip.retime
+                    .as_ref()
+                    .and_then(|r| r.ramp.as_ref())
+                    .map(Value::from_serde)
+                    .transpose()
+                    .map_err(Error::Ucg)?,
             )?;
             let (media, _angles) = write_media(tx, id, clip)?;
             let clip_ref = ClipRef {
@@ -825,6 +838,7 @@ pub fn export_item(graph: &Graph, id: EntityId) -> Result<Item> {
                         played,
                         reversed: node.get_bool(nle_attrs::RETIME_REVERSED).unwrap_or(false),
                         keep_pitch: node.get_bool(nle_attrs::RETIME_KEEP_PITCH).unwrap_or(false),
+                        ramp: node.get_as(nle_attrs::RETIME_RAMP),
                     }),
                 markers,
                 metadata,
@@ -1215,21 +1229,80 @@ pub fn set_clip_retime(tx: &mut Tx, clip: EntityId, retime: Option<Retime>) -> R
     let Item::Clip(c) = &mut t.children[index] else {
         return Err(Error::NotAnItem(index));
     };
-    if let Some(r) = retime {
+    let mut retime = retime;
+    if let Some(r) = &mut retime {
         let media = c.source_range.ok_or_else(|| {
             Error::Edit("a clip with no source range has no media to play at a speed".into())
         })?;
+        if media.duration <= RationalTime::zero(media.duration.rate_exact()) {
+            return Err(Error::Edit("the clip plays no media".into()));
+        }
+        if let Some(ramp) = &r.ramp {
+            // A ramp decides both lengths: the track time is its segments', and
+            // the media is what they consume.
+            let consumed = check_ramp(ramp)?;
+            let mr = media.duration.rate_exact();
+            let needed = consumed * ucg_core::Q::new(i128::from(mr.num()), i128::from(mr.den()));
+            // Whole pictures: a ramp that ends partway through one still shows it.
+            let ticks = needed.floor() + i128::from(!needed.is_integer());
+            let ticks = i64::try_from(ticks).map_err(|_| {
+                Error::Edit("the ramp consumes more media than can be counted".into())
+            })?;
+            let wanted = TimeRange::new(media.start_time, RationalTime::exact(ticks, mr));
+            if let Some(available) = c.available_range() {
+                if wanted.end_time_exclusive() > available.end_time_exclusive() {
+                    let short = wanted
+                        .end_time_exclusive()
+                        .checked_sub(&available.end_time_exclusive())
+                        .to_frames();
+                    return Err(Error::Edit(format!(
+                        "the ramp consumes {short} frames more media than the shot has after its in point"
+                    )));
+                }
+            }
+            c.source_range = Some(wanted);
+            let played = ramp
+                .iter()
+                .fold(RationalTime::zero(ramp[0].length.rate_exact()), |acc, s| {
+                    acc.checked_add(&s.length)
+                });
+            r.played = played;
+        }
         if r.played <= RationalTime::zero(r.played.rate_exact()) {
             return Err(Error::Edit(
                 "a retime has to leave the clip some length on the track".into(),
             ));
         }
-        if media.duration <= RationalTime::zero(media.duration.rate_exact()) {
-            return Err(Error::Edit("the clip plays no media".into()));
-        }
     }
     c.retime = retime;
     write_one_track(tx, track, &t)
+}
+
+/// A ramp an editor could mean: segments with length, speeds that are not
+/// both zero, and some media consumed. Returns the media seconds it consumes.
+fn check_ramp(ramp: &[ucg_core::Ramp]) -> Result<ucg_core::Q> {
+    if ramp.is_empty() {
+        return Err(Error::Edit(
+            "a speed ramp needs at least one segment".into(),
+        ));
+    }
+    for (i, s) in ramp.iter().enumerate() {
+        if s.length <= RationalTime::zero(s.length.rate_exact()) {
+            return Err(Error::Edit(format!("ramp segment {} has no length", i + 1)));
+        }
+    }
+    let map = ucg_core::TimeMap {
+        segments: ramp.to_vec(),
+        reversed: false,
+    };
+    let consumed = map.consumed();
+    if consumed <= ucg_core::Q::ZERO {
+        return Err(Error::Edit(
+            "the ramp consumes no media: a clip at zero speed throughout is a freeze, not a ramp"
+                .into(),
+        ));
+    }
+    Ok(consumed)
 }
 
 /// Give a clip more angles: assets it could play instead of the one it plays.

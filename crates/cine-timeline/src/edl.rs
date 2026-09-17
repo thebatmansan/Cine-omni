@@ -156,6 +156,13 @@ pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (Strin
                         clip.name,
                         if reversed { " reversed" } else { "" },
                     ));
+                    if clip.is_ramped() {
+                        report.left_behind.push(format!(
+                            "`{}` has a speed ramp: an M2 record holds one speed, so the EDL \
+                             carries its average and the ramp itself is not in this file",
+                            clip.name
+                        ));
+                    }
                 }
                 out.push_str(&format!(
                     "{number:03}  {reel:<8} {channel:<4} C        {} {} {} {}\n",

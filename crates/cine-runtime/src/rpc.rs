@@ -460,7 +460,7 @@ fn plan_json(plan: &cine_timeline::Plan) -> J {
         "source": crate::projection::range(plan.source),
         "record": crate::projection::range(plan.record),
         "backtimed": plan.backtimed,
-        "retime": plan.retime.map(|r| json!({
+        "retime": plan.retime.as_ref().map(|r| json!({
             "played": crate::projection::time(r.played),
             "reversed": r.reversed,
         })),
@@ -830,19 +830,65 @@ pub fn dispatch_with(
         "retime" => {
             let clip = entity(params, "clip")?;
             // A `played` of null takes the retime off and the clip plays in
-            // real time again.
-            let retime = match params.get("played") {
+            // real time again. A `ramp` — segments of `{ length, from, to }` with
+            // speeds as an editor types them (`150%`, `3/2`, `1.5`) — decides the
+            // length itself, so `played` is then only a placeholder.
+            let ramp = match params.get("ramp") {
                 None | Some(J::Null) => None,
-                Some(v) => Some(cine_timeline::Retime {
-                    played: serde_json::from_value(v.clone())
-                        .map_err(|e| format!("invalid played length: {e}"))?,
-                    reversed: params.get("reversed").and_then(J::as_bool).unwrap_or(false),
-                    keep_pitch: params
-                        .get("keep_pitch")
-                        .and_then(J::as_bool)
-                        .unwrap_or(false),
-                }),
+                Some(J::Array(segments)) => Some(
+                    segments
+                        .iter()
+                        .enumerate()
+                        .map(|(i, seg)| {
+                            let speed =
+                                |key: &str| -> std::result::Result<ucg_core::Ratio, String> {
+                                    let text = match seg.get(key) {
+                                        Some(J::String(s)) => s.clone(),
+                                        Some(J::Number(n)) => n.to_string(),
+                                        _ => {
+                                            return Err(format!(
+                                                "ramp segment {} has no `{key}` speed",
+                                                i + 1
+                                            ))
+                                        }
+                                    };
+                                    ucg_core::Ratio::parse(&text).ok_or_else(|| {
+                                        format!("ramp segment {}: `{text}` is not a speed", i + 1)
+                                    })
+                                };
+                            Ok(ucg_core::Ramp {
+                                length: serde_json::from_value(
+                                    seg.get("length").cloned().unwrap_or(J::Null),
+                                )
+                                .map_err(|e| {
+                                    format!("ramp segment {}: invalid length: {e}", i + 1)
+                                })?,
+                                from: speed("from")?,
+                                to: speed("to")?,
+                            })
+                        })
+                        .collect::<std::result::Result<Vec<_>, String>>()?,
+                ),
+                Some(_) => return Err("`ramp` must be a list of segments".into()),
             };
+            let played = match (params.get("played"), &ramp) {
+                (None | Some(J::Null), None) => None,
+                (Some(v), _) if !v.is_null() => Some(
+                    serde_json::from_value::<RationalTime>(v.clone())
+                        .map_err(|e| format!("invalid played length: {e}"))?,
+                ),
+                (_, Some(r)) => r.first().map(|s| s.length),
+                _ => None,
+            };
+            let retime = played.map(|played| cine_timeline::Retime {
+                played,
+                reversed: params.get("reversed").and_then(J::as_bool).unwrap_or(false),
+                keep_pitch: params
+                    .get("keep_pitch")
+                    .and_then(J::as_bool)
+                    .unwrap_or(false),
+                ramp: ramp.clone(),
+            });
             let group = p
                 .engine
                 .transact(

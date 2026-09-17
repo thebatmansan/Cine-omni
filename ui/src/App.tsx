@@ -382,8 +382,10 @@ export function App() {
                   onBind={(clip, scene) => void session.run("bind", () => client.bindClip(clip, scene))}
                   onUnbind={(clip, scene) => void session.run("unbind", () => client.unbindClip(clip, scene))}
                   onJob={(kind, params) => void session.run(kind, () => client.submitJob(kind, params))}
-                  onRetime={(clip, played, reversed, keepPitch) =>
-                    void session.run("retime", () => client.retime(clip, played, reversed, keepPitch))
+                  onRetime={(clip, played, reversed, keepPitch, ramp) =>
+                    void session.run(ramp ? "speed ramp" : "retime", () =>
+                      client.retime(clip, played, reversed, keepPitch, ramp ?? null),
+                    )
                   }
                   onAngle={(clip, key) =>
                     void session.run(`angle ${key}`, () => client.setAngle(clip, key))

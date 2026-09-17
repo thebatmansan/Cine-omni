@@ -30,6 +30,7 @@ function item(index: number, start: number, dur: number, kind: TimelineItem["kin
     link: null,
     speed: null,
     keep_pitch: false,
+    ramp: null,
     angles: null,
     angle: null,
     needs_conform: false,

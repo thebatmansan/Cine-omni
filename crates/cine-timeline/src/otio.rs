@@ -584,7 +584,7 @@ pub const DEFAULT_MEDIA_KEY: &str = "DEFAULT_MEDIA";
 /// [`Retime::played`] is the clip's duration *on the track*. The media it
 /// consumes stays in `Clip::source_range`, so an editor can always see which
 /// frames are being used as well as how long they take.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Retime {
     /// How long the clip's media plays for on the track.
     pub played: RationalTime,
@@ -595,6 +595,11 @@ pub struct Retime {
     /// false the sound is varispeed: pitch follows speed, as on tape.
     #[serde(default)]
     pub keep_pitch: bool,
+    /// A speed that changes over the clip: segments of linearly changing speed
+    /// whose lengths add up to [`Retime::played`]. `None` is one constant speed
+    /// — the media over the played length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ramp: Option<Vec<ucg_core::Ramp>>,
 }
 
 impl Retime {
@@ -605,6 +610,28 @@ impl Retime {
             played,
             reversed,
             keep_pitch: false,
+            ramp: None,
+        }
+    }
+
+    /// The exact media position of the clip against its track time.
+    ///
+    /// A ramp is its own map. A constant retime is one segment at the speed its
+    /// two durations make — the same arithmetic, so one path serves both.
+    pub fn map(&self, media: RationalTime) -> ucg_core::TimeMap {
+        match &self.ramp {
+            Some(segments) => ucg_core::TimeMap {
+                segments: segments.clone(),
+                reversed: self.reversed,
+            },
+            None => {
+                let (num, den) = self.speed_of(media);
+                ucg_core::TimeMap::constant(
+                    self.played,
+                    ucg_core::Ratio::new(num.max(0), den.max(1)),
+                    self.reversed,
+                )
+            }
         }
     }
 
@@ -830,17 +857,29 @@ impl Clip {
     /// How long the clip takes on its track: the retime's length when there
     /// is one, otherwise the media it consumes.
     pub fn duration(&self) -> RationalTime {
-        match self.retime {
+        match &self.retime {
             Some(r) => r.played,
             None => self.media_duration(),
         }
     }
 
     /// Speed as a reduced ratio of media time to track time, and whether it
-    /// runs backwards. `None` when the clip plays in real time.
+    /// runs backwards. `None` when the clip plays in real time. For a ramp this
+    /// is the *average* speed — what the clip consumes over what it takes — and
+    /// [`Clip::time_map`] is the speed at each instant.
     pub fn speed(&self) -> Option<((i64, i64), bool)> {
-        let r = self.retime?;
+        let r = self.retime.as_ref()?;
         Some((r.speed_of(self.media_duration()), r.reversed))
+    }
+
+    /// The clip's media position against its track time, when it is retimed.
+    pub fn time_map(&self) -> Option<ucg_core::TimeMap> {
+        self.retime.as_ref().map(|r| r.map(self.media_duration()))
+    }
+
+    /// Whether the clip's speed changes over its length.
+    pub fn is_ramped(&self) -> bool {
+        self.retime.as_ref().is_some_and(|r| r.ramp.is_some())
     }
 
     /// The media time that plays at `track_time` when the clip starts at
@@ -862,34 +901,26 @@ impl Clip {
         if offset < zero || offset >= played {
             return None;
         }
-        let Some(retime) = self.retime else {
+        let Some(retime) = &self.retime else {
             return Some(tr.start_time.checked_add(&offset));
         };
-        // media_ticks = media_duration_ticks * (offset / played), floored.
-        let (or, pr, mr) = (
-            offset.rate_exact(),
-            played.rate_exact(),
-            tr.duration.rate_exact(),
-        );
-        let num = i128::from(tr.duration.ticks())
-            * i128::from(offset.ticks())
-            * i128::from(or.den())
-            * i128::from(pr.num());
-        let den = i128::from(played.ticks()) * i128::from(pr.den()) * i128::from(or.num());
-        if den == 0 {
-            return None;
-        }
-        // Floor division, correct for negative numerators too.
-        let mut ticks = num.div_euclid(den);
-        if retime.reversed {
-            // The last media frame first: offset 0 shows the final picture.
-            ticks = i128::from(tr.duration.ticks()) - 1 - ticks;
-            if ticks < 0 {
-                ticks = 0;
-            }
-        }
-        let ticks = i64::try_from(ticks).ok()?;
-        Some(tr.start_time.checked_add(&RationalTime::exact(ticks, mr)))
+        let mr = tr.duration.rate_exact();
+        // The map's offset, floored onto the media's own frames: there is no
+        // picture between two pictures.
+        let into = retime.map(tr.duration).media_offset(offset, mr);
+        let one = RationalTime::exact(1, mr);
+        let at = if retime.reversed {
+            // The last picture first; `into` is negative.
+            tr.end_time_exclusive().checked_sub(&one).checked_add(&into)
+        } else {
+            tr.start_time.checked_add(&into)
+        };
+        // Clamped to the range: a ramp's last instant can floor onto the
+        // picture after the one the range ends on.
+        Some(
+            at.max(tr.start_time)
+                .min(tr.end_time_exclusive().checked_sub(&one)),
+        )
     }
 
     /// The `ucg_id` stored in metadata, if any.

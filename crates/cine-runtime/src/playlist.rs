@@ -28,8 +28,11 @@ pub struct Entry {
     /// it shows then cannot be known, and the entry is not playable.
     pub offset: Option<RationalTime>,
     pub online: Option<bool>,
-    /// How fast the media runs against record time here. `None` is real time.
-    pub speed: Option<cine_timeline::Speed>,
+    /// How the media runs against record time, when the clip is retimed: its
+    /// map anchored at the clip's start, with the media there measured like
+    /// `offset`, from the start of the asset's available range. `None` is real
+    /// time.
+    pub timing: Option<cine_timeline::Timing>,
     /// For sound: keep pitch while the speed changes.
     pub keep_pitch: bool,
 }
@@ -95,7 +98,7 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                    item: usize,
                    clip: Option<EntityId>,
                    source_start: RationalTime,
-                   speed: Option<cine_timeline::Speed>,
+                   timing: Option<&cine_timeline::Timing>,
                    keep_pitch: bool| {
         let name = tracks
             .get(track)
@@ -118,7 +121,13 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                 .map(PathBuf::from),
             offset: available.map(|a| source_start.checked_sub(&a.start_time)),
             online: node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
-            speed,
+            // Re-anchored to the asset's range, like `offset`; without a range
+            // which picture plays cannot be known, as for a real-time clip.
+            timing: timing.zip(available).map(|(t, a)| cine_timeline::Timing {
+                map: t.map.clone(),
+                record: t.record,
+                media: t.media.checked_sub(&a.start_time),
+            }),
             keep_pitch,
         }
     };
@@ -131,7 +140,7 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                 s.item,
                 s.clip,
                 s.source_start,
-                s.speed,
+                s.timing.as_ref(),
                 s.keep_pitch,
             )
         })
@@ -146,7 +155,7 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                 s.item,
                 s.clip,
                 s.source_start,
-                s.speed,
+                s.timing.as_ref(),
                 false,
             )
         })

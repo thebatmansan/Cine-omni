@@ -391,6 +391,19 @@ from the original by less than one media frame over its length, because the cut
 has to land on a picture. A cut so fine that one side would hold no picture at
 all is refused rather than made.
 
+A speed can also change over a clip. The inspector's *Speed ramp* takes
+segments — a length in frames and the speed at each end, typed as `100%`,
+`3/2` or `1.5` and read exactly, never through a float — and the speed moves
+linearly across each. A constant speed is one segment with equal ends, so there
+is one kind of retime. The ramp decides both lengths: the clip's length on the
+track is its segments', and the media it consumes is the integral of the speed,
+refused if that runs past the shot. Every player asks the same exact map which
+picture or sample plays at an instant — one second into a ramp from real time to
+double speed is 1.25 s of media, picture 30 — including the mixer, whose pitch
+rises with a varispeed ramp and holds with *Keep pitch*. The EDL can carry only
+one speed per event and writes the average, saying so; OTIO carries the ramp
+exactly in its metadata and the average for other tools.
+
 What a retimed clip will not do is be trimmed, rolled or joined. Pulling the
 tail of a clip playing at 1.3× either keeps the speed — and then needs a
 fraction of a media frame — or keeps the media and changes the speed, and an
@@ -403,8 +416,10 @@ neither the speed nor the length.
 
 * **No multi-select, no linked selection, no sync-break indicator.** Edits follow
   links; the interface does not yet draw a broken sync.
-* **Speed ramps do not exist.** A retime is one constant speed for the whole
-  clip. A ramp is a curve, and nothing in the model carries a curve yet.
+* **A cut inside a speed ramp is refused.** A ramp's media boundary at an
+  arbitrary instant is generally partway through a picture, which a source range
+  cannot hold; cut where a segment ends, or remove the ramp first. Ramps are
+  linear in speed between their segment ends — no eased curves.
 * **Keeping pitch flams attacks.** A retimed clip's sound is varispeed by
   default — pitch follows speed, as on tape — and *Keep pitch* time-stretches it
   instead. The stretch keeps a tone's frequency and level at any speed, but at

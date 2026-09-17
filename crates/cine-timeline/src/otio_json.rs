@@ -185,6 +185,12 @@ fn read_retime(
                         .get("keep_pitch")
                         .and_then(J::as_bool)
                         .unwrap_or(false),
+                    ramp: match exact.get("ramp") {
+                        None | Some(J::Null) => None,
+                        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| {
+                            Error::Otio(format!("a speed ramp that cannot be read: {e}"))
+                        })?),
+                    },
                 }));
             }
         }
@@ -444,12 +450,13 @@ pub fn timeline_value(t: &Timeline) -> J {
     })
 }
 
-/// A clip's effects list. Only a constant retime is modelled, and it is
-/// written twice on purpose: OTIO's own `time_scalar` so that another tool
-/// sees the speed, and the exact pair under `metadata.cine` so that a round
-/// trip through this writer is lossless.
+/// A clip's effects list. A retime is written twice on purpose: OTIO's own
+/// `time_scalar` so that another tool sees the speed, and the exact retime —
+/// including a speed ramp, which OTIO's core schema has no way to carry — under
+/// `metadata.cine` so that a round trip through this writer is lossless. For a
+/// ramp the scalar is the average speed, which is all another tool will see.
 fn effects_value(c: &Clip) -> J {
-    let Some(retime) = c.retime else {
+    let Some(retime) = &c.retime else {
         return json!([]);
     };
     let (num, den) = retime.speed_of(c.media_duration());
@@ -463,6 +470,7 @@ fn effects_value(c: &Clip) -> J {
                 "played": time_value(retime.played),
                 "reversed": retime.reversed,
                 "keep_pitch": retime.keep_pitch,
+                "ramp": retime.ramp.as_ref().map(|r| serde_json::to_value(r).unwrap_or(J::Null)),
             }
         },
         "time_scalar": if retime.reversed { -scalar } else { scalar },

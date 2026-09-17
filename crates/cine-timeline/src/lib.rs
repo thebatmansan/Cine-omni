@@ -60,7 +60,7 @@ pub use edit::{
 };
 pub use error::{Error, Result};
 pub use flatten::{
-    picture_segments, sound_segments, PictureList, PictureSegment, SoundSegment, Speed,
+    picture_segments, sound_segments, PictureList, PictureSegment, SoundSegment, Timing,
 };
 pub use graph::{
     apply_edit, bind_clip_to_scene, clear_conform, clip_track_range, clips_synced_to,

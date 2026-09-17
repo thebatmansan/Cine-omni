@@ -24,17 +24,19 @@ pub mod id;
 pub mod node;
 pub mod persist;
 pub mod time;
+pub mod time_map;
 pub mod tx;
 pub mod value;
 
 pub use engine::{ChangeSet, Engine, EngineLimits, EngineStats, History, Plan, Reactor, UndoGroup};
 pub use error::{Result, UcgError};
-pub use exact_time::{Rate, Rounding, Speed};
+pub use exact_time::{Rate, Rounding};
 pub use graph::Graph;
 pub use id::EntityId;
 pub use node::{Edge, EdgeKind, Node, NodeKind};
 pub use persist::{Manifest, OplogReport, Project};
 pub use time::{RationalTime, TimeRange};
+pub use time_map::{Ramp, Ratio, TimeMap, Timing, Q};
 pub use tx::{Delta, Op, Tx};
 pub use value::{Color, Value};
 

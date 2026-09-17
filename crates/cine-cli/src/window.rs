@@ -170,7 +170,7 @@ impl ProjectLink for RuntimeLink {
                 path: e.path.clone(),
                 offset: e.offset,
                 unplayable: e.unplayable().map(str::to_string),
-                speed: e.speed,
+                timing: e.timing.clone(),
                 name: e.name.clone(),
             })
             .collect();
@@ -184,7 +184,9 @@ impl ProjectLink for RuntimeLink {
                 name: e.name.clone(),
                 // Read at its speed by the mixer: varispeed, or stretched with
                 // its pitch kept, as the clip's retime says.
-                speed: e.speed,
+                // A sound entry is the whole clip, so its map is anchored at the
+                // entry's own start, where `offset` is measured.
+                map: e.timing.as_ref().map(|t| t.map.clone()),
                 keep_pitch: e.keep_pitch,
             })
             .collect();

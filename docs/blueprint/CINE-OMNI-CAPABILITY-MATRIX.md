@@ -125,7 +125,7 @@ Research dossier numbers (e.g. `R16`) refer to `docs/blueprint/research/`.
 | Nested / compound sequences | All NLEs | Sequences as clips | **MISSING** | OTIO stacks exist | BE · FE | nle.stack | — | — | M | P1 | — |
 | Keyframes & effects | All NLEs | Opacity, position, speed, audio levels; curves | **MISSING** | — | BE · FE · G | animated params | — | — | L | P1 | — |
 | Retiming — constant speed | All NLEs | Speed changes, freeze frames, reverse | **VERIFIED** (constant) / **MISSING** (ramps) | a retime is an exact pair — the media consumed and the track time it takes — never a float scalar; composition, the OTIO file (with `LinearTimeWarp` for other tools), the graph, the flattened picture list, `picture_at`, the EDL's `M2` record and fit-to-fill all carry it; trims/rolls/joins refuse a retimed clip rather than guess; reverse resolves the right picture and decodes slowly (reported Degraded). Retimed **sound** plays as varispeed through the mixer's exact-position band-limited kernel, forwards and backwards, or — with *Keep pitch* — time-stretched by a memoryless phase vocoder that keeps frequency and level and seeks consistently; files at other sample rates are converted the same way | speed ramps; attacks flam when pitch is kept | `nle.retime_played`, `nle.retime_keep_pitch` | — | varispeed 74–81x, pitch kept 10–14x real time (dev profile) | M | P2 | 13 retime + 1 protocol + 8 real-WAV mixer + 6 kernel + 5 stretch tests |
-| Retiming — speed ramps | All NLEs | Retime as a function, not a scalar | **PLANNED** | R16 §A.6 | BE · M · G | retime curve | — | — | M | P2 | — |
+| Retiming — speed ramps | All NLEs | Retime as a function, not a scalar | **IMPLEMENTED** | a retime is an exact time map of linear-speed segments (`ucg_core::TimeMap`, `i128` rationals); a constant speed is one segment, so every player — picture list, record monitor, native player, mixer, stretch — reads one map. The inspector takes segments with speeds typed exactly (`150%`, `3/2`); the ramp decides the track length and media consumed and is refused past the shot; OTIO carries it exactly, the EDL its average with a note | eased curves; a cut inside a ramp is refused, not approximated | `nle.retime_ramp` | — | — | M | P2 | 5 map + 4 model/graph + 2 real-WAV mixer + 1 protocol test |
 | Captions & subtitles | Resolve, Premiere, subtitle tools | SRT/TTML/IMSC/SCC authoring, burn-in | **IMPLEMENTED** (authoring, import, export, script link, timeline lane) / **MISSING** (burn-in, SCC) | a Captions tab per sequence and language: add at the record marks or the playhead, edit text in place, move to the top, remove; import SRT with what moved onto a frame reported; export IMSC, SRT or WebVTT. Every change is one commit shared across windows and undoable; each caption shows the runtime's delivery issues. Stored in the project, not under the timeline, so re-importing the cut does not delete them. Linked to the dialogue they transcribe through the cut's scene bindings; a rewrite, a cut line, a removed scene or a re-cut flags the caption with the reason, a moved line is followed, and the script shows the link | burn-in needs a text renderer in the compositor | `nle.captions`, `nle.caption`, `DerivedFrom` to `script.dialogue` | — | review of 1,200 linked captions 49 ms | M | P1 | 5 graph + 8 pipeline + 2 protocol + 3 browser tests |
 | Proxy editing & conform | All NLEs | Cut on proxies, conform to originals exactly | **PARTIAL** | multiple refs preserved; proxy never becomes original | BE proxy gen · FE toggle | media refs | — | — | M | P1 | proxy/original round-trip (tested) |
 | Relink / offline media | All NLEs | Relink by content, name, TC | **VERIFIED** (engine) / **IMPLEMENTED** (UI) | content-hash relink | FE relink dialog | asset.media | — | — | S | P1 | relink tests |
@@ -276,10 +276,10 @@ Counted from the tables above (154 rows; where a row has two states, the first i
 | Status | Count |
 |---|---:|
 | VERIFIED | 21 |
-| IMPLEMENTED | 7 |
+| IMPLEMENTED | 8 |
 | PARTIAL | 50 |
 | PROTOTYPE | 3 |
-| PLANNED | 5 |
+| PLANNED | 4 |
 | MISSING | 51 |
 | BLOCKED | 9 |
 | DEFERRED | 8 |

@@ -324,7 +324,7 @@ pub fn plan(
 
     // What the clip occupies on the track: its own length, unless a retime
     // says otherwise.
-    let played = retime.map(|r| r.played).unwrap_or(src_duration);
+    let played = retime.as_ref().map(|r| r.played).unwrap_or(src_duration);
     if src_duration <= RationalTime::zero(src_duration.rate_exact()) {
         return Err(Error::Edit(
             "the edit has no length: the out point is at or before the in point".into(),
@@ -373,7 +373,7 @@ pub fn plan(
 pub fn perform(track: &mut Track, clip: Clip, plan: &Plan) -> Result<usize> {
     let mut clip = clip;
     clip.source_range = Some(plan.source);
-    clip.retime = plan.retime;
+    clip.retime = plan.retime.clone();
     let item = Item::Clip(clip);
     match plan.kind {
         EditKind::Insert => insert(track, plan.record.start_time, item),

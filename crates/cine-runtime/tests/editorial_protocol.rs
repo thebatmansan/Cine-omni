@@ -716,6 +716,36 @@ fn a_clip_can_be_retimed_and_the_cut_follows() {
     assert_eq!(seq["duration"]["ticks"], 96);
     assert!(seq["tracks"][0]["items"][0]["speed"].is_null());
 
+    // A ramp: real time to double speed over two seconds, typed as an editor
+    // types it. The ramp decides the length and the media consumed.
+    c.call(
+        "retime",
+        json!({ "clip": clip, "ramp": [
+            { "length": frames(48), "from": "100%", "to": "2" } ] }),
+    );
+    let seq = c.call("timeline", json!({ "id": tl }));
+    let first = &seq["tracks"][0]["items"][0];
+    assert_eq!(first["at"]["duration"]["ticks"], 48);
+    assert_eq!(
+        first["source_range"]["duration"]["ticks"], 72,
+        "three seconds of media"
+    );
+    assert_eq!(first["ramp"][0]["from"], json!([1, 1]));
+    assert_eq!(first["ramp"][0]["to"], json!([2, 1]));
+    // One second in, the integral of the speed is 1.25 s: picture 30.
+    let shown = c.call("picture_at", json!({ "timeline": tl, "time": frames(24) }));
+    assert_eq!(shown["speed"]["ramp"], true);
+    assert_eq!(shown["index"], 30);
+    // A speed nobody could mean is refused with the reason.
+    let e = c
+        .call_result(
+            "retime",
+            json!({ "clip": clip, "ramp": [ { "length": frames(24), "from": "fast", "to": "2" } ] }),
+        )
+        .expect_err("not a speed");
+    assert!(e.contains("`fast` is not a speed"), "{e}");
+    c.call("retime", json!({ "clip": clip, "played": Value::Null }));
+
     // Fit to fill settles four marks by changing the speed instead.
     let r = c.call(
         "three_point",
