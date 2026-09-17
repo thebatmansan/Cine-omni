@@ -165,6 +165,8 @@ pub struct SoundSegment {
     pub source_start: RationalTime,
     /// How fast the media runs, for the mixer to read it at.
     pub speed: Option<Speed>,
+    /// Keep pitch while the speed changes, rather than varispeed.
+    pub keep_pitch: bool,
 }
 
 /// Every enabled clip on every audible sound track, in track then time order.
@@ -200,6 +202,7 @@ pub fn sound_segments(timeline: &Timeline) -> Vec<SoundSegment> {
                     source.start_time
                 },
                 speed,
+                keep_pitch: c.retime.is_some_and(|r| r.keep_pitch),
             });
         }
     }

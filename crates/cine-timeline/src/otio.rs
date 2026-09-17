@@ -591,12 +591,21 @@ pub struct Retime {
     /// Play the media backwards: the last frame of the source range first.
     #[serde(default)]
     pub reversed: bool,
+    /// Keep the sound's pitch while its speed changes (a time stretch). When
+    /// false the sound is varispeed: pitch follows speed, as on tape.
+    #[serde(default)]
+    pub keep_pitch: bool,
 }
 
 impl Retime {
-    /// A retime that plays `source` worth of media over `played` of track.
+    /// A retime that plays `source` worth of media over `played` of track, as
+    /// varispeed.
     pub fn new(played: RationalTime, reversed: bool) -> Retime {
-        Retime { played, reversed }
+        Retime {
+            played,
+            reversed,
+            keep_pitch: false,
+        }
     }
 
     /// Speed as a ratio of media time to track time, reduced: `(2, 1)` is

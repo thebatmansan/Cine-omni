@@ -557,6 +557,8 @@ export interface TimelineItem {
   link: string | null;
   /** `null` when the clip plays in real time, which is nearly always. */
   speed: ClipSpeed | null;
+  /** A retimed clip's sound keeps its pitch (time stretch) rather than varispeed. */
+  keep_pitch: boolean;
   /** Every angle this clip could play; `null` when it carries one reference. */
   angles: string[] | null;
   /** Which of them is playing. */
@@ -851,8 +853,8 @@ export class RpcClient {
     return this.call<CascadeResult & { clip: string }>("switch_angle", { track, at, key });
   }
   /** Set a clip's speed by saying how long it should play; `null` removes it. */
-  retime(clip: string, played: ExactTime | null, reversed = false) {
-    return this.call<CascadeResult>("retime", { clip, played, reversed });
+  retime(clip: string, played: ExactTime | null, reversed = false, keepPitch = false) {
+    return this.call<CascadeResult>("retime", { clip, played, reversed, keep_pitch: keepPitch });
   }
   newTimeline(name: string, rate_num: number, rate_den: number) {
     return this.call<CascadeResult & { id: string }>("new_timeline", { name, rate_num, rate_den });

@@ -530,8 +530,21 @@ demonstrably runs. `ShellCapabilities::PLAYBACK` is now `Degraded`, naming the
   Measured with real WAV files through `MediaReader`: a converted 1 kHz tone
   counts 1,000 Hz within 0.5 Hz at −9.03 dB within 0.1 dB, reading in pieces or
   from a cold seek matches reading at once, and one retimed stream renders at
-  63–73x real time (dev test profile, decode included). Pitch preservation is
-  not done.
+  63–73x real time (dev test profile, decode included).
+* **Keeping pitch is a phase vocoder with no memory, and flams attacks.** A clip
+  whose retime keeps pitch is read at the output rate and time-stretched: each
+  synthesis frame measures every bin's true frequency from two analyses 128
+  samples apart and sets the output phase a steady partial would have at that
+  frame's output time, with bins locked to their peaks. No frame depends on
+  another, so a seek hears what continuous playback hears (within 1e-4, real
+  WAV) with nothing to rebuild. Through the mixer a 500 Hz tone at 2x stays
+  500 Hz within 1 Hz and its level within 0.5 dB while media from 2 s still
+  arrives at 1 s; a 44.1 kHz file at ¾ stays 1 kHz. The cost of sharp attacks
+  is measured, not assumed: a click at ¾ is two copies 8 ms apart at full peak.
+  One stretched stream renders at 10x real time from a 44.1 kHz file and 14x
+  from 48 kHz (dev test profile, workspace crates at `opt-level = 1`,
+  single-threaded, decode included) — after a frame cache and reading both
+  channels once per frame took it from 2x.
 * **Edit lists are not parsed.** The reference asset presents from 1024/12288
   rather than 0, and nothing compensates. Anything that assumes media starts at
   zero is wrong on this file.

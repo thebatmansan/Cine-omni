@@ -308,15 +308,8 @@ pub fn plan(
                     ));
                 }
                 Mismatch::FitToFill => {
-                    retime = Some(Retime {
-                        played: rd,
-                        reversed: false,
-                    });
-                    let speed = Retime {
-                        played: rd,
-                        reversed: false,
-                    }
-                    .speed_of(src_duration);
+                    retime = Some(Retime::new(rd, false));
+                    let speed = Retime::new(rd, false).speed_of(src_duration);
                     reconciled = Some(format!(
                         "fit to fill: {} media frames over {} on the timeline, a speed of {}/{}",
                         src_duration.to_frames(),

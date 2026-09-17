@@ -181,6 +181,10 @@ fn read_retime(
                 return Ok(Some(Retime {
                     played: read_time(played)?,
                     reversed: exact.get("reversed").and_then(J::as_bool).unwrap_or(false),
+                    keep_pitch: exact
+                        .get("keep_pitch")
+                        .and_then(J::as_bool)
+                        .unwrap_or(false),
                 }));
             }
         }
@@ -194,10 +198,7 @@ fn read_retime(
         if schema == "FreezeFrame" {
             let one = RationalTime::exact(1, media.duration.rate_exact());
             *source_range = Some(TimeRange::new(media.start_time, one));
-            return Ok(Some(Retime {
-                played: media.duration,
-                reversed: false,
-            }));
+            return Ok(Some(Retime::new(media.duration, false)));
         }
         let scalar = obj.get("time_scalar").and_then(J::as_f64).unwrap_or(1.0);
         if scalar == 0.0 || !scalar.is_finite() {
@@ -214,10 +215,10 @@ fn read_retime(
                 media.duration.ticks()
             )));
         }
-        return Ok(Some(Retime {
-            played: RationalTime::exact(ticks as i64, media.duration.rate_exact()),
-            reversed: scalar < 0.0,
-        }));
+        return Ok(Some(Retime::new(
+            RationalTime::exact(ticks as i64, media.duration.rate_exact()),
+            scalar < 0.0,
+        )));
     }
     Ok(None)
 }
@@ -458,7 +459,11 @@ fn effects_value(c: &Clip) -> J {
         "name": "retime",
         "effect_name": "LinearTimeWarp",
         "metadata": {
-            "cine": { "played": time_value(retime.played), "reversed": retime.reversed }
+            "cine": {
+                "played": time_value(retime.played),
+                "reversed": retime.reversed,
+                "keep_pitch": retime.keep_pitch,
+            }
         },
         "time_scalar": if retime.reversed { -scalar } else { scalar },
     }])

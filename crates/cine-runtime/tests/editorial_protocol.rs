@@ -700,6 +700,16 @@ fn a_clip_can_be_retimed_and_the_cut_follows() {
     assert_eq!(shown["speed"]["media"], 2);
     assert_eq!(shown["index"], 20);
 
+    // Keeping pitch is part of the retime: it is stored, projected, and does
+    // not change the length.
+    c.call(
+        "retime",
+        json!({ "clip": clip, "played": frames(24), "keep_pitch": true }),
+    );
+    let seq = c.call("timeline", json!({ "id": tl }));
+    assert_eq!(seq["tracks"][0]["items"][0]["keep_pitch"], true);
+    assert_eq!(seq["tracks"][0]["items"][0]["at"]["duration"]["ticks"], 24);
+
     // And taking the retime off puts the cut back.
     c.call("retime", json!({ "clip": clip, "played": Value::Null }));
     let seq = c.call("timeline", json!({ "id": tl }));

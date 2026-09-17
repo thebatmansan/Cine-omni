@@ -30,6 +30,8 @@ pub struct Entry {
     pub online: Option<bool>,
     /// How fast the media runs against record time here. `None` is real time.
     pub speed: Option<cine_timeline::Speed>,
+    /// For sound: keep pitch while the speed changes.
+    pub keep_pitch: bool,
 }
 
 impl Entry {
@@ -93,7 +95,8 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
                    item: usize,
                    clip: Option<EntityId>,
                    source_start: RationalTime,
-                   speed: Option<cine_timeline::Speed>| {
+                   speed: Option<cine_timeline::Speed>,
+                   keep_pitch: bool| {
         let name = tracks
             .get(track)
             .and_then(|t| t.children.get(item))
@@ -116,16 +119,37 @@ pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> 
             offset: available.map(|a| source_start.checked_sub(&a.start_time)),
             online: node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)),
             speed,
+            keep_pitch,
         }
     };
     let sound = cine_timeline::sound_segments(&composed)
         .iter()
-        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start, s.speed))
+        .map(|s| {
+            resolve(
+                s.record,
+                s.track,
+                s.item,
+                s.clip,
+                s.source_start,
+                s.speed,
+                s.keep_pitch,
+            )
+        })
         .collect();
     let entries = flat
         .segments
         .iter()
-        .map(|s| resolve(s.record, s.track, s.item, s.clip, s.source_start, s.speed))
+        .map(|s| {
+            resolve(
+                s.record,
+                s.track,
+                s.item,
+                s.clip,
+                s.source_start,
+                s.speed,
+                false,
+            )
+        })
         .collect();
     Ok(EditList {
         timeline,

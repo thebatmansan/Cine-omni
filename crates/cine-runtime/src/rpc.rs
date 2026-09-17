@@ -837,6 +837,10 @@ pub fn dispatch_with(
                     played: serde_json::from_value(v.clone())
                         .map_err(|e| format!("invalid played length: {e}"))?,
                     reversed: params.get("reversed").and_then(J::as_bool).unwrap_or(false),
+                    keep_pitch: params
+                        .get("keep_pitch")
+                        .and_then(J::as_bool)
+                        .unwrap_or(false),
                 }),
             };
             let group = p

@@ -23,6 +23,7 @@ pub mod mix;
 pub mod pan;
 pub mod session;
 pub mod speed;
+pub mod stretch;
 pub mod ucg;
 pub mod wav;
 

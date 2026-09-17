@@ -140,6 +140,7 @@ pub fn timeline(graph: &Graph, id: EntityId) -> Result<J, String> {
                     .map(|(head, tail)| json!({ "head": time(head), "tail": time(tail) })),
                 "link": clip.and_then(cine_timeline::session::link_of),
                 "speed": clip.and_then(|c| c.speed()).map(speed_json),
+                "keep_pitch": clip.and_then(|c| c.retime).is_some_and(|r| r.keep_pitch),
                 // Angles, when the clip carries more than one reference. The
                 // active one is `angle`; a clip with one reference has neither.
                 "angles": clip

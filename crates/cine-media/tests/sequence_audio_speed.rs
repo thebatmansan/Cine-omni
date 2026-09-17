@@ -81,6 +81,7 @@ fn entry(path: &Path, record: TimeRange, offset: RationalTime, speed: Option<Spe
         offset: Some(offset),
         name: "tone".into(),
         speed,
+        keep_pitch: false,
     }
 }
 
@@ -252,6 +253,88 @@ fn real_time_at_the_output_rate_is_a_copy() {
     }
 }
 
+/// Keeping pitch: at twice speed the tone stays where it was, and the media is
+/// still consumed twice as fast.
+#[test]
+fn keeping_pitch_changes_duration_and_not_frequency() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wav(dir.path(), "p.wav", 48_000, 5.0, |t| {
+        if t < 2.0 {
+            tone(500.0)(t)
+        } else {
+            tone(1_500.0)(t)
+        }
+    });
+    let mut e = entry(
+        &path,
+        TimeRange::new(secs(0, 1), secs(2, 1)),
+        secs(0, 1),
+        Some(Speed::new(2, 1, false)),
+    );
+    e.keep_pitch = true;
+    let (out, seq) = render(vec![e], secs(2, 1), 0, 96_000);
+    assert!(seq.refusals().is_empty());
+    let first = frequency(&out[4_000..44_000], 48_000.0);
+    let second = frequency(&out[52_000..92_000], 48_000.0);
+    assert!(
+        (first - 500.0).abs() < 1.0,
+        "pitch kept at 2x: {first:.2} Hz"
+    );
+    assert!(
+        (second - 1_500.0).abs() < 1.5,
+        "and media from 2 s still arrives at 1 s: {second:.2} Hz"
+    );
+    let level = rms_db(&out[4_000..44_000]);
+    assert!((level + 9.03).abs() < 0.5, "at its level: {level:.2} dB");
+}
+
+/// A 44.1 kHz file slowed to three quarters with its pitch kept: converted and
+/// stretched, still 1 kHz.
+#[test]
+fn keeping_pitch_from_a_file_at_another_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wav(dir.path(), "q.wav", 44_100, 3.0, tone(1_000.0));
+    let mut e = entry(
+        &path,
+        TimeRange::new(secs(0, 1), secs(2, 1)),
+        secs(0, 1),
+        Some(Speed::new(3, 4, false)),
+    );
+    e.keep_pitch = true;
+    let (out, _) = render(vec![e], secs(2, 1), 0, 96_000);
+    let f = frequency(&out[8_000..88_000], 48_000.0);
+    assert!((f - 1_000.0).abs() < 1.0, "{f:.2} Hz");
+}
+
+/// A cold read from the middle of a stretched clip gives the samples playing
+/// through it gives.
+#[test]
+fn a_seek_into_a_stretched_clip_hears_what_playback_hears() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wav(dir.path(), "r.wav", 48_000, 4.0, tone(611.0));
+    let make = || {
+        let mut e = entry(
+            &path,
+            TimeRange::new(secs(0, 1), secs(2, 1)),
+            secs(0, 1),
+            Some(Speed::new(3, 2, false)),
+        );
+        e.keep_pitch = true;
+        vec![e]
+    };
+    let (whole, _) = render(make(), secs(2, 1), 0, 96_000);
+    let mut cold = SequenceAudio::new(r48(), secs(2, 1), make());
+    let mut c = Vec::new();
+    cold.read(50_000, 1_000, &mut c).unwrap();
+    let worst = c
+        .chunks(2)
+        .map(|p| p[0])
+        .zip(&whole[50_000..51_000])
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max);
+    assert!(worst < 1e-4, "a seek lands {worst} away");
+}
+
 /// What reading at a speed costs, against real time.
 ///
 /// ```text
@@ -262,25 +345,41 @@ fn real_time_at_the_output_rate_is_a_copy() {
 fn measure_the_cost_of_reading_at_a_speed() {
     use std::time::Instant;
     let dir = tempfile::tempdir().unwrap();
-    let path = wav(dir.path(), "m.wav", 44_100, 130.0, tone(440.0));
+    let path44 = wav(dir.path(), "m.wav", 44_100, 130.0, tone(440.0));
+    let path48 = wav(dir.path(), "n.wav", 48_000, 130.0, tone(440.0));
     let seconds = 60i64;
     for (label, speed) in [
         ("44.1 kHz file, real time (rate conversion)", None),
         ("44.1 kHz file at 2x", Some(Speed::new(2, 1, false))),
         ("44.1 kHz file at 1/2x", Some(Speed::new(1, 2, false))),
         ("44.1 kHz file backwards", Some(Speed::new(1, 1, true))),
+        (
+            "44.1 kHz file at 2x, pitch kept",
+            Some(Speed::new(2, 1, false)),
+        ),
+        (
+            "48 kHz file at 2x, pitch kept",
+            Some(Speed::new(2, 1, false)),
+        ),
     ] {
+        let path = if label.starts_with("48") {
+            &path48
+        } else {
+            &path44
+        };
         let offset = if speed.is_some_and(|s| s.reversed) {
             secs(90, 1)
         } else {
             secs(1, 1)
         };
-        let entries = vec![entry(
-            &path,
+        let mut e = entry(
+            path,
             TimeRange::new(secs(0, 1), secs(seconds, 1)),
             offset,
             speed,
-        )];
+        );
+        e.keep_pitch = label.ends_with("pitch kept");
+        let entries = vec![e];
         let mut seq = SequenceAudio::new(r48(), secs(seconds, 1), entries);
         let mut out = Vec::with_capacity(48_000 * seconds as usize * 2);
         let t = Instant::now();

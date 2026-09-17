@@ -182,8 +182,10 @@ impl ProjectLink for RuntimeLink {
                 path: e.unplayable().is_none().then(|| e.path.clone()).flatten(),
                 offset: e.offset,
                 name: e.name.clone(),
-                // Read at its speed by the mixer; varispeed, so pitch follows.
+                // Read at its speed by the mixer: varispeed, or stretched with
+                // its pitch kept, as the clip's retime says.
                 speed: e.speed,
+                keep_pitch: e.keep_pitch,
             })
             .collect();
         Some(SequencePlan {

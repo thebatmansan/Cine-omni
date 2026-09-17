@@ -24,8 +24,13 @@
 //! so nothing aliases. A clip at one-for-one from a file at the output rate —
 //! nearly every clip — skips the kernel and copies samples, bit for bit.
 //!
-//! This is *varispeed*: a clip at twice speed sounds an octave up, as tape
-//! does. Backwards reads the file backwards from the end of the clip's range.
+//! By default that is *varispeed*: a clip at twice speed sounds an octave up,
+//! as tape does. Backwards reads the file backwards from the end of the clip's
+//! range. A clip whose retime keeps pitch is instead time-stretched by
+//! [`cine_audio::stretch::Stretch`], a phase vocoder with no memory: the file is
+//! read at the output rate through the same kernel, and the stretch changes its
+//! duration without its frequencies. Because no frame depends on another, a
+//! read from a seek gives what continuous playback gives in either mode.
 //!
 //! ## What is refused rather than converted
 //!
@@ -40,6 +45,7 @@ use crate::error::Result;
 use crate::reader::MediaReader;
 use crate::video::VideoReader;
 use cine_audio::speed::{cutoff_for, KernelTable, Stepper, HALF};
+use cine_audio::stretch::{Stretch, FRAME};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use ucg_core::{Rate, RationalTime, Rounding, Speed, TimeRange};
@@ -56,6 +62,9 @@ pub struct SoundEntry {
     pub name: String,
     /// How fast the media runs against record time. `None` is real time.
     pub speed: Option<Speed>,
+    /// Keep pitch while the speed changes (a time stretch) instead of
+    /// varispeed. Ignored at real time.
+    pub keep_pitch: bool,
 }
 
 /// Decoded audio of one file, kept as a sliding window.
@@ -70,6 +79,9 @@ struct Track {
     start: i64,
 }
 
+/// One stretched entry's synthesised frames, by frame index: left and right.
+type FrameCache = HashMap<i64, (Vec<f32>, Vec<f32>)>;
+
 /// The mixed sound of a sequence at a fixed output rate, stereo.
 pub struct SequenceAudio {
     rate: Rate,
@@ -81,6 +93,12 @@ pub struct SequenceAudio {
     /// Kernels by cutoff, built once: a cutoff depends only on how fast a clip
     /// reads its file, and a cut has few distinct speeds.
     kernels: HashMap<u64, KernelTable>,
+    /// The time stretch, built on first use: its FFT plans are the cost.
+    stretch: Option<Stretch>,
+    /// Synthesised stereo frames by entry and frame index. Consecutive reads
+    /// share three quarters of their frames; recomputing them was the cost.
+    /// A cache only: any frame recomputes to the same samples.
+    frames: HashMap<usize, FrameCache>,
 }
 
 /// Samples kept decoded behind the read position.
@@ -100,6 +118,8 @@ impl SequenceAudio {
             refusals: HashMap::new(),
             clipped: 0,
             kernels: HashMap::new(),
+            stretch: None,
+            frames: HashMap::new(),
         }
     }
 
@@ -235,7 +255,7 @@ impl AudioSource for SequenceAudio {
         let base = out.len();
         out.resize(base + n * 2, 0.0);
         let rate = self.rate;
-        for entry in self.entries.clone() {
+        for (index, entry) in self.entries.clone().into_iter().enumerate() {
             let (Some(path), Some(offset)) = (entry.path.clone(), entry.offset) else {
                 continue;
             };
@@ -270,6 +290,92 @@ impl AudioSource for SequenceAudio {
                     let (l, r) = track.sample(file_from + (s - a));
                     out[dest(s)] += l;
                     out[dest(s) + 1] += r;
+                }
+                continue;
+            }
+
+            if entry.keep_pitch && entry.speed.is_some() {
+                // A time stretch: the file read at the output rate (converted
+                // through the kernel when its rate differs), then stretched by
+                // the clip's speed with its pitch kept. Reversed, the input is
+                // the file read backwards from the end of the range.
+                let conv = Stepper::for_speed(
+                    (1, 1),
+                    (file_rate.num(), file_rate.den()),
+                    (rate.num(), rate.den()),
+                );
+                let speed = Stepper::new(i128::from(media), i128::from(per));
+                let file_at = move |j: i64| -> (i64, f64) {
+                    let (c, f) = conv.position(j);
+                    if reversed {
+                        if f == 0.0 {
+                            (start - c, 0.0)
+                        } else {
+                            (start - c - 1, 1.0 - f)
+                        }
+                    } else {
+                        (start + c, f)
+                    }
+                };
+                // Everything any frame covering [a, b) may read, in file samples.
+                let reach = (FRAME + 256) as i64;
+                let (j0, _) = speed.position(a - e0);
+                let (j1, _) = speed.position(b - e0);
+                let (f0, _) = file_at(j0 - reach);
+                let (f1, _) = file_at(j1 + reach);
+                let (lo, hi) = if f0 <= f1 { (f0, f1) } else { (f1, f0) };
+                track.cover(lo - HALF as i64, hi + HALF as i64 + 2)?;
+                let cutoff = cutoff_for(conv.per_output());
+                let kernel = self
+                    .kernels
+                    .entry(cutoff.to_bits())
+                    .or_insert_with(|| KernelTable::new(cutoff));
+                let stretch = self.stretch.get_or_insert_with(Stretch::new);
+                let track = self
+                    .tracks
+                    .get(&path)
+                    .and_then(Option::as_ref)
+                    .expect("opened above");
+                let direct = conv.is_identity();
+                let cache = self.frames.entry(index).or_default();
+                let len = (b - a) as usize;
+                let (mut left, mut right) = (vec![0.0f32; len], vec![0.0f32; len]);
+                for k in Stretch::frames_for(a - e0, b - e0) {
+                    let frames = cache.entry(k).or_insert_with(|| {
+                        // Both channels read once per frame, through the kernel.
+                        let start = stretch.input_start(k, &speed);
+                        let (mut l, mut r) = (
+                            Vec::with_capacity(Stretch::INPUT),
+                            Vec::with_capacity(Stretch::INPUT),
+                        );
+                        for i in 0..Stretch::INPUT as i64 {
+                            let (c, f) = file_at(start + i);
+                            // A file at the output rate lands on whole samples:
+                            // read them, with no kernel in the way.
+                            let (x, y) = if direct {
+                                track.sample(c)
+                            } else {
+                                kernel.read(c, f, |n| track.sample(n))
+                            };
+                            l.push(x);
+                            r.push(y);
+                        }
+                        (
+                            stretch.frame_from(k, &speed, &l),
+                            stretch.frame_from(k, &speed, &r),
+                        )
+                    });
+                    Stretch::add(k, &frames.0, a - e0, &mut left);
+                    Stretch::add(k, &frames.1, a - e0, &mut right);
+                }
+                // Frames behind this read will not be asked for again unless
+                // playback seeks back, and are recomputed identically if it does.
+                let oldest = *Stretch::frames_for(a - e0, b - e0).start();
+                cache.retain(|k, _| *k >= oldest);
+                for i in 0..len {
+                    let o = base + (a - from) as usize * 2 + i * 2;
+                    out[o] += left[i];
+                    out[o + 1] += right[i];
                 }
                 continue;
             }

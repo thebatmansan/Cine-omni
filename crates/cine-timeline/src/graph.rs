@@ -44,6 +44,7 @@ pub mod nle_attrs {
     /// A retimed clip's length on the track. Absent means real time.
     pub const RETIME_PLAYED: &str = "nle.retime_played";
     pub const RETIME_REVERSED: &str = "nle.retime_reversed";
+    pub const RETIME_KEEP_PITCH: &str = "nle.retime_keep_pitch";
     /// A multicam clip's angles: `{ key: entity id }`. Absent on the ordinary
     /// single-reference clip, which is nearly every clip.
     pub const ANGLES: &str = "nle.angles";
@@ -497,6 +498,12 @@ fn write_item(
                 nle_attrs::RETIME_REVERSED,
                 clip.retime.map(|r| r.reversed),
             )?;
+            set_opt(
+                tx,
+                id,
+                nle_attrs::RETIME_KEEP_PITCH,
+                clip.retime.filter(|r| r.keep_pitch).map(|_| true),
+            )?;
             let (media, _angles) = write_media(tx, id, clip)?;
             let clip_ref = ClipRef {
                 media,
@@ -817,6 +824,7 @@ pub fn export_item(graph: &Graph, id: EntityId) -> Result<Item> {
                     .map(|played| Retime {
                         played,
                         reversed: node.get_bool(nle_attrs::RETIME_REVERSED).unwrap_or(false),
+                        keep_pitch: node.get_bool(nle_attrs::RETIME_KEEP_PITCH).unwrap_or(false),
                     }),
                 markers,
                 metadata,

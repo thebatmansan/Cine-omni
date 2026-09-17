@@ -23,7 +23,7 @@ export function Inspector({
   onBind?(clip: string, scene: string): void;
   onUnbind?(clip: string, scene: string): void;
   onJob?(kind: string, params: Record<string, unknown>): void;
-  onRetime?(clip: string, played: ExactTime | null, reversed: boolean): void;
+  onRetime?(clip: string, played: ExactTime | null, reversed: boolean, keepPitch: boolean): void;
   onAngle?(clip: string, key: string): void;
 }) {
   return (
@@ -128,7 +128,7 @@ function Speed({
 }: {
   item: TimelineItem;
   clip: string;
-  onRetime(clip: string, played: ExactTime | null, reversed: boolean): void;
+  onRetime(clip: string, played: ExactTime | null, reversed: boolean, keepPitch: boolean): void;
 }) {
   const [frames, setFrames] = useState("");
   if (!item.source_range) return null;
@@ -162,7 +162,12 @@ function Speed({
         <button
           disabled={!Number.isInteger(wanted) || wanted < 1}
           onClick={() => {
-            onRetime(clip, { ticks: wanted, rate_num: rate.num, rate_den: rate.den }, false);
+            onRetime(
+              clip,
+              { ticks: wanted, rate_num: rate.num, rate_den: rate.den },
+              item.speed?.reversed ?? false,
+              item.keep_pitch,
+            );
             setFrames("");
           }}
         >
@@ -170,19 +175,31 @@ function Speed({
         </button>
         <button
           title="Play the media backwards over the same length"
-          onClick={() => onRetime(clip, item.at.duration, !(item.speed?.reversed ?? false))}
+          onClick={() => onRetime(clip, item.at.duration, !(item.speed?.reversed ?? false), item.keep_pitch)}
         >
           {item.speed?.reversed ? "Forwards" : "Backwards"}
         </button>
-        <button disabled={!item.speed} onClick={() => onRetime(clip, null, false)}>
+        <button disabled={!item.speed} onClick={() => onRetime(clip, null, false, false)}>
           Real time
         </button>
       </div>
       {item.speed && (
+        <label className="row" title="Keep the sound's pitch while its speed changes (a time stretch), rather than varispeed">
+          <input
+            type="checkbox"
+            checked={item.keep_pitch}
+            onChange={(e) => onRetime(clip, item.at.duration, item.speed?.reversed ?? false, e.target.checked)}
+          />
+          Keep pitch
+        </label>
+      )}
+      {item.speed && (
         <div className="note">
-          Sound plays as varispeed: its pitch follows the speed. Trims, rolls and joins refuse a
-          retimed clip rather than guess whether you meant to keep the speed or the media. Set the
-          length again instead.
+          {item.keep_pitch
+            ? "Sound keeps its pitch (a time stretch); sharp attacks can flam. "
+            : "Sound plays as varispeed: its pitch follows the speed. "}
+          Trims, rolls and joins refuse a retimed clip rather than guess whether you meant to keep
+          the speed or the media. Set the length again instead.
         </div>
       )}
     </>

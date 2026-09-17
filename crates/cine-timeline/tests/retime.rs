@@ -439,3 +439,21 @@ fn a_retime_survives_the_graph_and_moves_what_follows() {
     assert_eq!(track.duration(), f(96));
     assert_eq!(track.children[0].as_clip().unwrap().retime, None);
 }
+
+/// Keeping pitch is part of the retime and survives the file and the graph.
+#[test]
+fn keeping_pitch_survives_otio_and_reaches_the_sound_segment() {
+    let mut c = retimed("A", 24, false);
+    c.retime.as_mut().unwrap().keep_pitch = true;
+    let mut timeline = Timeline::new("t");
+    timeline.tracks.children.push(Composable::Track(
+        Track::new("A1", TrackKind::Audio).with(c),
+    ));
+    let text = write_otio(&timeline);
+    assert!(text.contains("\"keep_pitch\": true"), "{text}");
+    let back = read_otio(&text).unwrap();
+    assert_eq!(back, timeline);
+    let sound = cine_timeline::sound_segments(&back);
+    assert!(sound[0].keep_pitch);
+    assert_eq!(sound[0].speed.map(|s| (s.media, s.track)), Some((2, 1)));
+}
