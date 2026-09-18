@@ -52,6 +52,7 @@ fn movie(path: &Path, frames: usize, seed: usize) -> PathBuf {
                 channels: 2,
             }),
             colour: ColourTags::BT709,
+            timecode: None,
             first_picture: 0,
         },
     )

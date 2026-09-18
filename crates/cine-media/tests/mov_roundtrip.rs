@@ -63,6 +63,7 @@ fn write_movie(
         h264: H264Settings { qp: 18, gop: 12 },
         sound,
         colour: ColourTags::BT709,
+        timecode: None,
         first_picture: 0,
     };
     let mut w = MovWriter::create(path, W, H, rate, settings).unwrap();
@@ -262,6 +263,7 @@ fn sound_of_the_wrong_length_for_a_picture_is_refused() {
         h264: H264Settings::default(),
         sound: Some(sound),
         colour: ColourTags::UNSPECIFIED,
+        timecode: None,
         first_picture: 0,
     };
     let mut w = MovWriter::create(&path, W, H, Rate::F24, settings).unwrap();

@@ -110,6 +110,17 @@ impl Timecode {
         })
     }
 
+    /// The timecode `frames` later than this one, at the same rate and with
+    /// the same labelling.
+    ///
+    /// The one place this arithmetic happens. A timecode readout in an
+    /// interface asks for the answer rather than working it out: drop-frame is
+    /// the classic thing to reimplement slightly differently, and a second
+    /// implementation would be free to drift from this one.
+    pub fn plus_frames(&self, frames: i64) -> Result<Timecode> {
+        Timecode::from_frame_number(self.to_frame_number()? + frames, self.rate, self.drop_frame)
+    }
+
     /// Frame count since 00:00:00:00. Inverse of [`Timecode::from_frame_number`].
     pub fn to_frame_number(&self) -> Result<i64> {
         let tc_rate = i64::from(self.rate.timecode_rate());

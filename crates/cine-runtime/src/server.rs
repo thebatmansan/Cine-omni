@@ -661,6 +661,16 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     } else {
         None
     };
+    // The camera's own name for this picture, worked out by the one
+    // implementation of drop-frame labelling rather than by the interface. A
+    // media with no timecode track gets no header, and the interface shows the
+    // picture number, which is all anybody knows about it.
+    let source_timecode = {
+        let g = runtime.project.engine.read();
+        cine_media::ucg::read_media(&g, media)
+            .and_then(|i| i.start_timecode)
+            .and_then(|t| t.plus_frames(index as i64).ok())
+    };
     match runtime
         .frames
         .picture_through(&wanted, index, view.as_ref())
@@ -669,12 +679,16 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\
                  Cache-Control: no-store\r\nX-Cine-Index: {}\r\nX-Cine-Decode-Ms: {:.1}\r\n\
-                 X-Cine-Colour: {}\r\nX-Cine-Colour-Assumed: {}\r\n\r\n",
+                 X-Cine-Colour: {}\r\nX-Cine-Colour-Assumed: {}\r\n{}\r\n",
                 picture.png.len(),
                 picture.index,
                 picture.decode_ms,
                 crate::http::header_text(&picture.colour),
                 picture.colour_assumed,
+                match source_timecode {
+                    Some(tc) => format!("X-Cine-Timecode: {tc}\r\n"),
+                    None => String::new(),
+                },
             );
             let _ = stream.write_all(headers.as_bytes());
             let _ = stream.write_all(&picture.png);

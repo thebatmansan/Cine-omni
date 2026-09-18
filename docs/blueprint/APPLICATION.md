@@ -914,6 +914,60 @@ floats and copying them, which halves what one picture costs while it is read.
 What is not claimed: this bounds the picture a decoder is asked to produce, not
 a decoder's own working memory.
 
+### Source timecode
+
+A frame index counted from zero is this build's name for a frame. The timecode
+is everybody else's: an EDL's source-in, a dailies report, a note from the
+cutting room, a conform against a cut made in another building. Until now
+`MediaFile::start_timecode` was always absent, so every source timecode the
+application showed was counted from zero rather than from the camera's clock.
+
+**What a timecode track is.** A real track with a `tmcd` handler, one sample
+description and — for a take with continuous timecode — one sample:
+
+```text
+flags          bit 0 drop frame, bit 1 24-hour wrap, bit 3 counter not clock
+time scale     ticks a second          30000
+frame duration ticks a frame            1001   → the rate is 30000/1001, exactly
+frames         the labelling rate         30
+sample         a 32-bit frame number  107892   → 01:00:00;00
+```
+
+The rate comes out of the file as the ratio it is and goes straight into
+`Rate`, the same rate the rest of the project counts in. The frame number is
+decomposed by `Timecode`, which owns the drop-frame rules. Nothing else does
+timecode arithmetic — `Timecode::plus_frames` is the one place a label is
+moved, and the interface asks for the answer rather than working it out,
+because a second implementation of drop-frame is free to drift from the first.
+
+**Absent is not zero.** A file with no timecode track and a take that starts at
+00:00:00:00 are different facts, and every layer keeps them apart: the probe
+answers `None`, the media list omits the field, and the inspector says "none in
+this file".
+
+**The movie writer writes one**, which is how the tests have real media to read,
+and which means a **proxy carries its original's timecode** — a stand-in that
+could not be conformed like the thing it stands in for is not a stand-in. A
+rendered cut carries none: a sequence has no start timecode in this build yet,
+and writing one would invent the number a conform depends on.
+
+**Verified how, and how far.** Round-tripping through this build's own writer
+cannot catch a layout mistake the writer and the reader share, so
+`timecode_track.rs` also walks the boxes with a second reader written from the
+published field offsets, and checks the number in the file against arithmetic
+done in the test — one hour of drop-frame 29.97 is `30 × 3600 − 2 × 54 =
+107 892`. GStreamer's `qtdemux` reads the rest of the file unaffected but
+reports `unknown subtype tmcd`, and no other timecode reader exists on this
+machine, so **no independent implementation has confirmed these bytes**. The
+capability row says so.
+
+Measured in the real application (`ui/e2e/ingest.mjs`): a `cine bars` roll
+written at one hour reads `01:00:00:00` in the inspector, and picture 12 reads
+`01:00:00:12` in the viewer.
+
+Still counted from zero, and next: an EDL's source columns, which need each
+asset's available range carried through the import.
+
 ### What a job guarantees, audited
 
 Every long thing the application does is a job, so the guarantees below are the

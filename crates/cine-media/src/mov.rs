@@ -82,6 +82,12 @@ pub struct MovSettings {
     pub h264: H264Settings,
     pub sound: Option<SoundFormat>,
     pub colour: ColourTags,
+    /// The timecode of the movie's first picture, written as a `tmcd` track.
+    ///
+    /// `None` writes no timecode track, which is a different fact from a take
+    /// that starts at 00:00:00:00 — a reader can tell the two apart, so this
+    /// never invents a zero.
+    pub timecode: Option<crate::time::Timecode>,
     /// The picture number, in the sequence being written, of the movie's first
     /// picture. Sound is divided among pictures by absolute sequence position,
     /// so a movie of frames 100–199 holds exactly the samples a movie of the
@@ -127,6 +133,8 @@ pub struct MovWriter {
     video_chunks: Vec<Chunk>,
     sync: Vec<u32>,
     sound_chunks: Vec<Chunk>,
+    /// The timecode track's one sample: where it was written, and what it says.
+    timecode: Option<(u64, crate::time::Timecode)>,
     report: MovReport,
 }
 
@@ -179,6 +187,26 @@ impl MovWriter {
         head.extend_from_slice(&1u32.to_be_bytes());
         head.extend_from_slice(b"mdat");
         head.extend_from_slice(&0u64.to_be_bytes());
+        // The timecode track's sample is four bytes of media like any other,
+        // and goes at the front of the mdat where it can be read without
+        // passing a picture.
+        let mut timecode = None;
+        if let Some(tc) = settings.timecode {
+            if tc.rate != rate {
+                return Err(Error::Unsupported(format!(
+                    "a timecode of {tc} counts at {:?}, and this movie is {rate:?}",
+                    tc.rate
+                )));
+            }
+            let n = tc
+                .to_frame_number()
+                .map_err(|e| Error::Unsupported(format!("{tc} is not a timecode: {e}")))?;
+            let n = u32::try_from(n).map_err(|_| {
+                Error::Unsupported(format!("{tc} is beyond what a timecode track can hold"))
+            })?;
+            head.extend_from_slice(&n.to_be_bytes());
+            timecode = Some((head.len() as u64 - 4, tc));
+        }
         out.write_all(&head).map_err(Error::Io)?;
         Ok(MovWriter {
             out,
@@ -197,6 +225,7 @@ impl MovWriter {
             video_chunks: Vec::new(),
             sync: Vec::new(),
             sound_chunks: Vec::new(),
+            timecode,
             report: MovReport::default(),
         })
     }
@@ -328,7 +357,9 @@ impl MovWriter {
         let moov = {
             let mut m = Vec::new();
             atom(&mut m, b"moov", |b| {
-                let next_track = if self.sound.is_some() { 3 } else { 2 };
+                let tracks =
+                    1 + u32::from(self.sound.is_some()) + u32::from(self.timecode.is_some());
+                let next_track = tracks + 1;
                 full_atom(b, b"mvhd", 1, 0, |b| {
                     b.extend_from_slice(&0u64.to_be_bytes());
                     b.extend_from_slice(&0u64.to_be_bytes());
@@ -339,7 +370,7 @@ impl MovWriter {
                     b.extend_from_slice(&[0; 10]);
                     matrix(b);
                     b.extend_from_slice(&[0; 24]);
-                    b.extend_from_slice(&(next_track as u32).to_be_bytes());
+                    b.extend_from_slice(&next_track.to_be_bytes());
                 });
                 self.video_trak(b, video_duration);
                 if let Some(sound) = self.sound {
@@ -349,6 +380,10 @@ impl MovWriter {
                         .div_ceil(u128::from(sound.sample_rate))
                         as u64;
                     self.sound_trak(b, sound, sound_duration, movie_len);
+                }
+                if let Some((offset, tc)) = self.timecode {
+                    let id = 2 + u32::from(self.sound.is_some());
+                    self.timecode_trak(b, id, offset, tc, video_duration);
                 }
             });
             m
@@ -444,6 +479,81 @@ impl MovWriter {
                             }
                         });
                         co64(b, &self.video_chunks);
+                    });
+                });
+            });
+        });
+    }
+
+    /// The timecode track: one sample description saying how to read the
+    /// number, and one sample holding it.
+    ///
+    /// The track lasts as long as the picture, so a reader asking what the
+    /// timecode is at any point in the movie is answered by this one sample
+    /// rather than falling off the end of it.
+    fn timecode_trak(
+        &self,
+        b: &mut Vec<u8>,
+        id: u32,
+        offset: u64,
+        tc: crate::time::Timecode,
+        duration: u64,
+    ) {
+        let scale = self.rate.num();
+        let frame_duration = self.rate.den();
+        let frames = self.rate.timecode_rate() as u8;
+        atom(b, b"trak", |b| {
+            tkhd(b, id, duration, 0, 0, 0);
+            edts(b, duration);
+            atom(b, b"mdia", |b| {
+                mdhd(b, scale, duration);
+                hdlr(b, b"tmcd", "TimeCodeHandler");
+                atom(b, b"minf", |b| {
+                    // A timecode track is neither picture nor sound, so it
+                    // carries the generic media header rather than `vmhd` or
+                    // `smhd`; `tcmi` is where a player is told how to draw it.
+                    atom(b, b"gmhd", |b| {
+                        full_atom(b, b"gmin", 0, 0, |b| {
+                            b.extend_from_slice(&0x0040u16.to_be_bytes());
+                            b.extend_from_slice(&[0; 10]);
+                        });
+                        atom(b, b"tmcd", |b| {
+                            full_atom(b, b"tcmi", 0, 0, |b| {
+                                b.extend_from_slice(&0u16.to_be_bytes());
+                                b.extend_from_slice(&0u16.to_be_bytes());
+                                b.extend_from_slice(&12u16.to_be_bytes());
+                                b.extend_from_slice(&[0; 2]);
+                                b.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+                                b.push(0);
+                            });
+                        });
+                    });
+                    dinf(b);
+                    atom(b, b"stbl", |b| {
+                        full_atom(b, b"stsd", 0, 0, |b| {
+                            b.extend_from_slice(&1u32.to_be_bytes());
+                            atom(b, b"tmcd", |b| {
+                                b.extend_from_slice(&[0; 6]);
+                                b.extend_from_slice(&1u16.to_be_bytes());
+                                b.extend_from_slice(&0u32.to_be_bytes());
+                                // Flags: drop frame when the label is, and
+                                // 24-hour wrap, which every camera's clock does.
+                                let flags = u32::from(tc.drop_frame) | 0x0002;
+                                b.extend_from_slice(&flags.to_be_bytes());
+                                b.extend_from_slice(&scale.to_be_bytes());
+                                b.extend_from_slice(&frame_duration.to_be_bytes());
+                                b.push(frames);
+                                b.push(0);
+                            });
+                        });
+                        // One sample, lasting the whole track.
+                        stts(b, 1, duration.min(u64::from(u32::MAX)) as u32);
+                        stsc(b, &[Chunk { offset, samples: 1 }]);
+                        full_atom(b, b"stsz", 0, 0, |b| {
+                            b.extend_from_slice(&4u32.to_be_bytes());
+                            b.extend_from_slice(&1u32.to_be_bytes());
+                        });
+                        co64(b, &[Chunk { offset, samples: 1 }]);
                     });
                 });
             });

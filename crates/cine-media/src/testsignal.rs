@@ -13,6 +13,7 @@
 use crate::encode::{H264Settings, YuvFrame};
 use crate::error::{Error, Result};
 use crate::mov::{ColourTags, MovReport, MovSettings, MovWriter, SoundFormat};
+use crate::time::Timecode;
 use std::path::Path;
 use ucg_core::Rate;
 
@@ -60,13 +61,50 @@ pub fn is_pop(rate: Rate, k: u64) -> bool {
     k == (second * num).div_ceil(den)
 }
 
+/// The timecode a bars-and-pops roll starts at.
+///
+/// One hour is the convention for the first frame of programme, and a test
+/// roll that starts there is one a conform can be checked against without
+/// anybody having to remember an arbitrary number. A drop-frame rate gets a
+/// drop-frame label, because at 29.97 the non-drop one would be a different
+/// instant.
+pub const START: &str = "01:00:00:00";
+
 /// Write `seconds` of bars and pops, `width × height` at `rate`, to `path`.
+///
+/// The movie carries source timecode from [`START`]: test media that has none
+/// cannot exercise the paths that read it.
 pub fn bars_and_pops(
     path: &Path,
     width: usize,
     height: usize,
     rate: Rate,
     seconds: u32,
+) -> Result<MovReport> {
+    bars_and_pops_from(path, width, height, rate, seconds, start_timecode(rate))
+}
+
+/// [`START`] at `rate`, drop-frame where the rate is.
+pub fn start_timecode(rate: Rate) -> Option<Timecode> {
+    // Drop-frame is written with a semicolon before the frames, which is the
+    // only thing in a timecode string that says which of two different
+    // instants the label means.
+    let drop = rate.supports_drop_frame();
+    let text = match (drop, START.rsplit_once(':')) {
+        (true, Some((head, frames))) => format!("{head};{frames}"),
+        _ => START.to_string(),
+    };
+    Timecode::parse(&text, rate).ok()
+}
+
+/// Write `seconds` of bars and pops starting at `timecode`.
+pub fn bars_and_pops_from(
+    path: &Path,
+    width: usize,
+    height: usize,
+    rate: Rate,
+    seconds: u32,
+    timecode: Option<Timecode>,
 ) -> Result<MovReport> {
     if height < 16 {
         return Err(Error::Unsupported(
@@ -86,6 +124,7 @@ pub fn bars_and_pops(
                 channels: 2,
             }),
             colour: ColourTags::BT709,
+            timecode,
             first_picture: 0,
         },
     )?;

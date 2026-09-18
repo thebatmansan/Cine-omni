@@ -227,6 +227,53 @@ console.log(
 );
 await shot("imported");
 
+// The camera's own numbering reaches the interface. `cine bars` writes a roll
+// starting at one hour, so that is what both readouts must say — not a picture
+// number dressed up, and not a zero invented because the field was empty.
+await evaluate(`(() => {
+  const row = ${rows("A001C003.mov")}[0];
+  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  return true;
+})()`);
+// Back to the inspector, which is where an asset's own facts live.
+await until(
+  `(() => {
+     const t = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Inspector');
+     if (!t) return false;
+     t.click();
+     return true;
+   })()`,
+  "the inspector is open",
+);
+await until(`document.body.textContent.includes('Timecode')`, "the inspector has a timecode section");
+const shownTc = await until(
+  `(() => {
+     const dts = [...document.querySelectorAll('.props dt')];
+     const start = dts.find((d) => d.textContent === 'start');
+     return start && start.nextElementSibling ? start.nextElementSibling.textContent : false;
+   })()`,
+  "the inspector shows where the take starts",
+);
+assert(shownTc === "01:00:00:00", `the camera's number, read from the file: ${shownTc}`);
+
+// And the viewer's readout is the camera's name for the picture being watched,
+// which for picture 12 of a 24 fps roll starting at an hour is 01:00:00:12.
+await evaluate(`(() => {
+  const el = document.querySelector('.viewer input[aria-label="picture"]');
+  if (!el) throw new Error('no picture slider');
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '12');
+  // React listens for the input event on a range control, as a drag produces.
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+})()`);
+const readout = await until(
+  `(() => { const t = document.querySelector('.viewer .tc'); return t && t.textContent.trim() === '01:00:00:12' && t.textContent; })()`,
+  "the viewer reads out source timecode rather than a picture number",
+);
+assert(readout.trim() === "01:00:00:12", `picture 12 is ${readout.trim()}`);
+await shot("timecode");
+
 // The marks are the runtime's state, so they say what is wrong when it is.
 const marked = await evaluate(`${chips()}`);
 assert(!marked.includes("≠"), `and nothing claims the file is not what it is: ${marked.trim()}`);

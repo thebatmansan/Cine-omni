@@ -296,6 +296,16 @@ pub fn media(graph: &Graph) -> J {
                         "rate_den": s.video.and_then(|v| v.frame_rate).map(|r| r.den()),
                         "decodable": s.decodable,
                     })),
+                    // The camera's own numbering for this take's first frame,
+                    // where the file carries one. Absent means the file has no
+                    // timecode track — never that the take starts at zero.
+                    "timecode": info.as_ref().and_then(|i| i.start_timecode).map(|t| json!({
+                        "start": t.to_string(),
+                        "drop_frame": t.drop_frame,
+                        "rate_num": t.rate.num(),
+                        "rate_den": t.rate.den(),
+                        "frame": t.to_frame_number().ok(),
+                    })),
                     "streams": streams,
                     "proxies": crate::proxy::proxies_json(graph, n.id),
                     "resolution": crate::relink::state_json(graph, n.id),

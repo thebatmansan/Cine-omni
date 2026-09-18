@@ -70,6 +70,7 @@ fn movie(dir: &Path, name: &str, frames: usize, sound: Sound) -> PathBuf {
                 channels: 2,
             }),
             colour: ColourTags::BT709,
+            timecode: None,
             first_picture: 0,
         },
     )

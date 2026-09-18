@@ -58,6 +58,7 @@ fn source(dir: &Path, name: &str, w: usize, h: usize, frames: usize, channels: u
                 channels,
             }),
             colour: ColourTags::BT709,
+            timecode: None,
             first_picture: 0,
         },
     )

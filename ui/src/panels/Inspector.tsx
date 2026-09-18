@@ -536,6 +536,29 @@ function MediaDetail({
           </dl>
         </>
       )}
+      <div className="section-title">Timecode</div>
+      <dl className="props">
+        {media.timecode ? (
+          <>
+            <dt>start</dt>
+            <dd className="mono">{media.timecode.start}</dd>
+            <dt>counts at</dt>
+            <dd>
+              {media.timecode.rate_num}/{media.timecode.rate_den}
+              {media.timecode.drop_frame ? " · drop frame" : ""}
+            </dd>
+            <dt>frame</dt>
+            <dd>{media.timecode.frame ?? "—"}</dd>
+          </>
+        ) : (
+          <>
+            <dt>start</dt>
+            {/* A file with no timecode track is a different fact from a take
+                that starts at zero, and the two never read the same here. */}
+            <dd>none in this file</dd>
+          </>
+        )}
+      </dl>
       <div className="section-title">Streams</div>
       <dl className="props">
         {media.streams.map((s) => (

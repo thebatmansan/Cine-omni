@@ -716,6 +716,17 @@ export interface MediaView {
     decodable: boolean;
   } | null;
   streams: MediaStream[];
+  /**
+   * The camera's own numbering for this take's first frame. `null` means the
+   * file carries no timecode track — not that the take starts at zero.
+   */
+  timecode: {
+    start: string;
+    drop_frame: boolean;
+    rate_num: number;
+    rate_den: number;
+    frame: number | null;
+  } | null;
   checksum: ChecksumRecord | null;
   /** Stand-ins made from this original, with whether each is still usable. */
   proxies: ProxyView[];

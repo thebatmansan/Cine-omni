@@ -629,6 +629,10 @@ pub fn render_sequence(
                             channels: 2,
                         }),
                         colour,
+                        // No record timecode: a sequence has no start
+                        // timecode in this build yet, and writing one would
+                        // be inventing the number a conform depends on.
+                        timecode: None,
                         first_picture: first as u64,
                     },
                 )

@@ -37,7 +37,7 @@ export function Viewer({
 }) {
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const [shown, setShown] = useState<{ url: string; index: number } | null>(null);
+  const [shown, setShown] = useState<{ url: string; index: number; timecode: string | null } | null>(null);
   const [note, setNote] = useState<{ text: string; assumed: boolean } | null>(null);
   const [decodeMs, setDecodeMs] = useState<number | null>(null);
   // Looking through the project's display and view, rather than at the file's
@@ -67,9 +67,13 @@ export function Viewer({
           return;
         }
         const blob = await response.blob();
+        // The camera's name for this picture, as the runtime labelled it.
+        // Nothing here works out a timecode: drop-frame labelling has one
+        // implementation, and it is not in the browser.
+        const tc = response.headers.get("x-cine-timecode");
         setShown((old) => {
           if (old) URL.revokeObjectURL(old.url);
-          return { url: URL.createObjectURL(blob), index: want };
+          return { url: URL.createObjectURL(blob), index: want, timecode: tc };
         });
         const colour = response.headers.get("x-cine-colour");
         setNote(
@@ -147,8 +151,13 @@ export function Viewer({
         >
           ▶
         </button>
-        <span className="tc">{shown ? `#${shown.index}` : "—"}</span>
-        <span className="of">/ {frames || "—"}</span>
+        {/* The source timecode where the file has one, and the picture number
+            either way: one is what the camera called this frame, the other is
+            where it sits in the file, and they are not interchangeable. */}
+        <span className="tc" title={shown?.timecode ? "source timecode" : "picture number"}>
+          {shown ? (shown.timecode ?? `#${shown.index}`) : "—"}
+        </span>
+        <span className="of">{shown?.timecode ? `#${shown.index} / ${frames || "—"}` : `/ ${frames || "—"}`}</span>
         <input
           type="range"
           min={0}

@@ -603,10 +603,19 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
         id: "time.timecode",
         name: "Source timecode",
         area: "Time",
-        state: PathState::Missing,
-        detail: "No timecode track is read: `MediaFile::start_timecode` is always None, so every \
-                 source timecode shown is counted from zero, not from the camera's",
-        evidence: None,
+        state: PathState::Verified,
+        detail: "A QuickTime `tmcd` track is read: the exact rate as the ratio the file states \
+                 (30000/1001, never 29.97), the drop-frame flag, and the frame number, decomposed \
+                 into a label by the one implementation of drop-frame rules. The movie writer \
+                 writes one, so a proxy carries its original's timecode; the media list, the \
+                 inspector and the viewer's readout all show it. A file with no timecode track \
+                 answers absent, never zero. What is not claimed: discontinuous timecode reads as \
+                 the first run's start and says how many runs there are; a counter track is \
+                 reported as a counter rather than as a clock; a rendered cut carries no record \
+                 timecode, because a sequence has no start timecode in this build yet; and no \
+                 independent timecode reader was available to check the bytes, so the layout is \
+                 held to the published field offsets by a test that walks the boxes separately",
+        evidence: Some("cine-media/tests/timecode_track.rs"),
     },
     // --------------------------------------------------------------- colour
     MediaPath {

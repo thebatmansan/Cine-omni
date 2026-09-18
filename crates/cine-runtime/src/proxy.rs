@@ -512,6 +512,11 @@ pub fn generate(
                                 channels: 2,
                             }),
                             colour,
+                            // A proxy is the original's pictures, so it is the
+                            // original's timecode too: a stand-in that could
+                            // not be conformed like what it stands in for is
+                            // not a stand-in.
+                            timecode: info.start_timecode.filter(|t| t.rate == rate),
                             first_picture: 0,
                         },
                     )

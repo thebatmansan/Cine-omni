@@ -191,7 +191,9 @@ fn probe_isobmff(path: &Path, hash: ContentHash) -> Result<MediaFile> {
         hash,
         container: ContainerKind::IsoBmff,
         streams,
-        start_timecode: None,
+        // The camera's own numbering, where the file carries it. `None` means
+        // the file has no timecode track, never that it starts at zero.
+        start_timecode: crate::tmcd::source_timecode(path).map(|t| t.start),
         source: None,
     })
 }
