@@ -678,6 +678,72 @@ not quantised to 8; a hole refuses by name and the run continues past it.
 `sequence_protocol.rs` — ingest, identity from any member, cutting, the record
 monitor, the clamped-and-said-so preview, single files, and both refusals.
 
+### Scene-linear pictures, and what a view is for
+
+Scene light is unbounded. A highlight at six times display white is ordinary in
+an EXR, and the whole job of a view transform is to decide what such a value
+looks like on a display. So the colour path now has two methods, and the input's
+own encoding chooses between them (`cine_color::view::view_for`):
+
+* **display-referred input** (video, log) — the 33³ lattice, as before: what the
+  window's shader interpolates, with its error measured and recorded.
+* **scene-linear input** — the transform applied **exactly**, per pixel, by the
+  processor itself. A lattice over code values would have to clamp unbounded
+  light or stretch its domain absurdly; neither is a picture anyone should
+  deliver. The exact path has no lattice error, and the manifest records `0`
+  rather than a number that would be a fiction.
+
+`SOURCE → decode → source precision → scene-linear → view → display` is
+therefore a real chain, and the source representation is never overwritten by a
+display one: no view is baked into an asset, and a render through a view reads
+the original's own values every time.
+
+**What this makes possible.** Scene-linear pictures now deliver: through the
+project's view to any display-encoded output, or as EXR unchanged. **Jobs →
+Render → EXR** writes 32-bit float RGBA frames, unclamped and untransformed —
+a round trip returns the source's scene values, highlight and shadow alike.
+
+**What still refuses, and why it is the right answer.**
+
+* *Scene-linear as decoded into display output* — it has no display values;
+  writing it would clamp every highlight to white. Render it through a view, or
+  as EXR.
+* *A proxy of scene-linear media* — a proxy stands in for its original wherever
+  that original plays, so a baked view inside it would be applied a second time
+  by the window. There is no correct 8-bit stand-in for scene light.
+* *Captions burned into EXR* — burn-in draws display white, which is not a scene
+  value. Deliver the captions as a file, or render a display-encoded output.
+* *A movie through a P3 or Rec.2100 display* — the writer can only declare
+  Rec.709 primaries, and labelling a P3 picture Rec.709 is the substitution this
+  refuses.
+
+**Looking at it.** The source monitor has a **View** button: off, the file's own
+values (a float picture is shown clamped, and says so); on, the project's
+display and view, through the same function a render uses — so a preview and a
+delivery cannot disagree about colour.
+
+**HDR, stated exactly.** Rec.2100 PQ and HLG views work and differ from the SDR
+view as they must — measured, scene 4.0 → **0.6398** through ACES 2.0 HDR 1000
+nits (P3 D65), **0.8999** through sRGB. What no surface here can do is *present*
+HDR: the window and the browser are SDR. So a PQ preview is labelled "these are
+Rec.2100-PQ code values, not an HDR presentation", and no path claims otherwise.
+No HDR media can be decoded yet either, and no mastering metadata is read or
+written.
+
+**Checked:** `cine-color/tests/scene_linear_view.rs` — scene-linear takes the
+exact path and video takes the lattice; highlights roll off in order without
+clipping flat; deep shadows keep their order; negatives stay finite and do not
+sit above black; a whole picture equals pixel-by-pixel and alpha is untouched;
+an HDR view is a different transform from the SDR one.
+`sequence_protocol.rs` — as-decoded delivery refuses with its reason; through
+the view a ramp from deep shadow to a highlight several stops up delivers
+monotonically, with the highlight *not* clamped flat; EXR delivery returns the
+scene values; captions on EXR and proxies of scene-linear refuse.
+
+**Measured** (dev build): four 32×18 scene-linear frames through the exact view
+to 16-bit PNG, 43 ms. The exact path costs per pixel what a lattice lookup does
+not; nothing here is a claim about 4K throughput, which has not been measured.
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

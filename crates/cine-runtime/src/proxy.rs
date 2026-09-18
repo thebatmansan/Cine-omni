@@ -416,11 +416,17 @@ pub fn generate(
     }
 
     let mut reader = cine_media::Pictures::open(info.clone()).map_err(|e| e.to_string())?;
-    // A proxy is 8-bit video. Turning scene-linear pictures into it needs a
-    // view transform, which this path does not apply, so it refuses rather
-    // than clipping every highlight to white.
-    if let Some(why) = reader.unsupported_for_video_encode() {
-        return Err(format!("no proxy of this media: {why}"));
+    // A proxy is 8-bit video, and it stands in for its original wherever that
+    // original plays. Baking a view into it would make it display-referred
+    // media substituting for scene-linear media, and the window would then
+    // apply the view a second time. So scene-linear originals have no proxy,
+    // and the reason is the one that matters.
+    if reader.is_scene_float() {
+        return Err(format!(
+            "no proxy of {}: its pictures are scene-linear, and an 8-bit stand-in would have to \
+             bake in a view — which would then be applied twice wherever it plays",
+            reader.describe()
+        ));
     }
     let count = reader.frame_count();
     if count == 0 {

@@ -227,11 +227,15 @@ pub fn status(project: &OmniProject, dir: &Path) -> J {
                 return with(manifest, invalid(format!("{MOVIE_FILE} is missing")));
             }
         }
-        Output::Png8 | Output::Png16 => {
+        Output::Png8 | Output::Png16 | Output::Exr => {
             let first = manifest["frames"]["first"].as_i64().unwrap_or(0);
             let count = manifest["frames"]["count"].as_i64().unwrap_or(0);
-            if let Some(n) = (first..first + count).find(|n| !dir.join(frame_file(*n)).is_file()) {
-                return with(manifest, invalid(format!("{} is missing", frame_file(n))));
+            let name = |n: i64| match request.output {
+                Output::Exr => crate::render::exr_frame_file(n),
+                _ => frame_file(n),
+            };
+            if let Some(n) = (first..first + count).find(|n| !dir.join(name(*n)).is_file()) {
+                return with(manifest, invalid(format!("{} is missing", name(n))));
             }
         }
     }

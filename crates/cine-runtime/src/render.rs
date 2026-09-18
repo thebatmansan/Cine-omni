@@ -67,7 +67,6 @@ use cine_pipeline::OmniProject;
 use serde_json::{json, Value as J};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 use ucg_core::{EntityId, Rate, RationalTime, Rounding, TimeRange};
 
@@ -111,6 +110,8 @@ pub enum Output {
     Png16,
     /// QuickTime: H.264 picture, 24-bit PCM sound.
     Movie,
+    /// OpenEXR frames, 32-bit float, unclamped: what scene-linear pictures are.
+    Exr,
 }
 
 impl Output {
@@ -119,8 +120,9 @@ impl Output {
             "png8" | "png" => Ok(Output::Png8),
             "png16" => Ok(Output::Png16),
             "movie" => Ok(Output::Movie),
+            "exr" => Ok(Output::Exr),
             other => Err(format!(
-                "unknown output `{other}` (known: png8, png16, movie)"
+                "unknown output `{other}` (known: png8, png16, movie, exr)"
             )),
         }
     }
@@ -130,6 +132,7 @@ impl Output {
             Output::Png8 => "png8",
             Output::Png16 => "png16",
             Output::Movie => "movie",
+            Output::Exr => "exr",
         }
     }
 }
@@ -453,7 +456,7 @@ pub fn render_sequence(
     // Bake each clip's view once, outside the graph read.
     let views = match &view_wanted {
         None => None,
-        Some(w) => Some(bake_views(w, &list, &used)?),
+        Some(w) => Some(resolve_views(w, &list, &used)?),
     };
     let movie_tags = match (request.output, &views) {
         (Output::Movie, Some(v)) => Some(display_tags(&v.display)?),
@@ -476,14 +479,21 @@ pub fn render_sequence(
             };
             let reader =
                 cine_media::Pictures::open(info).map_err(|err| format!("`{}`: {err}", e.name))?;
-            // Scene-linear pictures cannot become display-encoded output
-            // without a view transform, and clipping them silently is the
-            // failure this refuses.
-            if let Some(why) = reader.unsupported_for_video_encode() {
+            // Scene light has no display meaning until a view is applied.
+            // Writing it into display-encoded output as decoded would clamp
+            // every highlight to white, so that one combination refuses; the
+            // same pictures render happily through a view, or as EXR.
+            if reader.is_scene_float()
+                && request.look == Look::AsDecoded
+                && request.output != Output::Exr
+            {
                 return Err(format!(
-                    "`{}` cannot be rendered by this path: {why}. Render it through a view when \
-                     one exists for it, or write an image sequence (not built)",
-                    e.name
+                    "`{}` is scene-linear ({}): as decoded it has no display values, and writing \
+                     it to {} would clamp every highlight to white. Render it through the project \
+                     view, or as EXR, which keeps the scene values",
+                    e.name,
+                    reader.describe(),
+                    request.output.as_str()
                 ));
             }
             readers.insert(path.clone(), reader);
@@ -559,6 +569,13 @@ pub fn render_sequence(
         }
         _ => None,
     };
+    if request.output == Output::Exr && captions.is_some() {
+        return Err(
+            "captions cannot be burned into EXR: the burn-in draws display white, which is not a \
+             scene value. Deliver the captions as a file, or render a display-encoded output"
+                .into(),
+        );
+    }
     let font = match &captions {
         Some(_) => Some(CaptionFont::system().map_err(|e| e.to_string())?),
         None => None,
@@ -665,15 +682,10 @@ pub fn render_sequence(
                         decoded_as.push(describe);
                     }
                     if let Some(views) = &views {
-                        let lut = views.luts[*entry]
+                        let transform = views.views[*entry]
                             .as_ref()
-                            .ok_or("a used clip was not baked")?;
-                        for p in px.as_chunks_mut::<4>().0 {
-                            let [r, g, b] = lut.apply([p[0], p[1], p[2]]);
-                            p[0] = r;
-                            p[1] = g;
-                            p[2] = b;
-                        }
+                            .ok_or("a used clip has no view")?;
+                        transform.apply_image(&mut px, 4);
                     }
                     let img = Image::from_data(fw as usize, fh as usize, ChannelSet::Rgba, px)
                         .ok_or("picture buffer has the wrong size")?;
@@ -708,6 +720,10 @@ pub fn render_sequence(
                 Output::Png16 => {
                     let png = png16(&image.data, width as u32, height as u32)?;
                     write_file(&partial.join(frame_file(n)), &png)?;
+                }
+                Output::Exr => {
+                    // Unclamped, 32-bit float: the scene values themselves.
+                    write_exr(&partial.join(exr_frame_file(n)), &image.data, width, height)?;
                 }
                 Output::Movie => {
                     let ([y, u, v], clipped) =
@@ -769,12 +785,14 @@ pub fn render_sequence(
             .collect();
         let files = match request.output {
             Output::Movie => json!({ "movie": MOVIE_FILE }),
+            Output::Exr => json!({ "pattern": "frame_%06d.exr", "first": first, "count": plan.len() }),
             _ => json!({ "pattern": "frame_%06d.png", "first": first, "count": plan.len() }),
         };
         let precision = match request.output {
             Output::Png8 => "decoded 8-bit; processed in 32-bit float; written 8 bits per channel, clamped to [0, 1]",
             Output::Png16 => "decoded 8-bit; processed in 32-bit float; written 16 bits per channel, clamped to [0, 1]",
             Output::Movie => "decoded 8-bit; processed in 32-bit float; written 8-bit 4:2:0 BT.709 limited range (chroma averaged over 2x2), lossy H.264",
+            Output::Exr => "processed and written in 32-bit float, unclamped: values above 1 and below 0 are kept as they are",
         };
         let manifest = json!({
             "kind": RENDER_KIND,
@@ -882,6 +900,23 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// The EXR file name of record frame `n`.
+pub fn exr_frame_file(n: i64) -> String {
+    format!("frame_{n:06}.exr")
+}
+
+/// One frame as 32-bit float RGBA EXR, unclamped.
+///
+/// Nothing is scaled, clipped or re-encoded: the samples written are the
+/// samples computed, which is the point of delivering EXR at all.
+pub fn write_exr(path: &Path, rgba: &[f32], width: usize, height: usize) -> Result<(), String> {
+    exr::prelude::write_rgba_file(path, width, height, |x, y| {
+        let i = (y * width + x) * 4;
+        (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3])
+    })
+    .map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// A 16-bit-per-channel RGBA PNG of float samples, clamped to [0, 1].
 pub fn png16(rgba: &[f32], w: u32, h: u32) -> Result<Vec<u8>, String> {
     let samples: Vec<u16> = rgba
@@ -943,7 +978,7 @@ struct Views {
     display: String,
     view: String,
     /// Per entry; `None` for entries this render does not show.
-    luts: Vec<Option<Arc<cine_color::lut::Lut3D>>>,
+    views: Vec<Option<cine_color::view::ViewTransform>>,
     describe: Vec<String>,
     worst_error: f32,
 }
@@ -993,18 +1028,21 @@ pub(crate) fn wanted_views(
     })
 }
 
-fn bake_views(
+/// The view for each used entry: a lattice for display-referred pictures, the
+/// transform itself for scene-linear ones. `cine_color::view::view_for` makes
+/// the choice from the input's encoding.
+fn resolve_views(
     w: &WantedViews,
     list: &crate::playlist::EditList,
     used: &[usize],
 ) -> Result<Views, String> {
-    let mut cache: HashMap<String, cine_color::view::BakedView> = HashMap::new();
-    let mut luts = Vec::with_capacity(list.entries.len());
+    let mut cache: HashMap<String, cine_color::view::ViewTransform> = HashMap::new();
+    let mut views = Vec::with_capacity(list.entries.len());
     let mut describe = Vec::new();
     let mut worst = 0.0f32;
     for (i, (entry, wanted)) in list.entries.iter().zip(&w.per_entry).enumerate() {
         if !used.contains(&i) {
-            luts.push(None);
+            views.push(None);
             continue;
         }
         let Some((input, cdl)) = wanted else {
@@ -1014,10 +1052,10 @@ fn bake_views(
             ));
         };
         let key = format!("{input}|{}", cine_color::view::cdl_fingerprint(cdl.as_ref()));
-        let baked = match cache.get(&key) {
-            Some(b) => b.clone(),
+        let transform = match cache.get(&key) {
+            Some(t) => t.clone(),
             None => {
-                let b = cine_color::view::bake_view(
+                let t = cine_color::view::view_for(
                     &w.config,
                     input,
                     &w.working,
@@ -1025,26 +1063,21 @@ fn bake_views(
                     &w.display,
                     &w.view,
                 )
-                .ok_or_else(|| {
-                    format!(
-                        "`{}` ({input}) cannot be baked into {} / {}: the transform does not compile, or the input is scene-linear",
-                        entry.name, w.display, w.view
-                    )
-                })?;
-                cache.insert(key, b.clone());
-                b
+                .map_err(|why| format!("`{}`: {why}", entry.name))?;
+                cache.insert(key, t.clone());
+                t
             }
         };
-        worst = worst.max(baked.worst_error);
-        if !describe.contains(&baked.describe) {
-            describe.push(baked.describe.clone());
+        worst = worst.max(transform.worst_error());
+        if !describe.contains(&transform.describe().to_string()) {
+            describe.push(transform.describe().to_string());
         }
-        luts.push(Some(baked.lut));
+        views.push(Some(transform));
     }
     Ok(Views {
         display: w.display.clone(),
         view: w.view.clone(),
-        luts,
+        views,
         describe,
         worst_error: worst,
     })

@@ -30,6 +30,10 @@ thiserror.workspace = true
 parking_lot.workspace = true
 crossbeam-channel.workspace = true
 
+# OpenEXR, for delivering float frames. The same crate the compositor and the
+# media layer read EXR with.
+exr.workspace = true
+
 # The WebSocket handshake is specified in terms of SHA-1 and base64. These are
 # the whole of the protocol's cryptographic surface; a full async stack would be
 # a large dependency for a job the standard library and two small crates do.
@@ -42,5 +46,3 @@ base64 = "0.23"
 
 [dev-dependencies]
 tempfile = "3"
-# Tests write real EXR files, with the library that reads them.
-exr.workspace = true

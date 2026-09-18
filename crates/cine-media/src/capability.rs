@@ -528,11 +528,26 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
         id: "picture.float.deliver",
         name: "Delivering scene-linear pictures",
         area: "Picture",
-        state: PathState::Refused,
-        detail: "Turning scene-linear float pictures into 8-bit video needs a view transform this \
-                 path does not apply, so proxies and renders of an EXR sequence refuse by name \
-                 rather than clipping every highlight to white",
-        evidence: Some("cine-runtime/tests/sequence_protocol.rs::the_paths_that_would_lower_its_precision_refuse_instead"),
+        state: PathState::Verified,
+        detail: "Through the project's view, scene-linear pictures deliver to any display-encoded \
+                 output (the transform is applied exactly, not through a lattice: highlights roll \
+                 off rather than clip); as EXR they deliver unchanged, scene values intact. As \
+                 decoded into display output they refuse, because that would clamp every \
+                 highlight to white, and a proxy of them refuses because the baked view would be \
+                 applied twice wherever it stood in",
+        evidence: Some("cine-runtime/tests/sequence_protocol.rs::scene_linear_delivers_through_a_view_or_as_exr_and_refuses_to_be_clamped"),
+    },
+    MediaPath {
+        id: "delivery.exr",
+        name: "EXR delivery",
+        area: "Derived media",
+        state: PathState::Verified,
+        detail: "A render writes 32-bit float RGBA EXR frames, unclamped and untransformed, with \
+                 the same frame numbering as a PNG sequence; a round trip returns the source's \
+                 scene values. Captions refuse: burn-in draws display white, which is not a scene \
+                 value. Half-float output, deep data, layers and metadata beyond RGBA are not \
+                 written",
+        evidence: Some("cine-runtime/tests/sequence_protocol.rs::scene_linear_delivers_through_a_view_or_as_exr_and_refuses_to_be_clamped"),
     },
     MediaPath {
         id: "picture.alpha",
@@ -591,6 +606,18 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
     },
     // --------------------------------------------------------------- colour
     MediaPath {
+        id: "colour.scene_linear",
+        name: "Scene-linear pictures through a view",
+        area: "Colour",
+        state: PathState::Verified,
+        detail: "Scene light is unbounded, so its view transform is applied exactly per pixel \
+                 rather than through a lattice over code values: highlights several stops above \
+                 white roll off in order, deep shadows keep their order, and negative samples \
+                 stay finite. Display-referred input still takes the measured lattice, which is \
+                 what the window's shader interpolates",
+        evidence: Some("cine-color/tests/scene_linear_view.rs"),
+    },
+    MediaPath {
         id: "colour.stream_metadata",
         name: "Colour from the picture stream",
         area: "Colour",
@@ -621,11 +648,14 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
         id: "colour.hdr.view",
         name: "HDR viewing transforms",
         area: "Colour",
-        state: PathState::Blocked,
-        detail: "Rec.2100 PQ and HLG display transforms are implemented and checked against \
-                 OpenColorIO, but no HDR media can be decoded here, so the path is unexercised \
-                 end to end. Blocked on high-bit-depth decode",
-        evidence: None,
+        state: PathState::Partial,
+        detail: "Scene-linear pictures go through Rec.2100 PQ and HLG views exactly, and the \
+                 result differs from the SDR view as it must (measured: scene 4.0 → 0.6398 in PQ \
+                 at 1000 nits, 0.8999 in sRGB). What no surface here can do is *present* HDR: the \
+                 window and the browser are SDR, and a PQ picture shown on them is labelled as \
+                 code values, not as an HDR presentation. No HDR media can be decoded either, and \
+                 no mastering metadata is read or written",
+        evidence: Some("cine-color/tests/scene_linear_view.rs::an_hdr_display_view_is_a_different_transform_from_the_sdr_one"),
     },
     // ---------------------------------------------------------------- sound
     MediaPath {

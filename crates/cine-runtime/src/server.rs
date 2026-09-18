@@ -490,6 +490,56 @@ fn serve_render_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     }
 }
 
+/// The project's view for one media file's own colorspace.
+///
+/// No grade: a grade belongs to a clip in a cut, and this is the media itself.
+/// An HDR display is named in the description together with the fact that the
+/// browser cannot present it, because a PQ picture shown on an SDR surface is
+/// not HDR however correct the transform was.
+fn project_view_for(
+    runtime: &Runtime,
+    media: ucg_core::EntityId,
+) -> Result<cine_color::view::ViewTransform, String> {
+    let graph = runtime.project.engine.read();
+    let (config, _) = cine_color::view::project_config(&graph, runtime.project.root)
+        .ok_or("the project has no colour config to look through")?;
+    let (display, view) = match runtime.project.session.view() {
+        Some(v) => (v.display, v.view),
+        None => cine_color::view::default_view(&config)
+            .ok_or("the project's colour config declares no display and view")?,
+    };
+    let path = graph
+        .node(media)
+        .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH))
+        .ok_or("no media with that id in this project")?;
+    let input = cine_color::view::input_colorspaces(&graph)
+        .get(path)
+        .cloned()
+        .ok_or("this media has no input colorspace established, so it cannot be looked at through a view")?;
+    let working = config.role("scene_linear").unwrap_or("ACEScg").to_string();
+    let transform = cine_color::view::view_for(&config, &input, &working, None, &display, &view)?;
+    let hdr = display.contains("2100")
+        || display.to_lowercase().contains("pq")
+        || display.to_lowercase().contains("hlg");
+    if hdr {
+        // Honest rather than flattering: the transform is right, the surface
+        // is not an HDR one, and saying so is the difference between a
+        // reference picture and a pretty one.
+        return Ok(match transform {
+            cine_color::view::ViewTransform::Exact { processor, describe } => {
+                cine_color::view::ViewTransform::Exact {
+                    processor,
+                    describe: format!(
+                        "{describe} · shown on an SDR surface: these are {display} code values, not an HDR presentation"
+                    ),
+                }
+            }
+            other => other,
+        });
+    }
+    Ok(transform)
+}
+
 /// Handle one JSON-RPC line. `None` means the request was a notification.
 /// One decoded picture, as a PNG.
 ///
@@ -500,11 +550,13 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     let mut media = None;
     let mut index = 0usize;
     let mut proxy = None;
+    let mut through_view = false;
     for pair in query.split('&') {
         match pair.split_once('=') {
             Some(("media", v)) => media = ucg_core::EntityId::parse(v),
             Some(("index", v)) => index = v.parse().unwrap_or(0),
             Some(("proxy", v)) => proxy = ucg_core::EntityId::parse(v),
+            Some(("view", v)) => through_view = v == "project",
             _ => {}
         }
     }
@@ -541,7 +593,20 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
             return;
         }
     };
-    match runtime.frames.picture(&wanted, index) {
+    // The project's view, when asked for: built here from the same function a
+    // render uses, so a preview and a render cannot disagree about colour.
+    let view = if through_view {
+        match project_view_for(runtime, media) {
+            Ok(v) => Some(v),
+            Err(why) => {
+                respond(stream, "422 Unprocessable Content", "text/plain; charset=utf-8", why.as_bytes());
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    match runtime.frames.picture_through(&wanted, index, view.as_ref()) {
         Ok(picture) => {
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\

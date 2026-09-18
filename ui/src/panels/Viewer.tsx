@@ -40,6 +40,9 @@ export function Viewer({
   const [shown, setShown] = useState<{ url: string; index: number } | null>(null);
   const [note, setNote] = useState<{ text: string; assumed: boolean } | null>(null);
   const [decodeMs, setDecodeMs] = useState<number | null>(null);
+  // Looking through the project's display and view, rather than at the file's
+  // own values. Scene-linear media has no display values without it.
+  const [viewed, setViewed] = useState(false);
   const inflight = useRef<AbortController | null>(null);
 
   const playback = capabilities.find((c) => c.id === "media.playback");
@@ -55,7 +58,7 @@ export function Viewer({
       inflight.current = control;
       setLoading(true);
       try {
-        const response = await fetch(`/frame?media=${media.id}&index=${want}`, {
+        const response = await fetch(`/frame?media=${media.id}&index=${want}${viewed ? "&view=project" : ""}`, {
           signal: control.signal,
         });
         if (!response.ok) {
@@ -83,7 +86,7 @@ export function Viewer({
         setLoading(false);
       }
     },
-    [media, decodable],
+    [media, decodable, viewed],
   );
 
   useEffect(() => {
@@ -101,6 +104,14 @@ export function Viewer({
         {media && <span className="count">{media.name}</span>}
         <span className="spacer" />
         {decodeMs !== null && <span className="count">decode {decodeMs.toFixed(0)} ms</span>}
+        <button
+          aria-pressed={viewed}
+          title="Look through the project's display and view, as a render does. Scene-linear media has no display values without it."
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => setViewed((v) => !v)}
+        >
+          View
+        </button>
       </div>
 
       <div className="viewer-stage">

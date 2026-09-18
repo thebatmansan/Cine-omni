@@ -80,6 +80,134 @@ pub fn input_colorspaces(graph: &Graph) -> HashMap<String, String> {
         .collect()
 }
 
+/// How a picture is put through a display and view.
+///
+/// Two kinds, because two kinds of picture exist and one method does not serve
+/// both:
+///
+/// * **Baked** — display-referred input (video, log). Its code values live in a
+///   known, bounded range, so the transform is a 33³ lattice: what the window's
+///   shader interpolates, with its error measured.
+/// * **Exact** — scene-linear input. Scene light is unbounded: a highlight at
+///   6.25 is ordinary, and a lattice over code values would have to clamp it or
+///   stretch its domain absurdly. So the transform is applied exactly, per
+///   pixel, by the processor itself. Slower, and correct.
+///
+/// The choice is made from the input's encoding, not from what the caller
+/// hopes, and it travels with the result so a surface can say which it used.
+#[derive(Clone)]
+pub enum ViewTransform {
+    Baked(BakedView),
+    Exact {
+        processor: Arc<crate::processor::Processor>,
+        describe: String,
+    },
+}
+
+impl std::fmt::Debug for ViewTransform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ({})",
+            self.describe(),
+            if self.is_exact() { "exact" } else { "baked" }
+        )
+    }
+}
+
+impl ViewTransform {
+    /// One pixel through the view.
+    pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
+        match self {
+            ViewTransform::Baked(b) => b.lut.apply(rgb),
+            ViewTransform::Exact { processor, .. } => processor.apply_rgb(&rgb),
+        }
+    }
+
+    /// A whole picture through the view, in place. `channels` is the stride:
+    /// RGBA data keeps its alpha, which no view transform touches.
+    pub fn apply_image(&self, data: &mut [f32], channels: usize) {
+        match self {
+            ViewTransform::Exact { processor, .. } => processor.apply_image(data, channels),
+            ViewTransform::Baked(b) => {
+                for px in data.chunks_exact_mut(channels) {
+                    let [r, g, bl] = b.lut.apply([px[0], px[1], px[2]]);
+                    px[0] = r;
+                    px[1] = g;
+                    px[2] = bl;
+                }
+            }
+        }
+    }
+
+    /// What it is, in words: `input → grade → display / view`.
+    pub fn describe(&self) -> &str {
+        match self {
+            ViewTransform::Baked(b) => &b.describe,
+            ViewTransform::Exact { describe, .. } => describe,
+        }
+    }
+
+    /// The worst difference from the exact transform. Zero for the exact path,
+    /// because it *is* the transform.
+    pub fn worst_error(&self) -> f32 {
+        match self {
+            ViewTransform::Baked(b) => b.worst_error,
+            ViewTransform::Exact { .. } => 0.0,
+        }
+    }
+
+    /// Whether the transform is applied exactly rather than through a lattice.
+    pub fn is_exact(&self) -> bool {
+        matches!(self, ViewTransform::Exact { .. })
+    }
+}
+
+/// The view for one input colorspace, by whichever method that input needs.
+///
+/// Errors say what could not be done, rather than answering `None` and leaving
+/// the caller to guess whether the transform was impossible or the input
+/// unknown.
+pub fn view_for(
+    config: &Config,
+    input: &str,
+    working: &str,
+    cdl: Option<&ucg_schema::Cdl>,
+    display: &str,
+    view: &str,
+) -> Result<ViewTransform, String> {
+    let encoding = config
+        .colorspace(input)
+        .ok_or_else(|| format!("`{input}` is not a colorspace in this project's config"))?
+        .encoding
+        .to_lowercase();
+    let display_referred = matches!(
+        encoding.as_str(),
+        "sdr-video" | "hdr-video" | "edr-video" | "log"
+    );
+    if display_referred {
+        return bake_view(config, input, working, cdl, display, view)
+            .map(ViewTransform::Baked)
+            .ok_or_else(|| {
+                format!(
+                    "`{input}` cannot be baked into {display} / {view}: the transform does not compile"
+                )
+            });
+    }
+    // Scene-linear (or a config that declares no encoding, which ACES configs
+    // do for scene-referred spaces): exact, because the values are unbounded.
+    let processor = crate::ucg::viewing_processor(config, input, working, cdl, display, view)
+        .map_err(|e| format!("`{input}` through {display} / {view}: {e}"))?;
+    let describe = match cdl {
+        Some(_) => format!("{input} → grade → {display} / {view} (exact, scene-linear)"),
+        None => format!("{input} → {display} / {view} (exact, scene-linear)"),
+    };
+    Ok(ViewTransform::Exact {
+        processor: Arc::new(processor),
+        describe,
+    })
+}
+
 /// Bake `input → [grade →] display / view` and measure what baking cost.
 ///
 /// `None` when the config cannot compile the transform, and — deliberately —

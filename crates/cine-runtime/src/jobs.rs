@@ -368,6 +368,7 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
                 crate::render::Output::Movie => "movie",
                 crate::render::Output::Png8 => "PNG 8-bit",
                 crate::render::Output::Png16 => "PNG 16-bit",
+                crate::render::Output::Exr => "EXR",
             }
         );
         if let Some(language) = &request.captions {

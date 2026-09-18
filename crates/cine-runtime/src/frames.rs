@@ -61,6 +61,21 @@ impl FrameService {
     /// decoder's own words: a codec this build cannot decode says so rather
     /// than returning a blank image.
     pub fn picture(&self, media: &MediaFile, index: usize) -> Result<Picture, String> {
+        self.picture_through(media, index, None)
+    }
+
+    /// Decode one picture and encode it as a PNG, optionally through a view.
+    ///
+    /// With a view, the picture is transformed exactly as a render would
+    /// transform it, and the colour description says which view it was. A
+    /// scene-linear picture has no display values without one, so this is how
+    /// an EXR is looked at honestly rather than clamped.
+    pub fn picture_through(
+        &self,
+        media: &MediaFile,
+        index: usize,
+        view: Option<&cine_color::view::ViewTransform>,
+    ) -> Result<Picture, String> {
         let began = std::time::Instant::now();
         let path = media.path.as_path();
         let mut open = self.open.lock();
@@ -85,7 +100,24 @@ impl FrameService {
             .ok_or("no picture at that index")?;
         let decode_ms = began.elapsed().as_secs_f64() * 1e3;
 
-        let (png, width, height, colour, assumed) = encode(&frame)?;
+        let (png, width, height, colour, assumed) = match view {
+            None => encode(&frame)?,
+            Some(view) => {
+                let (mut px, w, h, decoded, assumed) = rgba_f32(&frame)?;
+                view.apply_image(&mut px, 4);
+                let bytes: Vec<u8> = px
+                    .iter()
+                    .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+                    .collect();
+                (
+                    png(&bytes, w, h)?,
+                    w,
+                    h,
+                    format!("{decoded} · {}", view.describe()),
+                    assumed,
+                )
+            }
+        };
         Ok(Picture {
             png,
             width,

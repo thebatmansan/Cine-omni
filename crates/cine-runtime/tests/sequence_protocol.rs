@@ -13,11 +13,19 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// An EXR whose pixels say which frame they are, in scene values above 1.
+/// A grey ramp in scene light: from deep shadow at the left to a highlight
+/// several stops above white at the right, so a view's roll-off is visible and
+/// a clamp is obvious. Each frame is a little brighter than the last, so the
+/// frames differ.
+fn scene_value(x: usize, frame: usize) -> f32 {
+    0.005 * 2.0f32.powf(x as f32 / 3.0) * (1.0 + 0.05 * frame as f32)
+}
+
 fn exr(path: &Path, frame: usize) {
     let (w, h) = (32usize, 18usize);
     x::write_rgba_file(path, w, h, |px, _py| {
-        (4.0 + frame as f32 + px as f32 / 100.0, 0.25, 0.0, 1.0)
+        let v = scene_value(px, frame);
+        (v, v, v, 1.0)
     })
     .unwrap();
 }
@@ -173,7 +181,7 @@ fn a_single_numbered_file_is_a_still_unless_a_run_is_asked_for() {
 }
 
 #[test]
-fn the_paths_that_would_lower_its_precision_refuse_instead() {
+fn scene_linear_delivers_through_a_view_or_as_exr_and_refuses_to_be_clamped() {
     let dir = tempfile::tempdir().unwrap();
     let plates = dir.path().join("plates");
     std::fs::create_dir_all(&plates).unwrap();
@@ -186,15 +194,6 @@ fn the_paths_that_would_lower_its_precision_refuse_instead() {
         .as_str()
         .unwrap()
         .to_string();
-
-    // A proxy is 8-bit video: refused, with the reason.
-    let job = c.call("job_submit", json!({ "kind": "media.proxy", "media": media, "height": 16 }));
-    let done = wait_for(&mut c, job["id"].as_u64().unwrap());
-    assert_eq!(done["state"], "failed", "{done}");
-    let error = done["error"].as_str().unwrap();
-    assert!(error.contains("image sequence") && error.contains("view transform"), "{error}");
-
-    // So is a render of it, by the same rule.
     let made = c.call("new_timeline", json!({ "name": "Comp", "rate_num": 24, "rate_den": 1 }));
     let tl = made["id"].as_str().unwrap().to_string();
     let v1 = c.call("timeline", json!({ "id": tl }))["tracks"][0]["id"].as_str().unwrap().to_string();
@@ -204,14 +203,164 @@ fn the_paths_that_would_lower_its_precision_refuse_instead() {
         json!({ "tracks": [v1], "time": at(0),
                 "clip": { "media": media, "source_range": { "start_time": at(0), "duration": at(4) } } }),
     );
-    let job = c.call(
-        "job_submit",
+    let render = |c: &mut Client, params: Value| -> Value {
+        let job = c.call("job_submit", params);
+        wait_for(c, job["id"].as_u64().unwrap())
+    };
+
+    // As decoded, scene light has no display values: refused, with the reason.
+    let refused = render(
+        &mut c,
         json!({ "kind": "render.sequence", "timeline": tl, "output": "png16" }),
     );
+    assert_eq!(refused["state"], "failed", "{refused}");
+    let why = refused["error"].as_str().unwrap();
+    assert!(why.contains("scene-linear") && why.contains("clamp every highlight"), "{why}");
+
+    // Through the project's view, the same pictures deliver.
+    let began = Instant::now();
+    let done = render(
+        &mut c,
+        json!({ "kind": "render.sequence", "timeline": tl, "output": "png16", "look": "project_view" }),
+    );
+    assert_eq!(done["state"], "succeeded", "{done}");
+    println!(
+        "MEASURED 4 frames of 32x18 scene-linear EXR through the exact view to PNG 16: {} ms (dev)",
+        began.elapsed().as_millis()
+    );
+    let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
+    let manifest: Value = serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["look"]["worst_lattice_error"], 0.0, "the exact path has no lattice error");
+    assert!(
+        manifest["look"]["transforms"][0].as_str().unwrap().contains("exact, scene-linear"),
+        "the manifest says how it was transformed: {}", manifest["look"]["transforms"]
+    );
+
+    // The highlights rolled off rather than clipping: this picture's scene
+    // values run from 5.0 up, and a clamp would make every pixel pure white.
+    let img = image::open(out.join("frame_000000.png")).unwrap().to_rgba16();
+    let ramp: Vec<u16> = (0..32).map(|x| img.get_pixel(x, 9)[1]).collect();
+    assert!(ramp.windows(2).all(|w| w[1] >= w[0]), "brighter scene values stay brighter: {ramp:?}");
+    assert!(ramp[0] < 6000, "the shadow end is dark, not lifted: {}", ramp[0]);
+    assert!(ramp[31] > 40_000, "the highlight end is bright: {}", ramp[31]);
+    assert!(
+        ramp.iter().filter(|v| **v == u16::MAX).count() <= 8,
+        "a clamped render would be white across most of the ramp: {ramp:?}"
+    );
+
+    // As EXR, the scene values themselves survive, unclamped.
+    let done = render(
+        &mut c,
+        json!({ "kind": "render.sequence", "timeline": tl, "output": "exr", "start_frame": 0, "end_frame": 2 }),
+    );
+    assert_eq!(done["state"], "succeeded", "{done}");
+    let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
+    let written = out.join("frame_000000.exr");
+    assert!(written.is_file(), "an EXR frame was written");
+    let read = x::read_first_rgba_layer_from_file(
+        &written,
+        |size: x::Vec2<usize>, _| -> (Vec<f32>, usize) { (vec![0.0; size.0 * size.1 * 4], size.0) },
+        |(pixels, width): &mut (Vec<f32>, usize), pos: x::Vec2<usize>, (r, g, b, a): (f32, f32, f32, f32)| {
+            let i = (pos.1 * *width + pos.0) * 4;
+            pixels[i] = r;
+            pixels[i + 1] = g;
+            pixels[i + 2] = b;
+            pixels[i + 3] = a;
+        },
+    )
+    .unwrap();
+    let (pixels, _) = read.layer_data.channel_data.pixels;
+    // The delivered EXR holds the source's scene values, not a display-encoded
+    // version of them — including the highlight several stops above white.
+    for x_pos in [0usize, 7, 31] {
+        let got = pixels[x_pos * 4];
+        let expected = scene_value(x_pos, 1);
+        assert!(
+            (got - expected).abs() <= expected * 1e-2,
+            "pixel {x_pos}: {got} is not the scene value {expected}"
+        );
+    }
+    assert!(
+        pixels[31 * 4] > 1.0,
+        "the highlight above display white survived delivery: {}",
+        pixels[31 * 4]
+    );
+    assert!(
+        pixels[0] < 0.01,
+        "and the deep shadow survived too: {}",
+        pixels[0]
+    );
+
+    // Captions cannot be burned into scene values, and that refuses too.
+    c.call(
+        "set_caption",
+        json!({ "timeline": tl, "language": "en", "start": at(0), "end": at(2), "text": "no" }),
+    );
+    let refused = render(
+        &mut c,
+        json!({ "kind": "render.sequence", "timeline": tl, "output": "exr", "captions": "en" }),
+    );
+    assert_eq!(refused["state"], "failed", "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("display white"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_proxy_of_scene_linear_media_is_refused_because_it_would_bake_a_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let plates = dir.path().join("plates");
+    std::fs::create_dir_all(&plates).unwrap();
+    for n in 1..=4 {
+        exr(&plates.join(format!("p.{n:04}.exr")), n);
+    }
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = c.call("ingest", json!({ "path": plates.join("p.0001.exr").display().to_string() }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let job = c.call("job_submit", json!({ "kind": "media.proxy", "media": media, "height": 16 }));
     let done = wait_for(&mut c, job["id"].as_u64().unwrap());
     assert_eq!(done["state"], "failed", "{done}");
-    assert!(
-        done["error"].as_str().unwrap().contains("cannot be rendered by this path"),
-        "{done}"
-    );
+    let error = done["error"].as_str().unwrap();
+    assert!(error.contains("scene-linear") && error.contains("applied twice"), "{error}");
+}
+
+/// The monitor can look at scene-linear pictures through the project's view,
+/// and says which view it used — the same function a render uses, so a preview
+/// and a delivery cannot disagree about colour.
+#[test]
+fn a_picture_can_be_previewed_through_the_project_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let plates = dir.path().join("plates");
+    std::fs::create_dir_all(&plates).unwrap();
+    for n in 1..=2 {
+        exr(&plates.join(format!("p.{n:04}.exr")), n);
+    }
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = c.call("ingest", json!({ "path": plates.join("p.0001.exr").display().to_string() }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // As decoded: clamped, and it says so.
+    let (status, headers, _) = h.get(&format!("/frame?media={media}&index=0"));
+    assert!(status.contains("200"), "{status}");
+    let plain = common::header(&headers, "x-cine-colour").unwrap().to_string();
+    assert!(plain.contains("clamped"), "{plain}");
+
+    // Through the view: transformed, and it says which.
+    let (status, headers, body) = h.get(&format!("/frame?media={media}&index=0&view=project"));
+    assert!(status.contains("200"), "{status}");
+    assert!(body.starts_with(b"\x89PNG"));
+    let viewed = common::header(&headers, "x-cine-colour").unwrap().to_string();
+    assert!(viewed.contains("exact%2C%20scene-linear") || viewed.contains("exact"), "{viewed}");
+    assert!(viewed.contains("Display"), "the view is named: {viewed}");
+
+    // The two pictures differ: a view is not a no-op.
+    let (_, _, plain_body) = h.get(&format!("/frame?media={media}&index=0"));
+    assert!(plain_body != body, "the view changed the picture");
 }

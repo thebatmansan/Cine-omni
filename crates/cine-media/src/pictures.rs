@@ -99,20 +99,28 @@ impl Pictures {
         matches!(self, Pictures::Sequence(_))
     }
 
-    /// What a caller that can only handle 8-bit video must refuse, if anything.
-    pub fn unsupported_for_video_encode(&self) -> Option<String> {
+    /// Whether these pictures are unbounded scene light rather than code
+    /// values — float EXR, as opposed to a movie or an integer still.
+    ///
+    /// The distinction decides what may be done without a view transform:
+    /// scene light has no display meaning until one is applied, and clamping
+    /// it into display output would throw away every highlight.
+    pub fn is_scene_float(&self) -> bool {
         match self {
-            Pictures::Movie(_) => None,
-            Pictures::Sequence(r) => Some(format!(
-                "{} is an image sequence ({}): its pictures are {} and scene-linear, and turning \
-                 them into 8-bit video needs a view transform this path does not apply",
+            Pictures::Movie(_) => false,
+            Pictures::Sequence(r) => r.sequence().kind == crate::sequence::SequenceKind::Exr,
+        }
+    }
+
+    /// What it is, for a message that has to name it.
+    pub fn describe(&self) -> String {
+        match self {
+            Pictures::Movie(r) => r.info().path.display().to_string(),
+            Pictures::Sequence(r) => format!(
+                "the image sequence {} ({})",
                 r.sequence().pattern,
-                r.sequence().kind.codec(),
-                match r.info().first_video().and_then(|s| s.video.as_ref()) {
-                    Some(_) => "high precision",
-                    None => "of unknown precision",
-                }
-            )),
+                r.sequence().kind.codec()
+            ),
         }
     }
 }
