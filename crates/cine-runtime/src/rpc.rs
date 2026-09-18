@@ -649,9 +649,13 @@ pub fn dispatch(p: &OmniProject, method: &str, params: &J) -> RpcResult {
 /// Session facts a bare project does not know: how many clients are attached
 /// and how long the runtime has been up.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SessionFacts {
+pub struct SessionFacts<'a> {
     pub clients: usize,
     pub uptime_s: u64,
+    /// Waveform overviews already read. A running runtime lends its cache so
+    /// drawing a timeline does not read a file per clip; a bare project has
+    /// none, and asking for peaks says so.
+    pub waveforms: Option<&'a cine_media::waveform::Cache>,
 }
 
 /// Dispatch, with optional session facts for the methods that report them.
@@ -659,7 +663,7 @@ pub fn dispatch_with(
     p: &OmniProject,
     method: &str,
     params: &J,
-    session: Option<SessionFacts>,
+    session: Option<SessionFacts<'_>>,
 ) -> RpcResult {
     let session = session.unwrap_or_default();
     Ok(match method {
@@ -1652,6 +1656,26 @@ pub fn dispatch_with(
             let media = entity(params, "media")?;
             let path = std::path::PathBuf::from(str_param(params, "path")?);
             crate::relink::relink_to(p, media, &path)?
+        }
+        "waveform" => {
+            // Peaks for drawing, from the overview made by `media.waveform`.
+            // Sample indices are the source's own; exact time is converted by
+            // the caller, once.
+            let media = entity(params, "media")?;
+            let from = params.get("from_sample").and_then(J::as_i64).unwrap_or(0);
+            let to = params
+                .get("to_sample")
+                .and_then(J::as_i64)
+                .ok_or("missing param `to_sample`")?;
+            let buckets = params
+                .get("buckets")
+                .and_then(J::as_u64)
+                .unwrap_or(1_000)
+                .clamp(1, 20_000) as usize;
+            let cache = session
+                .waveforms
+                .ok_or("waveform peaks are read by a running runtime")?;
+            crate::waveform::peaks(p, cache, media, from, to, buckets)?
         }
         "check_media" => {
             // Whether each original is its content, where the project says.

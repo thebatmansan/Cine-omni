@@ -41,6 +41,9 @@ struct Client {
 pub struct Runtime {
     /// One open decoder, shared by every client asking for a picture.
     pub frames: crate::frames::FrameService,
+    /// Waveform overviews already read, so drawing a timeline does not read a
+    /// file per clip. A cache: everything in it can be read again from disk.
+    pub waveforms: cine_media::waveform::Cache,
     pub project: Arc<OmniProject>,
     /// Where the project lives on disk, for reporting and for the instance lock.
     pub root_dir: std::path::PathBuf,
@@ -63,6 +66,7 @@ impl Runtime {
             Err(e) => eprintln!("background work unavailable: {e}"),
         }
         Arc::new(Runtime {
+            waveforms: cine_media::waveform::Cache::new(),
             project,
             root_dir,
             clients: Mutex::new(Vec::new()),

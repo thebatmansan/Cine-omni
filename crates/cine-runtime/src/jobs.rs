@@ -21,6 +21,8 @@
 //!   [`SYNC_MAX_SECONDS`]), cross-correlated against the active angle's, and an
 //!   angle whose best match is not clearly better than chance is left alone and
 //!   reported rather than moved to a guess. The offsets are one undoable commit.
+//! * **`media.waveform`** — a recording's envelope, decoded once and kept as
+//!   peaks at several zoom levels. See [`crate::waveform`].
 //! * **`media.relink`** — looks for the *content* of the project's media under
 //!   a folder and relinks what it finds. See [`crate::relink`].
 //! * **`media.proxy`** — a smaller stand-in for an original, picture for
@@ -76,6 +78,22 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
         let project = p.upgrade().ok_or("the project has closed")?;
         sync_angles(&project, ctx, spec)
     });
+    let p = Arc::downgrade(project);
+    let root = root_dir.to_path_buf();
+    jobs.register(
+        crate::waveform::WAVEFORM_KIND,
+        move |ctx: &JobContext, spec: &JobSpec| {
+            let project = p.upgrade().ok_or("the project has closed")?;
+            let media = spec.params["media"]
+                .as_str()
+                .and_then(EntityId::parse)
+                .ok_or("the job names no media")?;
+            crate::waveform::generate(&project, &root, media, Some(ctx.id()), &mut |f, m| {
+                ctx.progress(f, m);
+                !ctx.is_cancelled()
+            })
+        },
+    );
     let p = Arc::downgrade(project);
     jobs.register(crate::relink::RELINK_KIND, move |ctx: &JobContext, spec: &JobSpec| {
         let project = p.upgrade().ok_or("the project has closed")?;
@@ -449,6 +467,13 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             )
             .params(json!({ "media": media, "height": settings.height, "quality": settings.quality })))
         }
+        crate::waveform::WAVEFORM_KIND => Ok(JobSpec::new(
+            kind,
+            &format!("waveform:{media}"),
+            &format!("Waveform · {name}"),
+            Resource::Cpu,
+        )
+        .params(json!({ "media": media }))),
         "media.thumbnail" => {
             let index = params.get("index").and_then(J::as_u64).unwrap_or(0);
             Ok(JobSpec::new(
@@ -461,7 +486,7 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             .attempts(2))
         }
         other => Err(format!(
-            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, media.proxy, media.relink, multicam.sync, render.sequence)"
+            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, media.proxy, media.waveform, media.relink, multicam.sync, render.sequence)"
         )),
     }
 }

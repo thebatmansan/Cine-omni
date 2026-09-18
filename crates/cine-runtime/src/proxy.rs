@@ -54,7 +54,7 @@ use cine_pipeline::OmniProject;
 use serde_json::{json, Value as J};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use ucg_core::{EdgeKind, EntityId, Graph, Rate, RationalTime, TimeRange, UcgError};
+use ucg_core::{EntityId, Graph, Rate, RationalTime, TimeRange, UcgError};
 use ucg_schema::{attrs, kinds};
 
 /// The job kind.
@@ -70,13 +70,11 @@ pub const AUTO_PIXELS: u64 = 1920 * 1080;
 /// Sound in a proxy: this rate, 24-bit, the original's one or two channels.
 pub const SOUND_RATE: u32 = 48_000;
 
-pub const SOURCE_HASH_ATTR: &str = "source_hash";
+pub use crate::derived::{FILE_SIZE_ATTR, JOB_ATTR, NOTES_ATTR, SOURCE_HASH_ATTR};
+
 pub const WIDTH_ATTR: &str = "proxy_width";
 pub const HEIGHT_ATTR: &str = "proxy_height";
 pub const SOUND_ATTR: &str = "proxy_sound";
-pub const FILE_SIZE_ATTR: &str = "file_size";
-pub const JOB_ATTR: &str = "job";
-pub const NOTES_ATTR: &str = "notes";
 
 /// How a proxy is made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,72 +150,16 @@ fn recipe_dir(root: &Path, hash: &str, recipe: &str) -> PathBuf {
 
 /// The proxies recorded for an original.
 pub fn proxies_of(graph: &Graph, media: EntityId) -> Vec<EntityId> {
-    graph
-        .sources(media, EdgeKind::DerivedFrom)
-        .into_iter()
-        .filter(|d| {
-            graph.node(*d).is_some_and(|n| {
-                n.kind.as_str() == cine_media::ucg::MEDIA_DERIVATIVE
-                    && n.get_str("derivative_kind") == Some("proxy")
-            })
-        })
-        .collect()
+    crate::derived::of_kind(graph, media, "proxy")
 }
 
-/// Whether a proxy may stand in for its original.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProxyStatus {
-    pub state: &'static str,
-    pub reasons: Vec<String>,
-}
+/// Whether a proxy may stand in for its original: [`crate::derived::status`],
+/// under the proxy recipe's version.
+pub type ProxyStatus = crate::derived::Status;
 
-/// The state of `proxy`. `deep` also re-hashes the proxy file, which reads
-/// part of it; without it the file's presence and size are checked, which is
-/// what playback can afford every time it resolves a cut.
+/// The state of `proxy`. `deep` also re-hashes the proxy file.
 pub fn status(graph: &Graph, proxy: EntityId, deep: bool) -> ProxyStatus {
-    let Some(node) = graph.node(proxy) else {
-        return ProxyStatus {
-            state: "missing",
-            reasons: vec!["the proxy is not in the project".into()],
-        };
-    };
-    let path = node.get_str(attrs::MEDIA_PATH).map(PathBuf::from);
-    let Some(path) = path.filter(|p| p.is_file()) else {
-        return ProxyStatus {
-            state: "missing",
-            reasons: vec!["its file is gone".into()],
-        };
-    };
-    let mut reasons = Vec::new();
-    let original = graph.targets(proxy, EdgeKind::DerivedFrom).into_iter().next();
-    let original_hash = original
-        .and_then(|o| graph.node(o))
-        .and_then(|n| n.get_str(cine_media::ucg::HASH_ATTR));
-    if original_hash.is_none() || original_hash != node.get_str(SOURCE_HASH_ATTR) {
-        reasons.push("it was made from a different original".into());
-    }
-    if !node
-        .get_str("recipe")
-        .is_some_and(|r| r.ends_with(RECIPE_VERSION))
-    {
-        reasons.push(format!("it was made by an older recipe than {RECIPE_VERSION}"));
-    }
-    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    if node.get_int(FILE_SIZE_ATTR) != Some(size as i64) {
-        reasons.push("its file changed on disk since it was made".into());
-    } else if deep {
-        match cine_media::ContentHash::fast(&path) {
-            Ok(h) if node.get_str(cine_media::ucg::HASH_ATTR) != Some(h.hex()) => {
-                reasons.push("its file changed on disk since it was made".into())
-            }
-            Ok(_) => {}
-            Err(e) => reasons.push(format!("its file cannot be read: {e}")),
-        }
-    }
-    ProxyStatus {
-        state: if reasons.is_empty() { "current" } else { "stale" },
-        reasons,
-    }
+    crate::derived::status(graph, proxy, RECIPE_VERSION, deep)
 }
 
 /// Which file a clip reads.

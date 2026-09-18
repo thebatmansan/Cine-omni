@@ -719,10 +719,14 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
         id: "derived.waveform",
         name: "Waveform overviews",
         area: "Derived media",
-        state: PathState::Missing,
-        detail: "The derivative kind exists; nothing generates a waveform, and the timeline draws \
-                 sound clips without one",
-        evidence: None,
+        state: PathState::Verified,
+        detail: "A cancellable job decodes the recording and keeps its peaks at four zoom levels \
+                 (256 to 131072 samples a bucket), minimum and maximum per channel so asymmetry \
+                 and one-sided clipping stay visible. The timeline draws a clip's own media \
+                 range from them. It belongs to its original, goes stale when the content or the \
+                 recipe changes, and survives a relink, which moves media without changing it. \
+                 Measured: 43–78x real time, 6.9 kB of peaks for 4 s of 48 kHz stereo",
+        evidence: Some("cine-runtime/tests/waveform_protocol.rs, cine-media/src/waveform.rs tests"),
     },
     MediaPath {
         id: "derived.render.input",

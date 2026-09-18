@@ -744,6 +744,46 @@ scene values; captions on EXR and proxies of scene-linear refuse.
 to 16-bit PNG, 43 ms. The exact path costs per pixel what a lattice lookup does
 not; nothing here is a claim about 4K throughput, which has not been measured.
 
+### Waveforms
+
+A timeline draws sound as an envelope, and the envelope is the recording's own:
+**media.waveform** decodes the file once and keeps its peaks. Four zoom levels,
+256 to 131,072 samples a bucket, powers of eight apart, so any zoom finds a
+level within a factor of eight of what it wants and the pyramid costs 14% more
+than its base. Each bucket keeps a **minimum and a maximum** per channel, not
+one magnitude: folding the halves together would hide asymmetry, DC offset and
+one-sided clipping, which are what someone looks at a waveform to see.
+
+The source is decoded frame by frame and folded in as it arrives, so an hour of
+audio is never resident; only the peaks are. Measured: four seconds of 48 kHz
+24-bit stereo, **43–78× real time**, 6.9 kB of peaks — an hour would be about
+6 MB against 691 MB of audio.
+
+A clip draws its **own media range**, asked for in the source's samples, at as
+many columns as the clip is wide — not the start of the file. When there is no
+overview, or it is stale, nothing is drawn: an invented envelope is a picture of
+sound that does not exist. The media inspector shows the state and makes one.
+
+It belongs to its original: a `media.derivative` with a `DerivedFrom` edge,
+never media of its own. It goes stale when the original's content changes, when
+the recipe version changes, or when its own file changes — and **survives a
+relink**, because moving media does not change it.
+
+**One definition of derived state.** Proxies, waveforms and anything derived
+later share `crate::derived::status`: missing when its file is gone, stale when
+it was made from other content, by an older recipe, or its own file changed.
+That is also why a relink leaves derived data alone: identity is content, and
+the content did not change.
+
+**Checked:** `waveform_protocol.rs` — a written recording of silence, a loud
+second and a quiet one comes back with those levels in its peaks, per channel,
+with the left twice the right as written; a wide window uses coarser buckets
+and a narrow one the finest; windows start on a bucket edge; the job is not run
+twice for work already done; the overview survives a relink and goes stale when
+its file is damaged, refusing to be drawn from; media with no sound is refused;
+a cancelled overview leaves no files and no record. `cine-media` unit tests hold
+the levels, the window arithmetic and the file format.
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

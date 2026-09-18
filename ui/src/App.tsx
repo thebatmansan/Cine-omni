@@ -449,6 +449,8 @@ export function App() {
           </div>
           <Timeline
             timeline={timeline}
+              client={client}
+              revision={revision}
             selected={selectionKey}
             onSelect={onSelect}
             playheadSeconds={playheadSeconds}

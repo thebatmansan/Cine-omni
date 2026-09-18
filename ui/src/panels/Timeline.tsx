@@ -3,10 +3,12 @@ import type {
   CaptionTrackView,
   EditOp,
   MarkMismatch,
+  RpcClient,
   TimelineItem,
   TimelineTrack,
   TimelineView,
   TrackStateKey,
+  WaveformPeaks,
 } from "../rpc/client";
 import {
   TOOLS,
@@ -60,8 +62,13 @@ export function Timeline({
   onMismatch,
   captions,
   onCaption,
+  client,
+  revision,
 }: {
   timeline: TimelineView | null;
+  /** For drawing sound: the runtime answers with the waveform it keeps. */
+  client?: RpcClient;
+  revision?: number;
   selected: string | null;
   onSelect(item: TimelineItem, track: TimelineTrack): void;
   playheadSeconds: number;
@@ -266,6 +273,8 @@ export function Timeline({
               selected={selected}
               tool={tool}
               drag={drag}
+              client={client}
+              revision={revision}
               onSelect={onSelect}
               onScrub={scrubTo}
               onTrackState={onTrackState}
@@ -394,6 +403,8 @@ function TrackRow({
   selected,
   tool,
   drag,
+  client,
+  revision,
   onSelect,
   onScrub,
   onTrackState,
@@ -407,6 +418,8 @@ function TrackRow({
   selected: string | null;
   tool: Tool;
   drag: Drag | null;
+  client?: RpcClient;
+  revision?: number;
   onSelect(item: TimelineItem, track: TimelineTrack): void;
   onScrub(e: React.MouseEvent<HTMLDivElement>): void;
   onTrackState(track: string, key: TrackStateKey, value: boolean): void;
@@ -461,6 +474,8 @@ function TrackRow({
             selected={selected === itemKey(item, track)}
             tool={tool}
             dragging={drag?.item.id === item.id && drag?.track.id === track.id}
+            client={client}
+            revision={revision}
             onSelect={onSelect}
             onBeginDrag={onBeginDrag}
             onRazor={onRazor}
@@ -480,6 +495,8 @@ function Clip({
   selected,
   tool,
   dragging,
+  client,
+  revision,
   onSelect,
   onBeginDrag,
   onRazor,
@@ -490,6 +507,9 @@ function Clip({
   selected: boolean;
   tool: Tool;
   dragging: boolean;
+  client?: RpcClient;
+  /** Redraw the envelope when the project changes under it. */
+  revision?: number;
   onSelect(item: TimelineItem, track: TimelineTrack): void;
   onBeginDrag(item: TimelineItem, gesture: Drag["gesture"], e: React.MouseEvent): void;
   onRazor(item: TimelineItem, e: React.MouseEvent<HTMLDivElement>): void;
@@ -536,6 +556,9 @@ function Clip({
           }}
         />
       )}
+      {track.kind === "audio" && client && item.kind === "clip" && (
+        <Envelope item={item} client={client} width={width} revision={revision ?? 0} />
+      )}
       {width > 26 && (
         <div className="clip-name">
           {item.needs_conform && <span className="glyph conform-glyph">!</span>}
@@ -562,4 +585,83 @@ function Clip({
 
 export function itemKey(item: TimelineItem, track: TimelineTrack): string {
   return item.id ?? `${track.index}:${item.index}`;
+}
+
+/**
+ * A sound clip's envelope, drawn from the waveform the runtime keeps.
+ *
+ * The peaks asked for are exactly the clip's own media range, in the source's
+ * samples, at as many columns as the clip is wide — so what is drawn under a
+ * clip is the sound that clip plays, not the start of the file. When there is
+ * no waveform yet, or it is stale, nothing is drawn: an invented envelope
+ * would be a picture of sound that does not exist.
+ */
+function Envelope({
+  item,
+  client,
+  width,
+  revision,
+}: {
+  item: TimelineItem;
+  client: RpcClient;
+  width: number;
+  revision: number;
+}) {
+  const [peaks, setPeaks] = useState<WaveformPeaks | null>(null);
+  const columns = Math.max(1, Math.min(2_000, Math.round(width)));
+  const media = item.asset;
+  const from = item.source_range?.start.seconds ?? 0;
+  const length = item.source_range?.duration.seconds ?? 0;
+
+  useEffect(() => {
+    let live = true;
+    setPeaks(null);
+    if (!media || length <= 0) return;
+    // The runtime knows the recording's sample rate; ask in its samples by
+    // converting once, from the exact seconds the projection gives.
+    void client
+      .waveform(media, 0, 1, 1)
+      .then((probe) => {
+        if (!live || !probe.sample_rate) return null;
+        const rate = probe.sample_rate;
+        return client.waveform(media, from * rate, (from + length) * rate, columns);
+      })
+      .then((w) => {
+        if (live && w) setPeaks(w);
+      })
+      .catch(() => {
+        // No waveform, or a stale one: draw nothing rather than something.
+        if (live) setPeaks(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, media, from, length, columns, revision]);
+
+  if (!peaks || peaks.peaks.length === 0) return null;
+  const channels = Math.max(1, peaks.channels);
+  const buckets = Math.floor(peaks.peaks.length / channels);
+  if (buckets === 0) return null;
+  // One path over the bucket maxima, back along the minima: the shape of the
+  // sound, both halves, as the peaks hold them.
+  const top: string[] = [];
+  const bottom: string[] = [];
+  for (let b = 0; b < buckets; b += 1) {
+    let lo = 0;
+    let hi = 0;
+    for (let c = 0; c < channels; c += 1) {
+      const [min, max] = peaks.peaks[b * channels + c];
+      lo = Math.min(lo, min);
+      hi = Math.max(hi, max);
+    }
+    const x = (b / buckets) * 100;
+    top.push(`${x.toFixed(3)},${(50 - (hi / 32768) * 50).toFixed(2)}`);
+    bottom.push(`${x.toFixed(3)},${(50 - (lo / 32768) * 50).toFixed(2)}`);
+  }
+  bottom.reverse();
+  return (
+    <svg className="clip-wave" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points={[...top, ...bottom].join(" ")} />
+    </svg>
+  );
 }

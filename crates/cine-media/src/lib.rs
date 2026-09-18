@@ -42,6 +42,7 @@ pub mod testsignal;
 pub mod time;
 pub mod ucg;
 pub mod video;
+pub mod waveform;
 
 pub use av::{AudioScheduler, AudioSink, AudioSource, AudioTimeSource, AvStats, AvStatus};
 pub use cache::{CacheStats, FrameCache, FrameKey};

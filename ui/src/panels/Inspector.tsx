@@ -499,6 +499,7 @@ function MediaDetail({
       )}
       <Resolution media={media} onJob={onJob} onRelink={onRelink} />
       <Proxies media={media} onJob={onJob} />
+      <Sound media={media} onJob={onJob} />
       <div className="section-title">Media</div>
       <dl className="props">
         <dt>name</dt>
@@ -706,4 +707,61 @@ function sequenceOf(media: MediaView): string | null {
   const c = media.container ?? "";
   const m = /pattern: "([^"]+)"/.exec(c);
   return m ? m[1] : null;
+}
+
+/**
+ * The recording's envelope: whether one has been made, and whether it still
+ * matches the sound. The timeline draws from it; nothing here computes one.
+ */
+function Sound({
+  media,
+  onJob,
+}: {
+  media: MediaView;
+  onJob?(kind: string, params: Record<string, unknown>): void;
+}) {
+  const audio = media.streams.find((s) => s.name.startsWith("audio"));
+  if (!audio) return null;
+  const w = media.waveform;
+  return (
+    <>
+      <div className="section-title">Sound</div>
+      <dl className="props">
+        <dt>stream</dt>
+        <dd>
+          {audio.codec ?? "—"}
+          {audio.decodable ? "" : " · this build cannot decode it"}
+        </dd>
+        <dt>waveform</dt>
+        <dd>
+          {w ? (
+            <>
+              <span className={`render-state ${w.state === "current" ? "current" : "stale"}`}>{w.state}</span>
+              {w.channels ? ` ${w.channels} ch` : ""}
+              {w.file_size ? ` · ${(w.file_size / 1e3).toFixed(0)} kB` : ""}
+            </>
+          ) : (
+            "none"
+          )}
+        </dd>
+      </dl>
+      {(w?.reasons ?? []).length > 0 && (
+        <ul className="render-reasons">
+          {(w?.reasons ?? []).map((why, i) => (
+            <li key={i}>{why}</li>
+          ))}
+        </ul>
+      )}
+      {onJob && (
+        <div className="binding">
+          <button
+            disabled={!audio.decodable || media.online === false}
+            onClick={() => onJob("media.waveform", { media: media.id })}
+          >
+            {w ? "Make waveform again" : "Make waveform"}
+          </button>
+        </div>
+      )}
+    </>
+  );
 }

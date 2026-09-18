@@ -643,6 +643,7 @@ fn handle_rpc_line(runtime: &Runtime, line: &str) -> Option<String> {
     let session = rpc::SessionFacts {
         clients: runtime.client_count(),
         uptime_s: runtime.uptime().as_secs(),
+        waveforms: Some(&runtime.waveforms),
     };
     match rpc::dispatch_with(
         &runtime.project,

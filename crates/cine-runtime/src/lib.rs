@@ -41,6 +41,7 @@
 //! Synchronous and thread-per-client throughout, matching the rest of the
 //! workspace. This serves a handful of local windows, not the public internet.
 
+pub mod derived;
 pub mod frames;
 pub mod http;
 pub mod impact;
@@ -55,6 +56,7 @@ pub mod render;
 pub mod rpc;
 pub mod server;
 pub mod session;
+pub mod waveform;
 pub mod ws;
 
 pub use lock::{InstanceGuard, InstanceInfo, LockError};

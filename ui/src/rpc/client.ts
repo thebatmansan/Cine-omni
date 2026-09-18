@@ -711,6 +711,8 @@ export interface MediaView {
   checksum: ChecksumRecord | null;
   /** Stand-ins made from this original, with whether each is still usable. */
   proxies: ProxyView[];
+  /** The recording's envelope, when one has been made. */
+  waveform: WaveformView | null;
   /** Whether the file is where the project says, and what a scan decided. */
   resolution: {
     state: "replaced" | "not_found" | null;
@@ -737,6 +739,30 @@ export interface ProxyView {
 
 /** Which file playback reads. */
 export type MediaPreference = "original" | "proxy" | "auto";
+
+/** A recording's envelope, as the runtime keeps it. */
+export interface WaveformView {
+  id: string;
+  state: "current" | "stale" | "missing";
+  reasons: string[];
+  channels: number | null;
+  sample_rate: number | null;
+  frames: number | null;
+  file_size: number | null;
+}
+
+/** Peaks for drawing: `[min, max]` per channel, bucket by bucket. */
+export interface WaveformPeaks {
+  waveform: string;
+  channels: number;
+  sample_rate: number;
+  frames: number;
+  /** Source samples each bucket covers. */
+  bucket: number;
+  /** The first bucket's first sample. */
+  first_sample: number;
+  peaks: [number, number][];
+}
 
 export interface StructureView {
   scenes: {
@@ -1086,6 +1112,18 @@ export class RpcClient {
    */
   relink(media: string, path: string) {
     return this.call<{ state: string; note: string; path: string | null }>("relink", { media, path });
+  }
+  /**
+   * Peaks covering `[from, to)` samples of a recording, at the finest level
+   * that fits `buckets` columns. Sample indices are the source's own.
+   */
+  waveform(media: string, from: number, to: number, buckets: number) {
+    return this.call<WaveformPeaks>("waveform", {
+      media,
+      from_sample: Math.max(0, Math.round(from)),
+      to_sample: Math.round(to),
+      buckets,
+    });
   }
   /** Look for each original on disk now and record what is there. */
   checkMedia() {
