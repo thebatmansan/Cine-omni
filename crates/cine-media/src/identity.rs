@@ -89,6 +89,20 @@ impl ContentHash {
         })
     }
 
+    /// A hash of something that is not one file's bytes — an image sequence's
+    /// identity, which is its pattern, its range and its ends.
+    ///
+    /// `size` is the run's total size, so the identity carries a length the
+    /// way a file's does.
+    pub fn of_bytes(describe: &[u8], size: u64) -> ContentHash {
+        let mut h = Sha256::new();
+        h.update(describe);
+        ContentHash::Fast {
+            hex: format!("{:x}", h.finalize()),
+            size,
+        }
+    }
+
     /// Whole-file SHA-256, for verification and archival manifests.
     pub fn full(path: &Path) -> Result<ContentHash> {
         let f = File::open(path).map_err(|_| Error::NotFound(path.display().to_string()))?;
@@ -216,6 +230,9 @@ pub enum ContainerKind {
     Wave,
     /// A single still image, which may be one entry of a sequence.
     Image,
+    /// A numbered run of picture files, read as one asset. Carries the run it
+    /// found, so nothing downstream has to scan the directory again.
+    ImageSequence(crate::sequence::Sequence),
     /// Recognised but not supported for decode by this build. Carries the
     /// detected name so the failure is diagnosable rather than anonymous.
     Unsupported(String),

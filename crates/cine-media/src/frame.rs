@@ -29,6 +29,8 @@ pub enum PixelFormat {
     Rgba8,
     /// 16-bit interleaved RGB.
     Rgb16,
+    /// 16-bit interleaved RGBA, native-endian: what a 16-bit PNG or TIFF holds.
+    Rgba16,
     /// 32-bit float RGBA, the working representation for VFX and grading.
     RgbaF32,
 }
@@ -48,14 +50,17 @@ impl PixelFormat {
     /// Bits per component.
     pub fn bit_depth(&self) -> u8 {
         match self {
-            PixelFormat::Yuv420P10 | PixelFormat::Rgb16 => 16,
+            PixelFormat::Yuv420P10 | PixelFormat::Rgb16 | PixelFormat::Rgba16 => 16,
             PixelFormat::RgbaF32 => 32,
             _ => 8,
         }
     }
 
     pub fn has_alpha(&self) -> bool {
-        matches!(self, PixelFormat::Rgba8 | PixelFormat::RgbaF32)
+        matches!(
+            self,
+            PixelFormat::Rgba8 | PixelFormat::Rgba16 | PixelFormat::RgbaF32
+        )
     }
 
     pub fn is_yuv(&self) -> bool {

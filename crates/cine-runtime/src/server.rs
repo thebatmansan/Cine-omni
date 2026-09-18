@@ -468,7 +468,7 @@ fn serve_render_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
         .unwrap_or(0);
     let movie = dir.join(crate::render::MOVIE_FILE);
     if movie.is_file() {
-        let png = cine_media::VideoReader::open_path(&movie)
+        let png = cine_media::Pictures::open_path(&movie)
             .map_err(|e| e.to_string())
             .and_then(|mut r| {
                 r.frame_at_index(index.max(0) as usize)
@@ -520,12 +520,10 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     // The path comes from the graph, never from the request. A proxy is
     // served only when it is that media's own proxy and it is current, so a
     // stale stand-in can never be shown as the picture.
-    let path = {
+    let wanted = {
         let g = runtime.project.engine.read();
         match proxy {
-            None => g
-                .node(media)
-                .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH).map(str::to_string))
+            None => cine_media::ucg::read_media(&g, media)
                 .ok_or("no media with that id in this project"),
             Some(p) if !crate::proxy::proxies_of(&g, media).contains(&p) => {
                 Err("that proxy is not a proxy of that media")
@@ -533,20 +531,17 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
             Some(p) if crate::proxy::status(&g, p, false).state != "current" => {
                 Err("that proxy is not current; ask for the original")
             }
-            Some(p) => g
-                .node(p)
-                .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH).map(str::to_string))
-                .ok_or("that proxy has no file"),
+            Some(p) => cine_media::ucg::read_media(&g, p).ok_or("that proxy was never probed"),
         }
     };
-    let path = match path {
+    let wanted = match wanted {
         Ok(p) => p,
         Err(why) => {
             respond(stream, "404 Not Found", "text/plain; charset=utf-8", why.as_bytes());
             return;
         }
     };
-    match runtime.frames.picture(std::path::Path::new(&path), index) {
+    match runtime.frames.picture(&wanted, index) {
         Ok(picture) => {
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\

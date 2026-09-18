@@ -487,10 +487,12 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
         id: "container.image_sequence",
         name: "Image sequences as media",
         area: "Containers",
-        state: PathState::Missing,
-        detail: "The compositor reads %04d/#### sequences frame by frame, but a sequence cannot \
-                 be ingested as one media asset with a rate and a duration",
-        evidence: None,
+        state: PathState::Verified,
+        detail: "A numbered run of EXR, PNG, TIFF or JPEG files is one asset: its identity is the \
+                 run (pattern, range, ends), its length is the numbers it covers, and it takes the \
+                 rate it was ingested at, because a run of files has none. A number inside the \
+                 range with no file is a hole: it refuses by name and is never shown black",
+        evidence: Some("cine-media/tests/image_sequence.rs, cine-runtime/tests/sequence_protocol.rs"),
     },
     // -------------------------------------------------------------- picture
     MediaPath {
@@ -503,21 +505,34 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
     },
     MediaPath {
         id: "picture.high_bit_depth",
-        name: "10, 12 and 16-bit picture decode",
+        name: "High-bit-depth picture input",
         area: "Picture",
-        state: PathState::Missing,
-        detail: "The only picture decoder here is 8-bit 4:2:0; everything downstream carries \
-                 32-bit float, so the limit is the input, and no path pretends otherwise",
-        evidence: None,
+        state: PathState::Partial,
+        detail: "16-bit PNG and TIFF stills and 32-bit float EXR reach the pipeline at their own \
+                 precision, unquantised; 10 and 12-bit *moving* picture does not, because the \
+                 only movie decoder here is 8-bit 4:2:0. The limit is the input, and no path \
+                 pretends otherwise",
+        evidence: Some("cine-media/tests/image_sequence.rs::a_sixteen_bit_still_sequence_is_not_quantised_to_eight"),
     },
     MediaPath {
-        id: "picture.float",
+        id: "picture.float.read",
         name: "Float picture as media (EXR)",
         area: "Picture",
-        state: PathState::Blocked,
-        detail: "cine-comp reads and writes EXR as float images; media ingest has no float \
-                 picture path, so EXR cannot be a clip. Blocked on image sequences as media",
-        evidence: None,
+        state: PathState::Verified,
+        detail: "EXR is read as 32-bit float whatever it was stored as (half, float or unsigned), \
+                 unclamped: scene values above 1 and below 0 reach the frame. It cuts like any \
+                 other media and its pictures reach the monitor, shown clamped and saying so",
+        evidence: Some("cine-media/tests/image_sequence.rs::exr_pixels_reach_the_frame_as_the_floats_they_are"),
+    },
+    MediaPath {
+        id: "picture.float.deliver",
+        name: "Delivering scene-linear pictures",
+        area: "Picture",
+        state: PathState::Refused,
+        detail: "Turning scene-linear float pictures into 8-bit video needs a view transform this \
+                 path does not apply, so proxies and renders of an EXR sequence refuse by name \
+                 rather than clipping every highlight to white",
+        evidence: Some("cine-runtime/tests/sequence_protocol.rs::the_paths_that_would_lower_its_precision_refuse_instead"),
     },
     MediaPath {
         id: "picture.alpha",
@@ -711,10 +726,12 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
         id: "identity.relink",
         name: "Relinking moved or replaced media",
         area: "Identity",
-        state: PathState::Missing,
-        detail: "`find_by_hash` exists as a primitive, but no application path scans a folder, \
-                 matches by content, or resolves ambiguity",
-        evidence: None,
+        state: PathState::Partial,
+        detail: "A scan matches files by content (in full against a verified checksum), relinks \
+                 what it finds while the asset keeps its identity, refuses a namesake with other \
+                 content by name and hash, and keeps the reason on anything unresolved. Image \
+                 sequences are not searched for: a run is found by ingesting it again",
+        evidence: Some("cine-runtime/tests/relink_protocol.rs, ui/e2e/relink.mjs"),
     },
     MediaPath {
         id: "identity.metadata.camera",

@@ -37,7 +37,7 @@
 //! `fingerprint`. The confidence travels into the graph with the relink, so a
 //! later reader knows which was done.
 
-use cine_media::ContentHash;
+use cine_media::{ContentHash, MediaFile};
 use cine_pipeline::OmniProject;
 use serde_json::{json, Value as J};
 use std::collections::HashMap;
@@ -113,6 +113,8 @@ struct Wanted {
     path: PathBuf,
     sha256: Option<String>,
     file_name: Option<String>,
+    /// The probed media, so identity is asked of the right kind of thing.
+    info: MediaFile,
 }
 
 fn wanted(project: &OmniProject, only: Option<EntityId>) -> Vec<Wanted> {
@@ -130,6 +132,7 @@ fn wanted(project: &OmniProject, only: Option<EntityId>) -> Vec<Wanted> {
                 size: info.hash.size(),
                 file_name: path.file_name().map(|f| f.to_string_lossy().into_owned()),
                 path,
+                info: info.clone(),
                 sha256: n
                     .get(crate::jobs::CHECKSUM_ATTR)
                     .and_then(|v| v.to_json().get("sha256").and_then(J::as_str).map(str::to_string)),
@@ -241,6 +244,32 @@ pub fn scan(
 
     let mut outcomes = Vec::new();
     for asset in &assets {
+        // A sequence is a run, not a file: scanning for its bytes would find
+        // nothing. Its presence is still answered, honestly.
+        if matches!(
+            asset.info.container,
+            cine_media::identity::ContainerKind::ImageSequence(_)
+        ) {
+            let here = cine_media::sequence::identity_of(&asset.info)
+                .ok()
+                .map(|h| h.hex().to_string());
+            let found = here.as_deref() == Some(asset.hash.as_str());
+            outcomes.push(Outcome {
+                media: asset.media,
+                name: asset.name.clone(),
+                state: if found { "already_here" } else { "unsupported" },
+                note: if found {
+                    "the run is where it was".into()
+                } else {
+                    "this is an image sequence: looking for a run by scanning file contents is not built; ingest the run again where it now is".into()
+                },
+                path: found.then(|| asset.path.clone()),
+                confidence: None,
+                duplicates: Vec::new(),
+                near_misses: Vec::new(),
+            });
+            continue;
+        }
         let mut found: Vec<PathBuf> = by_hash.get(&asset.hash).cloned().unwrap_or_default();
         found.sort();
         let near_misses: Vec<Candidate> = asset
@@ -452,7 +481,9 @@ pub fn check(project: &OmniProject) -> Result<J, String> {
     let assets = wanted(project, None);
     let mut outcomes = Vec::new();
     for asset in &assets {
-        let here = ContentHash::fast(&asset.path).ok().map(|h| h.hex().to_string());
+        let here = cine_media::sequence::identity_of(&asset.info)
+            .ok()
+            .map(|h| h.hex().to_string());
         let (state, note) = match &here {
             Some(hash) if *hash == asset.hash => (
                 "already_here",

@@ -638,6 +638,46 @@ and a namesake left in its place, **Check media** shows the replacement, a
 folder is typed, and the media comes back under its new name (229 ms from typing
 to relinked, dev build).
 
+### Image sequences, and the high-bit-depth input they bring
+
+**Project → Import media → "Read as an image sequence"** ingests a numbered run
+of EXR, PNG, TIFF or JPEG files as *one asset*. Left unticked, a numbered file
+with siblings is still read as the run, and one on its own is one still — and
+the answer says which was done, rather than leaving it to be inferred.
+
+A run of files has no rate of its own, so a sequence takes the rate chosen at
+import, and its length is the numbers it covers. Its identity is the run — the
+pattern, the range, its ends — so any member identifies the same asset, and a
+frame added at the end makes it a different run. A number inside the range with
+no file is a **hole**: it is part of the length, it is reported at import, and
+asking for it answers with the file that is missing, never with black.
+
+**This is the build's high-bit-depth input.** EXR is read as 32-bit float
+whatever it was stored as, unclamped, so scene values above 1 and below 0 reach
+the pipeline intact; 16-bit PNG and TIFF arrive as 16-bit. Nothing converts
+colour on the way: an EXR says nothing in H.273 terms, so its frame carries no
+colour code points and the project's colour rules decide what it is in, as for
+any other media.
+
+Everything that reads pictures — the monitors, proxies, renders — now asks the
+same three questions of a movie or a run (`cine_media::Pictures`): how many, at
+what rate, give me number *i*. What differs travels with the answer instead of
+being hidden: a frame arrives in the format its source holds, and the monitor
+shows a float picture clamped **and says so**.
+
+**What refuses, and why.** A proxy is 8-bit video, and a render writes
+display-encoded output; turning scene-linear float pictures into either needs a
+view transform this path does not apply. Both refuse by name rather than
+clipping every highlight to white. That is the honest state: EXR can be
+imported, cut, identified and previewed, and cannot yet be delivered.
+
+**Checked:** `image_sequence.rs` — a run is one asset with its own rate and
+length; EXR pixels reach the frame as the floats they are (a value at 1e-5, a
+highlight at 6.25 and above, a negative sample, all surviving); a 16-bit PNG is
+not quantised to 8; a hole refuses by name and the run continues past it.
+`sequence_protocol.rs` — ingest, identity from any member, cutting, the record
+monitor, the clamped-and-said-so preview, single files, and both refusals.
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

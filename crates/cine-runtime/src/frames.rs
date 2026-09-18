@@ -27,14 +27,14 @@
 //! be a second answer to "what colour is this picture".
 
 use cine_gpu::yuv::{yuv8_to_rgb_cpu, YuvConversion};
-use cine_media::{PixelFormat, VideoFrame, VideoReader};
+use cine_media::{MediaFile, PixelFormat, Pictures, VideoFrame};
 use parking_lot::Mutex;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// One open decoder, reused between requests.
 #[derive(Default)]
 pub struct FrameService {
-    open: Mutex<Option<(PathBuf, VideoReader)>>,
+    open: Mutex<Option<(PathBuf, Pictures)>>,
 }
 
 /// What a picture request produced.
@@ -60,15 +60,16 @@ impl FrameService {
     /// `index` is a display index, clamped to the media. Errors are the
     /// decoder's own words: a codec this build cannot decode says so rather
     /// than returning a blank image.
-    pub fn picture(&self, path: &Path, index: usize) -> Result<Picture, String> {
+    pub fn picture(&self, media: &MediaFile, index: usize) -> Result<Picture, String> {
         let began = std::time::Instant::now();
+        let path = media.path.as_path();
         let mut open = self.open.lock();
         let reusable = open
             .as_ref()
             .map(|(p, _)| p.as_path() == path)
             .unwrap_or(false);
         if !reusable {
-            let reader = VideoReader::open_path(path).map_err(|e| e.to_string())?;
+            let reader = Pictures::open(media.clone()).map_err(|e| e.to_string())?;
             *open = Some((path.to_path_buf(), reader));
         }
         let (_, reader) = open.as_mut().expect("just opened");
@@ -97,14 +98,15 @@ impl FrameService {
     }
 
     /// How many pictures the media has, without decoding one.
-    pub fn frame_count(&self, path: &Path) -> Result<usize, String> {
+    pub fn frame_count(&self, media: &MediaFile) -> Result<usize, String> {
+        let path = media.path.as_path();
         let mut open = self.open.lock();
         let reusable = open
             .as_ref()
             .map(|(p, _)| p.as_path() == path)
             .unwrap_or(false);
         if !reusable {
-            let reader = VideoReader::open_path(path).map_err(|e| e.to_string())?;
+            let reader = Pictures::open(media.clone()).map_err(|e| e.to_string())?;
             *open = Some((path.to_path_buf(), reader));
         }
         Ok(open.as_ref().map(|(_, r)| r.frame_count()).unwrap_or(0))
@@ -132,6 +134,13 @@ pub fn png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
 /// the colour interpretation and whether it was assumed.
 pub fn rgba8(frame: &VideoFrame) -> Result<(Vec<u8>, u32, u32, String, bool), String> {
     let (rgba, w, h, describe, assumed) = rgba_f32(frame)?;
+    // A float picture holds scene values outside [0, 1]; showing it as 8-bit
+    // clamps them, and the viewer is told so rather than shown a clipped
+    // picture described as the file's.
+    let describe = match frame.format {
+        PixelFormat::RgbaF32 => format!("{describe} · shown clamped to [0, 1], no view applied"),
+        _ => describe,
+    };
     // 8-bit for transport: the browser has nowhere better to put it, and the
     // clamping is reported rather than silent.
     let bytes: Vec<u8> = rgba
@@ -145,11 +154,20 @@ pub fn rgba8(frame: &VideoFrame) -> Result<(Vec<u8>, u32, u32, String, bool), St
 /// limited-range video reaches below 0 and above 1, and a view transform is
 /// entitled to see those excursions before anything clips them.
 pub fn rgba_f32(frame: &VideoFrame) -> Result<(Vec<f32>, u32, u32, String, bool), String> {
-    if frame.format != PixelFormat::Yuv420P8 {
-        return Err(format!(
-            "this build converts 4:2:0 8-bit for preview; this picture is {:?}",
-            frame.format
-        ));
+    // Pictures that are already RGB arrive from image sequences at the
+    // precision they were stored: 8-bit, 16-bit, or 32-bit float, the last
+    // unclamped because scene values live outside [0, 1]. No matrix and no
+    // range conversion apply to them, and none is invented.
+    match frame.format {
+        PixelFormat::Rgba8 | PixelFormat::Rgba16 | PixelFormat::RgbaF32 => {
+            return rgba_f32_direct(frame);
+        }
+        PixelFormat::Yuv420P8 => {}
+        other => {
+            return Err(format!(
+                "this build converts 4:2:0 8-bit and RGBA pictures; this picture is {other:?}"
+            ))
+        }
     }
     let (w, h) = (frame.width, frame.height);
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
@@ -203,4 +221,46 @@ pub fn rgba_f32(frame: &VideoFrame) -> Result<(Vec<f32>, u32, u32, String, bool)
         ),
         conversion.choice.is_assumed(),
     ))
+}
+
+/// An RGBA picture as float samples, at the precision it holds.
+fn rgba_f32_direct(frame: &VideoFrame) -> Result<(Vec<f32>, u32, u32, String, bool), String> {
+    let (w, h) = (frame.width, frame.height);
+    let (bytes, stride) = frame.plane(0).ok_or("the picture has no plane")?;
+    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
+    let describe = match frame.format {
+        PixelFormat::Rgba8 => {
+            for row in 0..h as usize {
+                let line = &bytes[row * stride..row * stride + w as usize * 4];
+                out.extend(line.iter().map(|v| f32::from(*v) / 255.0));
+            }
+            "8-bit RGBA"
+        }
+        PixelFormat::Rgba16 => {
+            for row in 0..h as usize {
+                let line = &bytes[row * stride..row * stride + w as usize * 8];
+                out.extend(
+                    line.as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| f32::from(u16::from_ne_bytes(*b)) / 65535.0),
+                );
+            }
+            "16-bit RGBA"
+        }
+        PixelFormat::RgbaF32 => {
+            for row in 0..h as usize {
+                let line = &bytes[row * stride..row * stride + w as usize * 16];
+                out.extend(
+                    line.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|b| f32::from_ne_bytes(*b)),
+                );
+            }
+            "32-bit float RGBA, unclamped"
+        }
+        other => return Err(format!("{other:?} is not an RGBA picture")),
+    };
+    Ok((out, w, h, describe.to_string(), false))
 }

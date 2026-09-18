@@ -506,7 +506,7 @@ function MediaDetail({
         <dt>online</dt>
         <dd>{media.online === false ? "offline" : "yes"}</dd>
         <dt>container</dt>
-        <dd>{media.container ?? "—"}</dd>
+        <dd>{sequenceOf(media) ? `image sequence · ${sequenceOf(media)}` : (media.container ?? "—")}</dd>
         <dt>size</dt>
         <dd>{media.size ? `${(media.size / 1e6).toFixed(1)} MB` : "—"}</dd>
         <dt>content hash</dt>
@@ -695,4 +695,15 @@ function Resolution({
       )}
     </>
   );
+}
+
+/**
+ * The pattern of a media item that is an image sequence, or null. The runtime
+ * describes the run in the container field; this reads the pattern out of it
+ * for the one line a person wants, without inventing anything.
+ */
+function sequenceOf(media: MediaView): string | null {
+  const c = media.container ?? "";
+  const m = /pattern: "([^"]+)"/.exec(c);
+  return m ? m[1] : null;
 }

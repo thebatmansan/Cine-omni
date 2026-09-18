@@ -737,6 +737,8 @@ function ProjectDialog({
   const [fps, setFps] = useState("24/1");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [asSequence, setAsSequence] = useState(false);
+  const [imported, setImported] = useState<string | null>(null);
   const { client } = session;
 
   const submit = async () => {
@@ -747,7 +749,21 @@ function ProjectDialog({
       ok = await session.run("new sequence", () => client.newTimeline(name, n, d || 1));
       if (ok && typeof ok === "object" && "id" in ok) session.selectTimeline((ok as { id: string }).id);
     } else if (kind === "media") {
-      ok = await session.run("import media", () => client.ingest(text.trim()));
+      const [n, d] = fps.split("/").map(Number);
+      ok = await session.run("import media", () =>
+        client.ingest(text.trim(), {
+          sequence: asSequence ? true : undefined,
+          rate: asSequence ? { num: n, den: d || 1 } : undefined,
+        }),
+      );
+      if (ok && typeof ok === "object" && "sequence" in ok) {
+        const r = ok as { sequence: boolean; frames?: number; pattern?: string; missing?: number[] };
+        setImported(
+          r.sequence
+            ? `${r.pattern}: ${r.frames} frames${r.missing?.length ? `, ${r.missing.length} missing` : ""}`
+            : "one file",
+        );
+      }
     } else {
       ok = await session.run("import screenplay", () => client.importFountain(text, name || "screenplay.fountain"));
     }
@@ -791,10 +807,36 @@ function ProjectDialog({
                 File path on the machine running the project
                 <input value={text} onChange={(e) => setText(e.target.value)} placeholder="/footage/A001_C003.mp4" autoFocus />
               </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  aria-label="Import as sequence"
+                  checked={asSequence}
+                  onChange={(e) => setAsSequence(e.target.checked)}
+                />
+                Read as an image sequence (a numbered run of EXR, PNG or TIFF files)
+              </label>
+              {asSequence && (
+                <label>
+                  Frame rate
+                  <select value={fps} onChange={(e) => setFps(e.target.value)}>
+                    <option value="24000/1001">23.976 (24000/1001)</option>
+                    <option value="24/1">24</option>
+                    <option value="25/1">25</option>
+                    <option value="30000/1001">29.97 (30000/1001)</option>
+                    <option value="30/1">30</option>
+                    <option value="48/1">48</option>
+                    <option value="50/1">50</option>
+                    <option value="60/1">60</option>
+                  </select>
+                </label>
+              )}
               <p className="hint">
                 The file is probed and identified by its content. Codecs this build cannot decode are recorded
-                as such, not hidden.
+                as such, not hidden. A run of files has no rate of its own, so a sequence takes the one chosen
+                here; a number inside the run with no file is a hole, and is reported rather than shown black.
               </p>
+              {imported && <div className="notice">Imported {imported}</div>}
             </>
           )}
           {kind === "screenplay" && (

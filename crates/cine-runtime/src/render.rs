@@ -461,15 +461,31 @@ pub fn render_sequence(
     };
 
     // Open each file once, and learn each source's size.
-    let mut readers: HashMap<PathBuf, cine_media::VideoReader> = HashMap::new();
+    let mut readers: HashMap<PathBuf, cine_media::Pictures> = HashMap::new();
     let mut sizes: HashMap<usize, (usize, usize)> = HashMap::new();
     let mut declared: Vec<Option<(u8, u8)>> = Vec::new();
     for &i in &used {
         let e = &list.entries[i];
         let path = e.path.clone().ok_or("an entry has no file")?;
         if !readers.contains_key(&path) {
-            let reader = cine_media::VideoReader::open_path(&path)
-                .map_err(|err| format!("`{}`: {err}", e.name))?;
+            let info = {
+                let graph = project.engine.read();
+                e.asset
+                    .and_then(|a| cine_media::ucg::read_media(&graph, a))
+                    .ok_or_else(|| format!("`{}` was never probed", e.name))?
+            };
+            let reader =
+                cine_media::Pictures::open(info).map_err(|err| format!("`{}`: {err}", e.name))?;
+            // Scene-linear pictures cannot become display-encoded output
+            // without a view transform, and clipping them silently is the
+            // failure this refuses.
+            if let Some(why) = reader.unsupported_for_video_encode() {
+                return Err(format!(
+                    "`{}` cannot be rendered by this path: {why}. Render it through a view when \
+                     one exists for it, or write an image sequence (not built)",
+                    e.name
+                ));
+            }
             readers.insert(path.clone(), reader);
         }
         let reader = readers.get_mut(&path).expect("just opened");

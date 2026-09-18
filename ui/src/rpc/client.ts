@@ -477,6 +477,19 @@ export interface JobView {
   params: Record<string, unknown>;
 }
 
+/** What an import made: one file, or a numbered run read as one asset. */
+export interface IngestResult {
+  id: string;
+  sequence: boolean;
+  pattern?: string;
+  first?: number;
+  last?: number;
+  frames?: number;
+  missing?: number[];
+  rate_num?: number;
+  rate_den?: number;
+}
+
 export type RenderState = "current" | "stale" | "invalid" | "failed";
 
 /** One render on disk, with whether it still matches the project. */
@@ -876,7 +889,20 @@ export class RpcClient {
     return this.call<CascadeResult>("track_state", { track, key, value });
   }
   media() { return this.call<MediaView[]>("media"); }
-  ingest(path: string) { return this.call<{ id: string }>("ingest", { path }); }
+  /**
+   * Import one file. A numbered picture file is read as the run it belongs to
+   * when `sequence` is true, as one still when false, and — left undecided —
+   * as a run only when it has siblings. Sequences take the rate given, because
+   * a run of files has none of its own.
+   */
+  ingest(path: string, options?: { sequence?: boolean; rate?: { num: number; den: number } }) {
+    return this.call<IngestResult>("ingest", {
+      path,
+      sequence: options?.sequence,
+      rate_num: options?.rate?.num,
+      rate_den: options?.rate?.den,
+    });
+  }
   importOtio(text: string, key?: string) { return this.call<{ id: string }>("import_otio", { text, key }); }
   structure() { return this.call<StructureView>("structure"); }
   exportAs(what: string, scene?: number) { return this.call<string>("export", { what, scene }); }

@@ -1044,3 +1044,5 @@ a.button { display: inline-block; padding: 1px 8px; border: 1px solid var(--line
 .cap-state.verified { color: var(--ok); }
 .cap-state.implemented, .cap-state.partial, .cap-state.prototype, .cap-state.degraded { color: var(--warn); }
 .cap-state.missing, .cap-state.blocked, .cap-state.refused, .cap-state.unavailable { color: var(--text-faint); }
+
+label.check { display: flex; align-items: center; gap: 6px; }

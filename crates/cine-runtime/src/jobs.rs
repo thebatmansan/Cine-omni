@@ -548,14 +548,19 @@ fn thumbnail(
     ctx: &JobContext,
     spec: &JobSpec,
 ) -> Result<J, String> {
-    let (_, path, hash) = media_param(project, spec)?;
+    let (media, path, hash) = media_param(project, spec)?;
+    let _ = &path;
     let index = spec.params["index"].as_u64().unwrap_or(0) as usize;
     let out = thumbnail_path(cache, hash.as_deref().unwrap_or("unhashed"), index);
     if out.exists() {
         return Ok(json!({ "path": out, "cached": true }));
     }
     ctx.progress(0.1, "decoding");
-    let mut reader = cine_media::VideoReader::open_path(&path).map_err(|e| e.to_string())?;
+    let mut reader = {
+        let g = project.engine.read();
+        let info = cine_media::ucg::read_media(&g, media).ok_or("the media was never probed")?;
+        cine_media::Pictures::open(info).map_err(|e| e.to_string())?
+    };
     let count = reader.frame_count();
     if count == 0 {
         return Err("the media has no pictures".into());

@@ -371,7 +371,7 @@ pub fn generate(
     if !path.is_file() {
         return Err(format!("the original is offline: {}", path.display()));
     }
-    let now = cine_media::ContentHash::fast(&path).map_err(|e| e.to_string())?;
+    let now = cine_media::sequence::identity_of(&info).map_err(|e| e.to_string())?;
     if now.hex() != hash {
         return Err(format!(
             "{} changed on disk since it was ingested; ingest it again before making a proxy of it",
@@ -415,7 +415,13 @@ pub fn generate(
         }
     }
 
-    let mut reader = cine_media::VideoReader::open_path(&path).map_err(|e| e.to_string())?;
+    let mut reader = cine_media::Pictures::open(info.clone()).map_err(|e| e.to_string())?;
+    // A proxy is 8-bit video. Turning scene-linear pictures into it needs a
+    // view transform, which this path does not apply, so it refuses rather
+    // than clipping every highlight to white.
+    if let Some(why) = reader.unsupported_for_video_encode() {
+        return Err(format!("no proxy of this media: {why}"));
+    }
     let count = reader.frame_count();
     if count == 0 {
         return Err("the original has no pictures".into());

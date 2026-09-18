@@ -30,9 +30,11 @@ pub mod identity;
 pub mod mhl;
 pub mod mov;
 pub mod offload;
+pub mod pictures;
 pub mod probe;
 pub mod reader;
 pub mod schedule;
+pub mod sequence;
 pub mod encode;
 pub mod sequence_audio;
 pub mod sound;
@@ -50,6 +52,7 @@ pub use decoder::{Packet, VideoDecoder};
 pub use edit_list::{EditEntry, EditListSource};
 pub use error::{Error, Result};
 pub use frame::{AlphaMode, AudioFrame, ColorMetadata, Frame, PixelFormat, VideoFrame};
+pub use pictures::Pictures;
 pub use identity::{
     ContainerKind, ContentHash, Derivative, DerivativeKind, MediaFile, PhysicalSource, StreamInfo,
     StreamKind,

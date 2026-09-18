@@ -30,6 +30,10 @@ mp4 = "0.14"
 # it sits behind `decoder::VideoDecoder` so it can be replaced without churn.
 rusty_h264 = { version = "0.16", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png", "tiff", "jpeg"] }
+# OpenEXR, for image sequences as media. The same crate the compositor reads
+# EXR with (BSD-3, `licenses/THIRD-PARTY.toml`): one library, two thin
+# adapters — the compositor wants layers and windows, media wants a frame.
+exr.workspace = true
 sha2 = "0.10"
 # ASC MHL: the hashes an offload is verified by, and the XML it is written in.
 twox-hash.workspace = true
@@ -39,6 +43,8 @@ roxmltree.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# Tests write real EXR files with the same library that reads them.
+exr.workspace = true
 
 [[bench]]
 name = "decode"

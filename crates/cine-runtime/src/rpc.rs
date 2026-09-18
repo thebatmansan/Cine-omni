@@ -1848,20 +1848,68 @@ pub fn dispatch_with(
             crate::projection::media(&g)
         }
         "ingest" => {
+            // A numbered picture file may be one still or one of a run. With
+            // `sequence` absent the run decides: two or more siblings make a
+            // sequence, and the answer says which was ingested, never leaving
+            // it to be guessed from the id.
             let path = std::path::PathBuf::from(str_param(params, "path")?);
             if !path.exists() {
                 return Err(format!("no file at {}", path.display()));
             }
+            let asked = params.get("sequence").and_then(J::as_bool);
+            let rate = match (
+                params.get("rate_num").and_then(J::as_u64),
+                params.get("rate_den").and_then(J::as_u64),
+            ) {
+                (None, None) => cine_media::sequence::DEFAULT_RATE,
+                (Some(n), Some(d)) => ucg_core::Rate::new(n as u32, d as u32)
+                    .ok_or("`rate_num`/`rate_den` must be a real rate")?,
+                _ => return Err("`rate_num` and `rate_den` go together".into()),
+            };
+            let run = match asked {
+                Some(false) => None,
+                _ => cine_media::sequence::discover(&path).ok(),
+            };
+            let run = match (asked, run) {
+                (Some(true), None) => {
+                    return Err(format!(
+                        "{} is not one of a numbered run of pictures",
+                        path.display()
+                    ))
+                }
+                // On its own, a numbered file is one still: a run needs more
+                // than one member before it is a sequence.
+                (None, Some(seq)) if seq.frames() < 2 => None,
+                (_, other) => other,
+            };
+            let info = match &run {
+                Some(_) => cine_media::sequence::probe_sequence(&path, rate)
+                    .map_err(|e| e.to_string())?,
+                None => cine_media::probe::probe(&path).map_err(|e| e.to_string())?,
+            };
             let root = p.root;
             let mut id = ucg_core::EntityId::nil();
             p.engine
                 .transact("ingest media", |tx| {
-                    id = cine_media::ucg::ingest(tx, root, &path)
+                    id = cine_media::ucg::register_media(tx, root, &info)
                         .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
                     Ok(())
                 })
                 .map_err(|x| x.to_string())?;
-            json!({ "id": id })
+            match run {
+                Some(seq) => json!({
+                    "id": id,
+                    "sequence": true,
+                    "pattern": seq.pattern,
+                    "first": seq.first,
+                    "last": seq.last,
+                    "frames": seq.frames(),
+                    "missing": seq.missing,
+                    "rate_num": rate.num(),
+                    "rate_den": rate.den(),
+                }),
+                None => json!({ "id": id, "sequence": false }),
+            }
         }
 
         // -- the production chain -------------------------------------------
