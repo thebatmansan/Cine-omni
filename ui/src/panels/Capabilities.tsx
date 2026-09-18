@@ -25,8 +25,9 @@ export function Capabilities({ capabilities }: { capabilities: Capability[] }) {
       <div className="panel-head">
         <span>Capabilities</span>
         <span className="count">
-          {counts.verified ?? 0} verified · {counts.degraded ?? 0} degraded ·{" "}
-          {(counts.unavailable ?? 0) + (counts.refused ?? 0)} not available
+          {counts.verified ?? 0} verified ·{" "}
+          {(counts.implemented ?? 0) + (counts.partial ?? 0) + (counts.degraded ?? 0) + (counts.prototype ?? 0)} partial ·{" "}
+          {(counts.unavailable ?? 0) + (counts.refused ?? 0) + (counts.missing ?? 0) + (counts.blocked ?? 0)} not available
         </span>
       </div>
       <div className="panel-body caps">
@@ -35,8 +36,9 @@ export function Capabilities({ capabilities }: { capabilities: Capability[] }) {
             <div className="cap-group">{group}</div>
             {items.map((c) => (
               <div className="cap" key={c.id} title={c.detail}>
-                <span className={`badge dot ${c.state}`} />
+                <span className={`badge dot ${c.state}`} title={c.state} />
                 <span className="cap-name">{c.name}</span>
+                <span className={`cap-state ${c.state}`}>{c.state}</span>
                 <span className="cap-detail">{c.detail}</span>
               </div>
             ))}

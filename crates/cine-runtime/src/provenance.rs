@@ -106,9 +106,12 @@ pub fn dependencies(
                 e.offset.map(|o| o.checked_add(&start.checked_sub(&e.record.start_time)))
             ),
         };
+        // The asset, not its path: media that moved is the same media, and the
+        // media's own dependency fingerprints its content. Nor whether it is
+        // online: that is where the file is today, not what was rendered.
         format!(
-            "{:?}..{:?}|{:?}|{:?}|{:?}|{media}|{:?}|{}|{:?}\n",
-            start, end, e.clip, e.asset, e.path, e.online, e.keep_pitch, e.unplayable()
+            "{:?}..{:?}|{:?}|{:?}|{media}|{}\n",
+            start, end, e.clip, e.asset, e.keep_pitch
         )
     };
     let mut out = Vec::new();
@@ -150,10 +153,14 @@ pub fn dependencies(
         let path = node
             .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH))
             .unwrap_or("");
+        // By content, not by path: media that moved is the same media, and a
+        // render of it is still current. The path travels in the label so the
+        // file can be found and checked, and a *different* file at that path
+        // changes the hash, which is the fingerprint.
         out.push(Dependency {
             key: format!("media:{asset}"),
             label: format!("the media of `{name}` ({path})"),
-            fingerprint: format!("{hash}|{path}"),
+            fingerprint: hash.to_string(),
         });
     }
 
@@ -270,10 +277,24 @@ pub fn status(project: &OmniProject, dir: &Path) -> J {
     }
     // Files on disk against the hashes they were rendered from.
     for dep in recorded.iter().filter(|d| d.key.starts_with("media:")) {
-        let Some((hash, path)) = dep.fingerprint.split_once('|') else {
+        // The fingerprint is the content hash; where the file is now is what
+        // the project says now, not what it said when the render was made.
+        let hash = dep.fingerprint.as_str();
+        let Some(path) = dep
+            .key
+            .strip_prefix("media:")
+            .and_then(EntityId::parse)
+            .and_then(|id| {
+                let g = project.engine.read();
+                g.node(id)
+                    .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH))
+                    .map(std::path::PathBuf::from)
+            })
+        else {
+            reasons.push(format!("{} is no longer in the project", dep.label));
             continue;
         };
-        let path = Path::new(path);
+        let path = path.as_path();
         if !path.is_file() {
             reasons.push(format!("{} is offline", dep.label));
         } else if !hash.is_empty() {

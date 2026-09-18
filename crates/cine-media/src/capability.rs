@@ -176,8 +176,9 @@ pub const REGISTRY: &[Capability] = &[
         bit_depth: 8,
         chroma: Chroma::Yuv420,
         backend: BackendKind::Software,
-        verification: Verification::Unverified {
-            note: "no Baseline-profile asset available on this machine",
+        verification: Verification::Verified {
+            evidence: "encode_roundtrip::an_encoded_file_decodes_to_the_frames_that_went_in_in_order \
+                       (Constrained Baseline written by this build, read back frame-exact)",
         },
     },
     // Refusals are entries too, so the reason travels with the decision.
@@ -269,8 +270,9 @@ pub const REGISTRY: &[Capability] = &[
         bit_depth: 24,
         chroma: Chroma::Monochrome,
         backend: BackendKind::Software,
-        verification: Verification::Unverified {
-            note: "no 24-bit asset here",
+        verification: Verification::Verified {
+            evidence: "sound_formats::twenty_four_bit_sound_is_heard_exactly \
+                       (every code read back exactly, in WAV and in QuickTime)",
         },
     },
     Capability {
@@ -280,8 +282,9 @@ pub const REGISTRY: &[Capability] = &[
         bit_depth: 32,
         chroma: Chroma::Monochrome,
         backend: BackendKind::Software,
-        verification: Verification::Unverified {
-            note: "no float-PCM asset here",
+        verification: Verification::Verified {
+            evidence: "sound_formats::float_sound_is_heard_at_both_widths \
+                       (32 and 64-bit IEEE float WAV)",
         },
     },
     Capability {
@@ -363,6 +366,381 @@ pub const REGISTRY: &[Capability] = &[
         },
     },
 ];
+
+/// How far a media *path* — not a codec, a whole way of getting media in or
+/// out — has actually got.
+///
+/// The codec table above answers "may we decode this stream". This one answers
+/// "does this capability exist, and how much of it", for the paths an
+/// application claims: containers, seeking, timecode, colour and HDR metadata,
+/// precision, image sequences, proxies, relinking, thumbnails, sound output.
+/// Both tables are read by the `capabilities` method, so no interface can
+/// claim what neither table states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathState {
+    /// Proven here against real media, by a named test.
+    Verified,
+    /// Built and used by the application, but not proven end to end by a test
+    /// that reads real media.
+    Implemented,
+    /// Works within stated limits; the limits are the detail.
+    Partial,
+    /// Exists, but not on a path the application uses for real work.
+    Prototype,
+    /// Deliberately not attempted, with the reason.
+    Refused,
+    /// Not built.
+    Missing,
+    /// Not buildable until something else lands; the detail names it.
+    Blocked,
+}
+
+impl PathState {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PathState::Verified => "verified",
+            PathState::Implemented => "implemented",
+            PathState::Partial => "partial",
+            PathState::Prototype => "prototype",
+            PathState::Refused => "refused",
+            PathState::Missing => "missing",
+            PathState::Blocked => "blocked",
+        }
+    }
+
+    /// Whether the application may offer this path to a person at all.
+    pub fn is_offered(&self) -> bool {
+        matches!(
+            self,
+            PathState::Verified | PathState::Implemented | PathState::Partial | PathState::Prototype
+        )
+    }
+}
+
+/// One media path, and what is true of it.
+#[derive(Clone, Copy, Debug)]
+pub struct MediaPath {
+    /// Stable dotted id, e.g. `container.isobmff.read`.
+    pub id: &'static str,
+    /// What a person would call it.
+    pub name: &'static str,
+    /// Grouping for the capability list.
+    pub area: &'static str,
+    pub state: PathState,
+    /// What is true, including the limit when there is one.
+    pub detail: &'static str,
+    /// The test that proves it. Required for `Verified`.
+    pub evidence: Option<&'static str>,
+}
+
+/// Every media path this build has an opinion about.
+///
+/// Audited 2026-09-18 against the code, not against memory: each row was
+/// checked by reading the path it describes.
+pub const MEDIA_PATHS: &[MediaPath] = &[
+    // ----------------------------------------------------------- containers
+    MediaPath {
+        id: "container.isobmff.read",
+        name: "MP4 and QuickTime, read",
+        area: "Containers",
+        state: PathState::Verified,
+        detail: "Sample tables read exactly (per-track timescale, sample sizes, composition \
+                 offsets, 64-bit offsets), so durations and picture counts are the file's own",
+        evidence: Some("cine-media/tests/real_media.rs, mov_roundtrip.rs"),
+    },
+    MediaPath {
+        id: "container.quicktime.write",
+        name: "QuickTime, written",
+        area: "Containers",
+        state: PathState::Verified,
+        detail: "H.264 picture and 24-bit LPCM sound, edit lists, colr, pasp, chan; read back by \
+                 this build and by GStreamer's qtdemux, which returns the exact sound bytes",
+        evidence: Some("cine-media/tests/mov_roundtrip.rs::gstreamer_reads_the_same_movie"),
+    },
+    MediaPath {
+        id: "container.wave.read",
+        name: "WAVE, read",
+        area: "Containers",
+        state: PathState::Verified,
+        detail: "Every integer and float layout: 8, 16, 24, 32-bit and 32/64-bit float, signed \
+                 and unsigned, read back as the samples written",
+        evidence: Some("cine-media/tests/sound_formats.rs"),
+    },
+    MediaPath {
+        id: "container.matroska.read",
+        name: "Matroska, read",
+        area: "Containers",
+        state: PathState::Partial,
+        detail: "Demuxed for sound only: the probe reports every track as audio, so a picture \
+                 track in an MKV is neither described nor decoded",
+        evidence: None,
+    },
+    MediaPath {
+        id: "container.mxf.read",
+        name: "MXF, read",
+        area: "Containers",
+        state: PathState::Missing,
+        detail: "No MXF parser in this build; broadcast and camera-original MXF cannot be opened",
+        evidence: None,
+    },
+    MediaPath {
+        id: "container.image_sequence",
+        name: "Image sequences as media",
+        area: "Containers",
+        state: PathState::Missing,
+        detail: "The compositor reads %04d/#### sequences frame by frame, but a sequence cannot \
+                 be ingested as one media asset with a rate and a duration",
+        evidence: None,
+    },
+    // -------------------------------------------------------------- picture
+    MediaPath {
+        id: "picture.h264.8bit",
+        name: "H.264 8-bit 4:2:0 decode",
+        area: "Picture",
+        state: PathState::Verified,
+        detail: "Frame-accurate, in display order, from any entry point; B-pyramid handled",
+        evidence: Some("cine-media/tests/real_media.rs, encode_roundtrip.rs"),
+    },
+    MediaPath {
+        id: "picture.high_bit_depth",
+        name: "10, 12 and 16-bit picture decode",
+        area: "Picture",
+        state: PathState::Missing,
+        detail: "The only picture decoder here is 8-bit 4:2:0; everything downstream carries \
+                 32-bit float, so the limit is the input, and no path pretends otherwise",
+        evidence: None,
+    },
+    MediaPath {
+        id: "picture.float",
+        name: "Float picture as media (EXR)",
+        area: "Picture",
+        state: PathState::Blocked,
+        detail: "cine-comp reads and writes EXR as float images; media ingest has no float \
+                 picture path, so EXR cannot be a clip. Blocked on image sequences as media",
+        evidence: None,
+    },
+    MediaPath {
+        id: "picture.alpha",
+        name: "Alpha in media",
+        area: "Picture",
+        state: PathState::Partial,
+        detail: "Still images decode with alpha; no moving-picture codec in this build carries \
+                 alpha, and the compositor's alpha is its own",
+        evidence: None,
+    },
+    MediaPath {
+        id: "picture.still.read",
+        name: "PNG, TIFF and JPEG stills",
+        area: "Picture",
+        state: PathState::Verified,
+        detail: "Decoded to 8-bit RGBA as one frame; a still has no rate of its own and takes \
+                 the sequence's",
+        evidence: Some("cine-media/tests/real_media.rs::decodes_a_real_image_as_a_video_frame"),
+    },
+    // ----------------------------------------------------------------- time
+    MediaPath {
+        id: "time.duration.exact",
+        name: "Exact duration and media time",
+        area: "Time",
+        state: PathState::Verified,
+        detail: "Every time is integer ticks at an exact rational rate, from the container's own \
+                 timescale; no float seconds anywhere in storage or comparison",
+        evidence: Some("cine-media/tests/real_media.rs, ucg-core time tests"),
+    },
+    MediaPath {
+        id: "time.seek.frame_accurate",
+        name: "Frame-accurate seeking",
+        area: "Time",
+        state: PathState::Verified,
+        detail: "Any picture by index or timestamp, decoded from the preceding entry point; \
+                 out-of-order requests return the same pictures as sequential reads",
+        evidence: Some("cine-media/tests/mov_roundtrip.rs, playback_real_media.rs"),
+    },
+    MediaPath {
+        id: "time.vfr",
+        name: "Variable frame rate",
+        area: "Time",
+        state: PathState::Partial,
+        detail: "Detected from the sample table and flagged on the stream; editorial has no \
+                 conform for it, and proxy generation refuses it rather than guess a rate",
+        evidence: Some("cine-runtime/tests/proxy_protocol.rs (refusal path)"),
+    },
+    MediaPath {
+        id: "time.timecode",
+        name: "Source timecode",
+        area: "Time",
+        state: PathState::Missing,
+        detail: "No timecode track is read: `MediaFile::start_timecode` is always None, so every \
+                 source timecode shown is counted from zero, not from the camera's",
+        evidence: None,
+    },
+    // --------------------------------------------------------------- colour
+    MediaPath {
+        id: "colour.stream_metadata",
+        name: "Colour from the picture stream",
+        area: "Colour",
+        state: PathState::Verified,
+        detail: "H.264 SPS video signal type: primaries, transfer, matrix and range, with \
+                 unspecified code points left absent rather than assumed",
+        evidence: Some("cine-media/tests/sps_real.rs"),
+    },
+    MediaPath {
+        id: "colour.container_metadata",
+        name: "Colour from the container",
+        area: "Colour",
+        state: PathState::Verified,
+        detail: "QuickTime `colr` (nclc and nclx) fills what the stream leaves undeclared; the \
+                 stream wins where both speak",
+        evidence: Some("cine-media/tests/mov_roundtrip.rs (declared, not assumed)"),
+    },
+    MediaPath {
+        id: "colour.hdr.mastering",
+        name: "HDR mastering metadata",
+        area: "Colour",
+        state: PathState::Missing,
+        detail: "Mastering display and content light level are not read from any container, so \
+                 no HDR master's limits are known to this build",
+        evidence: None,
+    },
+    MediaPath {
+        id: "colour.hdr.view",
+        name: "HDR viewing transforms",
+        area: "Colour",
+        state: PathState::Blocked,
+        detail: "Rec.2100 PQ and HLG display transforms are implemented and checked against \
+                 OpenColorIO, but no HDR media can be decoded here, so the path is unexercised \
+                 end to end. Blocked on high-bit-depth decode",
+        evidence: None,
+    },
+    // ---------------------------------------------------------------- sound
+    MediaPath {
+        id: "sound.pcm",
+        name: "PCM sound, every layout",
+        area: "Sound",
+        state: PathState::Verified,
+        detail: "8, 16, 24, 32-bit integer and 32/64-bit float, signed and unsigned, scaled by \
+                 2^(bits-1) so full-scale negative is exactly -1",
+        evidence: Some("cine-media/tests/sound_formats.rs"),
+    },
+    MediaPath {
+        id: "sound.multichannel",
+        name: "More than two channels",
+        area: "Sound",
+        state: PathState::Refused,
+        detail: "There is no downmix: the mixer refuses a file with more than two channels and \
+                 a proxy of one carries no sound, rather than inventing a fold-down",
+        evidence: Some("cine-runtime/tests/proxy_protocol.rs::a_proxy_of_many_channels_carries_no_sound_and_the_sound_stays_on_the_original"),
+    },
+    MediaPath {
+        id: "sound.output",
+        name: "Sound output device",
+        area: "Sound",
+        state: PathState::Implemented,
+        detail: "ALSA through a runtime-loaded libasound in the native window; measured \
+                 consuming 48 kHz within 61 ppm and pacing picture within 0.3 ms, on the \
+                 machine and media of that measurement",
+        evidence: Some("docs/blueprint/AV-SYNC.md"),
+    },
+    // ------------------------------------------------------------- derived
+    MediaPath {
+        id: "derived.proxy.generate",
+        name: "Proxy generation",
+        area: "Derived media",
+        state: PathState::Verified,
+        detail: "Picture for picture and sample for sample from the original, registered as \
+                 derived, cancellable, with current/stale/missing recomputed on request",
+        evidence: Some("cine-runtime/tests/proxy_protocol.rs"),
+    },
+    MediaPath {
+        id: "derived.proxy.playback",
+        name: "Playback from proxies",
+        area: "Derived media",
+        state: PathState::Verified,
+        detail: "One choice for every surface (Originals, Proxies, Auto); a stale or missing \
+                 proxy is never read and the reason is shown; renders always read originals",
+        evidence: Some("cine-runtime/tests/proxy_protocol.rs::playback_reads_a_proxy_only_when_asked_and_never_a_stale_one"),
+    },
+    MediaPath {
+        id: "derived.thumbnail",
+        name: "Thumbnails",
+        area: "Derived media",
+        state: PathState::Implemented,
+        detail: "A cancellable job decodes one picture and writes it to the project's cache; its \
+                 protocol test still needs media this machine does not have, so it is not proven \
+                 here end to end",
+        evidence: None,
+    },
+    MediaPath {
+        id: "derived.waveform",
+        name: "Waveform overviews",
+        area: "Derived media",
+        state: PathState::Missing,
+        detail: "The derivative kind exists; nothing generates a waveform, and the timeline draws \
+                 sound clips without one",
+        evidence: None,
+    },
+    MediaPath {
+        id: "derived.render.input",
+        name: "Render reads media",
+        area: "Derived media",
+        state: PathState::Verified,
+        detail: "Renders read camera originals whatever is being watched, and refuse rather than \
+                 substitute when a source cannot be read faithfully",
+        evidence: Some("cine-runtime/tests/render_movie.rs, proxy_protocol.rs::a_render_reads_the_original_whatever_is_being_watched"),
+    },
+    // -------------------------------------------------------- identity
+    MediaPath {
+        id: "identity.content_hash",
+        name: "Content identity",
+        area: "Identity",
+        state: PathState::Verified,
+        detail: "A file's identity is its content hash, not its path: the same file at another \
+                 path is the same asset, and a different file at the same path is not",
+        evidence: Some("cine-media/src/identity.rs::identity_is_content_derived_not_path_derived"),
+    },
+    MediaPath {
+        id: "identity.presence",
+        name: "Online and offline",
+        area: "Identity",
+        state: PathState::Verified,
+        detail: "Checked on request; offline is a normal state that keeps the project editable, \
+                 and Auto plays a proxy when the original is away",
+        evidence: Some("cine-runtime/tests/proxy_protocol.rs::auto_reads_the_proxy_only_when_the_original_cannot_be_played"),
+    },
+    MediaPath {
+        id: "identity.relink",
+        name: "Relinking moved or replaced media",
+        area: "Identity",
+        state: PathState::Missing,
+        detail: "`find_by_hash` exists as a primitive, but no application path scans a folder, \
+                 matches by content, or resolves ambiguity",
+        evidence: None,
+    },
+    MediaPath {
+        id: "identity.metadata.camera",
+        name: "Camera and lens metadata",
+        area: "Identity",
+        state: PathState::Missing,
+        detail: "No camera, lens or shooting metadata is extracted from any container",
+        evidence: None,
+    },
+    // ------------------------------------------------------------- scale
+    MediaPath {
+        id: "scale.bounded_decode",
+        name: "Bounded decoding",
+        area: "Scale",
+        state: PathState::Partial,
+        detail: "Playback decodes ahead on a worker thread within a byte budget checked before \
+                 decoding; stills and EXR are read whole, and there is no tiled or partial \
+                 decode",
+        evidence: Some("cine-media/tests/decode_ahead.rs"),
+    },
+];
+
+/// Look up one media path.
+pub fn path(id: &str) -> Option<&'static MediaPath> {
+    MEDIA_PATHS.iter().find(|p| p.id == id)
+}
 
 /// Look up the best matching capability for a codec token.
 ///
@@ -459,6 +837,45 @@ mod tests {
                     c.codec
                 );
             }
+        }
+    }
+
+    /// The same mechanism for media paths: a verified path names its test.
+    #[test]
+    fn every_verified_path_names_its_evidence() {
+        for p in MEDIA_PATHS {
+            if p.state == PathState::Verified {
+                let evidence = p.evidence.unwrap_or("");
+                assert!(
+                    evidence.contains(".rs") || evidence.contains(".md"),
+                    "{} claims verified but its evidence `{evidence}` names no file",
+                    p.id
+                );
+            }
+            assert!(
+                p.detail.len() > 30,
+                "{} says too little about what is true",
+                p.id
+            );
+        }
+    }
+
+    /// Ids are how surfaces refer to a path; two rows with one id would make
+    /// one of them unreachable.
+    #[test]
+    fn media_path_ids_are_unique_and_grouped() {
+        let mut seen: Vec<&str> = Vec::new();
+        for p in MEDIA_PATHS {
+            assert!(!seen.contains(&p.id), "duplicate media path id {}", p.id);
+            assert!(
+                p.id.contains('.')
+                    && p.id
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_'),
+                "{} is not a dotted lowercase id",
+                p.id
+            );
+            seen.push(p.id);
         }
     }
 

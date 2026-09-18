@@ -81,15 +81,27 @@ fn eight_bit_and_thirty_two_bit_integer_sound_are_heard() {
 }
 
 #[test]
-fn sixty_four_bit_float_sound_is_heard() {
+fn float_sound_is_heard_at_both_widths() {
     let dir = tempfile::tempdir().unwrap();
-    let vals: Vec<(i64, i64)> = (0..1000)
+    let wide: Vec<(i64, i64)> = (0..1000)
         .map(|i| {
             let v = (f64::from(i) / 1000.0) - 0.5;
             (v.to_bits() as i64, (-v).to_bits() as i64)
         })
         .collect();
-    let (l, r) = read_all(&wav(dir.path(), "f64.wav", 64, true, &vals));
+    let (l, r) = read_all(&wav(dir.path(), "f64.wav", 64, true, &wide));
     assert_eq!(l.len(), 1000);
     assert!((l[750] - 0.25).abs() < 1e-6 && (r[750] + 0.25).abs() < 1e-6);
+
+    let narrow: Vec<(i64, i64)> = (0..1000)
+        .map(|i| {
+            let v = (i as f32 / 1000.0) - 0.5;
+            (i64::from(v.to_bits()), i64::from((-v).to_bits()))
+        })
+        .collect();
+    let (l, r) = read_all(&wav(dir.path(), "f32.wav", 32, true, &narrow));
+    assert_eq!(l.len(), 1000);
+    // 32-bit float is the samples themselves: exact, not merely close.
+    assert_eq!(l[750], 0.25);
+    assert_eq!(r[750], -0.25);
 }

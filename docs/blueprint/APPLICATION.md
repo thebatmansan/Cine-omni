@@ -568,6 +568,76 @@ resampler's inner loop, with the byte-path colour conversion 2× faster than
 building float planes first. Both are still CPU, single-threaded, in a dev
 build; nothing here is a claim about release performance or about real-time.
 
+### What this build can do with media, audited
+
+Two tables in `cine_media::capability` are the only place a capability is
+stated: the codec registry (may we decode this stream) and `MEDIA_PATHS` (does
+this *path* exist, and how far). The `capabilities` method reads both, so the
+Capabilities panel, the error messages and this document cannot drift from the
+code — and nothing can claim what neither table states.
+
+Media paths carry one of: `verified` (proven against real media by a named
+test), `implemented` (built and used, not proven end to end), `partial` (works
+within stated limits), `prototype`, `refused` (deliberate, with the reason),
+`missing` (not built), `blocked` (waiting on something named). A `verified` row
+that does not name its evidence fails a test.
+
+The audit of 2026-09-18 recorded, among 27 paths: MP4/MOV read, QuickTime
+write, WAVE read, H.264 8-bit decode, exact duration and media time,
+frame-accurate seek, colour from stream and container, PCM at every width,
+proxy generation and playback, render input, content identity and presence —
+all verified. Partial: Matroska (sound only — an MKV's picture track is
+neither described nor decoded), variable frame rate (detected and refused, not
+conformed), alpha (stills only), bounded decoding (stills and EXR are read
+whole). Missing: MXF, image sequences as media, high-bit-depth decode,
+timecode, HDR mastering metadata, camera metadata, waveforms. Blocked: float
+picture as media and HDR viewing, both on the decoder.
+
+Two entries were corrected by the audit itself, because the tests written since
+now prove them: Baseline H.264 (this build's own encoder round-trips through
+its decoder) and 24-bit and float PCM.
+
+### Media that moved, and media that only looks the same
+
+An asset's identity is its content hash; its path is where the file was last
+seen. **Check media** (menu bar) fingerprints the file at each recorded path
+and reports what is actually there. **Relink** — in the media inspector — takes
+a folder, and the runtime looks for *that content* under it.
+
+What a scan answers, per asset: `relinked` (found by content; the asset keeps
+its identity, so every clip, proxy, grade and render still refers to it),
+`already here`, `replaced` (a file is at the path but is not this media —
+reported, never accepted, because replacing media is a separate decision), or
+`not found` (with the files that share the name listed as near misses, and
+their hashes, so the refusal is explicable). Two paths holding identical
+content are not an ambiguity: one is used, the rest reported as duplicates.
+
+When the project holds a verified SHA-256 (from `media.checksum`), the winning
+candidate is hashed in full and must match it; the relink is then recorded as
+`exact` rather than `fingerprint`. A person can also relink to one named file,
+which is refused with both hashes when that file is not this media.
+
+**Defect found by this work.** "Check media" asked only whether *a* file was at
+the path, so a different take written over an original reported the media as
+online — and the application would have played the wrong pictures without a
+word. It now compares content, and a namesake is `replaced`, not online
+(`relink_protocol.rs::checking_media_does_not_call_a_namesake_online`).
+
+**Also fixed:** render provenance fingerprinted media by hash *and path*, and
+the sequence fingerprint included each clip's path and online flag, so relinking
+media made every render of it stale although nothing about the render's content
+had changed. Fingerprints are now by content and by asset.
+
+**Checked:** `relink_protocol.rs` — moved and renamed media is found by content;
+a different take of the same name is refused, by scan and by hand, with both
+hashes; media that is nowhere stays unresolved and says what was looked for; two
+copies are not an ambiguity; a verified checksum makes the relink exact; and
+after a relink the clip still plays, the proxy is still current, and the render
+is still current. `ui/e2e/relink.mjs` — the real application: the file is moved
+and a namesake left in its place, **Check media** shows the replacement, a
+folder is typed, and the media comes back under its new name (229 ms from typing
+to relinked, dev build).
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

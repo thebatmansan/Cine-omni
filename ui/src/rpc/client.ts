@@ -581,7 +581,24 @@ export interface ProjectView {
 }
 
 /** The four states the whole project uses. Nothing else is renderable. */
-export type CapabilityState = "verified" | "degraded" | "unavailable" | "refused";
+/**
+ * How far a capability has got, in the runtime's words. `verified` is proven
+ * against real media by a named test; `implemented` is built and used but not
+ * proven end to end; `partial` works within stated limits; `prototype` is not
+ * on a path used for real work; `refused` is deliberate; `missing` is not
+ * built; `blocked` waits on something else. `degraded` and `unavailable` are
+ * the older session vocabulary and still appear.
+ */
+export type CapabilityState =
+  | "verified"
+  | "implemented"
+  | "partial"
+  | "prototype"
+  | "degraded"
+  | "unavailable"
+  | "refused"
+  | "missing"
+  | "blocked";
 
 export interface Capability {
   id: string;
@@ -681,6 +698,13 @@ export interface MediaView {
   checksum: ChecksumRecord | null;
   /** Stand-ins made from this original, with whether each is still usable. */
   proxies: ProxyView[];
+  /** Whether the file is where the project says, and what a scan decided. */
+  resolution: {
+    state: "replaced" | "not_found" | null;
+    note: string | null;
+    relinked_from: string | null;
+    confidence: "exact" | "fingerprint" | null;
+  };
 }
 
 /** One proxy of one original, as the runtime reports it. */
@@ -1029,6 +1053,13 @@ export class RpcClient {
       "media_preference",
       preference === undefined ? {} : { preference },
     );
+  }
+  /**
+   * Relink one asset to one file, by hand. The runtime refuses a file that is
+   * not that media, whatever it is called.
+   */
+  relink(media: string, path: string) {
+    return this.call<{ state: string; note: string; path: string | null }>("relink", { media, path });
   }
   /** Look for each original on disk now and record what is there. */
   checkMedia() {

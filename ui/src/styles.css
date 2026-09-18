@@ -1037,3 +1037,10 @@ a.button { display: inline-block; padding: 1px 8px; border: 1px solid var(--line
 .proxy-row { padding: 3px 0; border-top: 1px solid var(--line); }
 .proxy-row .label { margin-left: 6px; }
 .chip.proxy { background: #5a4a1e; color: #f0d78c; border-radius: 3px; padding: 0 5px; margin-right: 6px; font-size: 10px; letter-spacing: 0.05em; }
+
+.dot.implemented, .dot.partial, .dot.prototype { background: var(--warn); }
+.dot.missing, .dot.blocked { background: var(--text-faint); }
+.cap-state { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.75; margin-right: 6px; }
+.cap-state.verified { color: var(--ok); }
+.cap-state.implemented, .cap-state.partial, .cap-state.prototype, .cap-state.degraded { color: var(--warn); }
+.cap-state.missing, .cap-state.blocked, .cap-state.refused, .cap-state.unavailable { color: var(--text-faint); }

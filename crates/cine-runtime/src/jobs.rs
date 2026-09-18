@@ -21,6 +21,8 @@
 //!   [`SYNC_MAX_SECONDS`]), cross-correlated against the active angle's, and an
 //!   angle whose best match is not clearly better than chance is left alone and
 //!   reported rather than moved to a guess. The offsets are one undoable commit.
+//! * **`media.relink`** — looks for the *content* of the project's media under
+//!   a folder and relinks what it finds. See [`crate::relink`].
 //! * **`media.proxy`** — a smaller stand-in for an original, picture for
 //!   picture, registered as derived from it. See [`crate::proxy`].
 //! * **`render.sequence`** — the cut written as pictures, with an optional view
@@ -73,6 +75,22 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
     jobs.register("multicam.sync", move |ctx: &JobContext, spec: &JobSpec| {
         let project = p.upgrade().ok_or("the project has closed")?;
         sync_angles(&project, ctx, spec)
+    });
+    let p = Arc::downgrade(project);
+    jobs.register(crate::relink::RELINK_KIND, move |ctx: &JobContext, spec: &JobSpec| {
+        let project = p.upgrade().ok_or("the project has closed")?;
+        let folder = spec.params["folder"]
+            .as_str()
+            .ok_or("the job names no folder to search")?;
+        let only = spec.params["media"].as_str().and_then(EntityId::parse);
+        let depth = spec.params["depth"]
+            .as_u64()
+            .map(|d| d as usize)
+            .unwrap_or(crate::relink::DEFAULT_DEPTH);
+        crate::relink::scan(&project, Path::new(folder), only, depth, &mut |f, m| {
+            ctx.progress(f, m);
+            !ctx.is_cancelled()
+        })
     });
     let p = Arc::downgrade(project);
     let root = root_dir.to_path_buf();
@@ -306,6 +324,32 @@ fn sync_angles(project: &OmniProject, ctx: &JobContext, spec: &JobSpec) -> Resul
 
 /// Build the spec for a kind of work a client asked for.
 pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec, String> {
+    if kind == crate::relink::RELINK_KIND {
+        let folder = params
+            .get("folder")
+            .and_then(J::as_str)
+            .ok_or("missing param `folder`: where to look")?;
+        if !Path::new(folder).is_dir() {
+            return Err(format!("{folder} is not a folder to search"));
+        }
+        let media = params.get("media").and_then(J::as_str);
+        let label = match media {
+            Some(_) => format!("Relink one · {folder}"),
+            None => format!("Relink · {folder}"),
+        };
+        let mut spec = JobSpec::new(
+            kind,
+            &format!("relink:{folder}:{}:{}", media.unwrap_or("all"), project.engine.revision()),
+            &label,
+            Resource::Io,
+        );
+        spec = spec.params(json!({
+            "folder": folder,
+            "media": media,
+            "depth": params.get("depth").and_then(J::as_u64).unwrap_or(crate::relink::DEFAULT_DEPTH as u64),
+        }));
+        return Ok(spec);
+    }
     if kind == crate::render::RENDER_KIND {
         let request = crate::render::RenderRequest::from_params(params)?;
         let name = {
@@ -416,7 +460,7 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             .attempts(2))
         }
         other => Err(format!(
-            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, media.proxy, multicam.sync, render.sequence)"
+            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, media.proxy, media.relink, multicam.sync, render.sequence)"
         )),
     }
 }

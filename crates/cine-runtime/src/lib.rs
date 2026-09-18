@@ -50,6 +50,7 @@ pub mod playlist;
 pub mod projection;
 pub mod provenance;
 pub mod proxy;
+pub mod relink;
 pub mod render;
 pub mod rpc;
 pub mod server;

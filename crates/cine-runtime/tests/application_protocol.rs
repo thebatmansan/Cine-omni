@@ -55,8 +55,21 @@ fn every_capability_states_what_it_is_and_why() {
 
     for cap in list {
         let state = cap["state"].as_str().expect("state");
+        // A closed list on purpose: a state the interface cannot render is a
+        // claim nobody can read, so a new one must be added here deliberately.
         assert!(
-            matches!(state, "verified" | "degraded" | "unavailable" | "refused"),
+            matches!(
+                state,
+                "verified"
+                    | "implemented"
+                    | "partial"
+                    | "prototype"
+                    | "degraded"
+                    | "unavailable"
+                    | "refused"
+                    | "missing"
+                    | "blocked"
+            ),
             "unknown capability state {state:?}"
         );
         let detail = cap["detail"].as_str().unwrap_or("");

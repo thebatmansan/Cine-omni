@@ -8,6 +8,7 @@ export function Inspector({
   selection,
   media,
   script,
+  onRelink,
   onConformDone,
   onBind,
   onUnbind,
@@ -23,6 +24,8 @@ export function Inspector({
   onBind?(clip: string, scene: string): void;
   onUnbind?(clip: string, scene: string): void;
   onJob?(kind: string, params: Record<string, unknown>): void;
+  /** Relink one asset to one file the person names. */
+  onRelink?(media: string, path: string): void;
   onRetime?(
     clip: string,
     played: ExactTime | null,
@@ -61,7 +64,7 @@ export function Inspector({
             )}
           </>
         )}
-        {!selection && media && <MediaDetail media={media} onJob={onJob} />}
+        {!selection && media && <MediaDetail media={media} onJob={onJob} onRelink={onRelink} />}
         {!selection && !media && (
           <div className="empty">Select a clip or a media item.</div>
         )}
@@ -464,9 +467,11 @@ function ClipDetail({ item, track }: { item: TimelineItem; track: TimelineTrack 
 function MediaDetail({
   media,
   onJob,
+  onRelink,
 }: {
   media: MediaView;
   onJob?(kind: string, params: Record<string, unknown>): void;
+  onRelink?(media: string, path: string): void;
 }) {
   const v = media.video;
   const c = media.checksum;
@@ -492,6 +497,7 @@ function MediaDetail({
           </button>
         </div>
       )}
+      <Resolution media={media} onJob={onJob} onRelink={onRelink} />
       <Proxies media={media} onJob={onJob} />
       <div className="section-title">Media</div>
       <dl className="props">
@@ -610,6 +616,82 @@ function Proxies({
       )}
       {onJob && sizes.length === 0 && v && (
         <div className="hint">This original is {v.width}×{v.height}: a proxy would not be smaller.</div>
+      )}
+    </>
+  );
+}
+
+/**
+ * Whether this media is where the project says it is, and how to find it when
+ * it is not. Identity is content: the runtime looks for *this file's content*
+ * under a folder, and refuses anything that merely shares its name — so the
+ * reason a likely-looking file was not accepted is shown, with its hash.
+ */
+function Resolution({
+  media,
+  onJob,
+  onRelink,
+}: {
+  media: MediaView;
+  onJob?(kind: string, params: Record<string, unknown>): void;
+  onRelink?(media: string, path: string): void;
+}) {
+  const [folder, setFolder] = useState("");
+  const [file, setFile] = useState("");
+  const r = media.resolution ?? { state: null, note: null, relinked_from: null, confidence: null };
+  const settled = media.online !== false && !r.state;
+  return (
+    <>
+      <div className="section-title">Resolution</div>
+      {settled && (
+        <div className="hint">
+          Online at its recorded path
+          {r.relinked_from ? ` · relinked from ${r.relinked_from} (${r.confidence})` : ""}
+        </div>
+      )}
+      {!settled && (
+        <div className="bad" title={r.note ?? ""}>
+          {r.state === "replaced"
+            ? "A different file is at this path now"
+            : r.state === "not_found"
+              ? "Not found by content"
+              : "Offline"}
+          {r.note ? ` — ${r.note}` : ""}
+        </div>
+      )}
+      {onJob && (
+        <div className="binding">
+          <label>
+            Look in{" "}
+            <input
+              aria-label="Relink folder"
+              placeholder="/path/to/card"
+              size={22}
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+            />
+          </label>
+          <button disabled={!folder.trim()} onClick={() => onJob("media.relink", { folder: folder.trim(), media: media.id })}>
+            Find by content
+          </button>
+        </div>
+      )}
+      {onRelink && (
+        <div className="binding">
+          <label>
+            This file{" "}
+            <input
+              aria-label="Relink file"
+              placeholder="/path/to/A001C001.mov"
+              size={22}
+              value={file}
+              onChange={(e) => setFile(e.target.value)}
+            />
+          </label>
+          <button disabled={!file.trim()} onClick={() => onRelink(media.id, file.trim())}>
+            Relink to it
+          </button>
+        </div>
       )}
     </>
   );

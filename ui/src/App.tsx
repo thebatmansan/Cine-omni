@@ -395,6 +395,9 @@ export function App() {
                   onBind={(clip, scene) => void session.run("bind", () => client.bindClip(clip, scene))}
                   onUnbind={(clip, scene) => void session.run("unbind", () => client.unbindClip(clip, scene))}
                   onJob={(kind, params) => void session.run(kind, () => client.submitJob(kind, params))}
+                  onRelink={(media, path) =>
+                    void session.run("relink", () => client.relink(media, path)).then(() => session.refresh())
+                  }
                   onRetime={(clip, played, reversed, keepPitch, ramp) =>
                     void session.run(ramp ? "speed ramp" : "retime", () =>
                       client.retime(clip, played, reversed, keepPitch, ramp ?? null),
@@ -571,6 +574,9 @@ export function App() {
                 selection={null}
                 media={media}
                 onJob={(kind, params) => void session.run(kind, () => client.submitJob(kind, params))}
+                onRelink={(media, path) =>
+                  void session.run("relink", () => client.relink(media, path)).then(() => session.refresh())
+                }
               />
             </div>
             <Jobs

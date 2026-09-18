@@ -104,7 +104,7 @@ pub fn change_notification(cs: &ucg_core::ChangeSet) -> String {
 /// States are deliberately the same four the rest of the project uses:
 /// `verified`, `degraded`, `unavailable`, `refused`.
 fn capabilities() -> J {
-    use cine_media::capability::{Verification, REGISTRY};
+    use cine_media::capability::{Verification, MEDIA_PATHS, REGISTRY};
 
     let codecs: Vec<J> = REGISTRY
         .iter()
@@ -120,6 +120,25 @@ fn capabilities() -> J {
                 "group": "Decoding",
                 "state": state,
                 "detail": detail,
+            })
+        })
+        .collect();
+
+    // Whole media paths, from the same registry the codecs come from: what
+    // exists, how far, and what is deliberately not attempted. Nothing here is
+    // written in this function, so no interface can claim more than the table.
+    let paths: Vec<J> = MEDIA_PATHS
+        .iter()
+        .map(|p| {
+            json!({
+                "id": p.id,
+                "name": p.name,
+                "group": format!("Media · {}", p.area),
+                "state": p.state.label(),
+                "detail": match p.evidence {
+                    Some(e) => format!("{} — {e}", p.detail),
+                    None => p.detail.to_string(),
+                },
             })
         })
         .collect();
@@ -266,7 +285,13 @@ fn capabilities() -> J {
         }),
     ];
 
-    json!({ "capabilities": session.into_iter().chain(codecs).collect::<Vec<_>>() })
+    json!({
+        "capabilities": session
+            .into_iter()
+            .chain(paths)
+            .chain(codecs)
+            .collect::<Vec<_>>()
+    })
 }
 
 fn entity(params: &J, key: &str) -> std::result::Result<EntityId, String> {
@@ -1621,38 +1646,17 @@ pub fn dispatch_with(
             }
             json!({ "preference": p.session.media().as_str() })
         }
+        "relink" => {
+            // Relink one asset to one file, by hand. Content decides; a file
+            // that is not this media is refused.
+            let media = entity(params, "media")?;
+            let path = std::path::PathBuf::from(str_param(params, "path")?);
+            crate::relink::relink_to(p, media, &path)?
+        }
         "check_media" => {
-            // Whether each original is where the project says, now. Offline
-            // is a normal state; only real changes are committed.
-            let found: Vec<(EntityId, bool)> = {
-                let g = p.engine.read();
-                g.of_kind(kinds::ASSET_MEDIA)
-                    .iter()
-                    .map(|n| {
-                        let here = n
-                            .get_str(ucg_schema::attrs::MEDIA_PATH)
-                            .is_some_and(|path| std::path::Path::new(path).is_file());
-                        (n.id, here)
-                    })
-                    .filter(|(id, here)| {
-                        g.node(*id).and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR)) != Some(*here)
-                    })
-                    .collect()
-            };
-            if !found.is_empty() {
-                p.engine
-                    .transact("check media", |tx| {
-                        for (id, here) in &found {
-                            cine_media::ucg::set_online(tx, *id, *here)
-                                .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
-                        }
-                        Ok(())
-                    })
-                    .map_err(|e| e.to_string())?;
-            }
-            json!({
-                "changed": found.iter().map(|(id, here)| json!({ "media": id, "online": here })).collect::<Vec<_>>(),
-            })
+            // Whether each original is its content, where the project says.
+            // Offline is a normal state; only real changes are committed.
+            crate::relink::check(p)?
         }
         "focus" => {
             // With `timeline`, open that sequence in every surface; `null`

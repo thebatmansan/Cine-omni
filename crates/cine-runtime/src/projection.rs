@@ -298,6 +298,7 @@ pub fn media(graph: &Graph) -> J {
                     })),
                     "streams": streams,
                     "proxies": crate::proxy::proxies_json(graph, n.id),
+                    "resolution": crate::relink::state_json(graph, n.id),
                 })
             })
             .collect(),
