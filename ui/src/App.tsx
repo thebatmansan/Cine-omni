@@ -769,6 +769,11 @@ function ProjectDialog({
       );
       if (ok && typeof ok === "object" && "label" in ok) {
         setImported(`${(ok as { label: string }).label} — watch it in Jobs`);
+        // An import is a job, and cards arrive one after another: the dialog
+        // stays, says what was submitted, and offers the next path.
+        setText("");
+        setBusy(false);
+        return;
       }
     } else {
       ok = await session.run("import screenplay", () => client.importFountain(text, name || "screenplay.fountain"));
@@ -903,7 +908,7 @@ function ProjectDialog({
           {session.refusal && <div className="notice bad">{session.refusal}</div>}
         </div>
         <div className="dialog-actions">
-          <button onClick={onClose}>Cancel</button>
+          <button onClick={onClose}>{imported ? "Close" : "Cancel"}</button>
           <button className="primary" disabled={busy} onClick={() => void submit()}>
             {kind === "sequence" ? "Create" : "Import"}
           </button>

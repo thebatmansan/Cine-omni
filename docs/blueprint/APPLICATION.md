@@ -816,6 +816,32 @@ The import job's key is the path **and** what is at it (size and modification
 time), so importing the same file twice is one piece of work, while a different
 file written over that path is not answered with the first import's asset.
 
+#### Measured in the real application (`ui/e2e/ingest.mjs`, dev build)
+
+`cine new`, `cine bars`, `cine start`, then headless Chrome driving the actual
+interface: open **Project ▸ Import media…**, type a path, tick thumbnail,
+waveform and proxy, press Import.
+
+| step | measured |
+|---|---|
+| Import pressed → the asset visible in the media browser | 408 ms |
+| the waveform mark → the proxy mark, for 24 pictures of 1280×720 | 5 520 ms |
+| the four jobs the runtime reported | Import 0.04 s (io), Thumbnail 0.33 s, Waveform 0.16 s, Proxy 540p 5.85 s |
+
+What the test holds, and would fail on: the browser holds **no** row for the
+file before the import; exactly **one** row after it, not one per derived thing;
+**no** proxy mark before the proxy job has succeeded; the waveform mark before
+the proxy mark, in that order; and the import and each dispatched job present in
+Jobs as the runtime's own records. Nothing in the interface is allowed to
+anticipate the runtime — a timer or an optimistic mark would fail the third and
+fourth of those.
+
+**A defect this found.** The dialog closed the moment the import was submitted,
+so the line naming what had been submitted and where to watch it was never
+shown — dead code, and no confirmation for the person. Cards arrive one after
+another, so the dialog now stays, says what was submitted, clears the path for
+the next one, and offers **Close** rather than Cancel once something is in.
+
 ### What derived data depends on, and what it survives
 
 `derived_provenance.rs` walks the whole matrix in one place, because the value
