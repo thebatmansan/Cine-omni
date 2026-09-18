@@ -232,7 +232,8 @@ pub fn bake_view(
     ) {
         return None;
     }
-    let processor = crate::ucg::viewing_processor(config, input, working, cdl, display, view).ok()?;
+    let processor =
+        crate::ucg::viewing_processor(config, input, working, cdl, display, view).ok()?;
     let mut lut = Lut3D::bake_domain(
         &processor,
         LATTICE_SIZE,

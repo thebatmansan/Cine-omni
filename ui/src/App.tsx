@@ -740,6 +740,10 @@ function ProjectDialog({
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [asSequence, setAsSequence] = useState(false);
+  const [withThumbnail, setWithThumbnail] = useState(true);
+  const [withWaveform, setWithWaveform] = useState(true);
+  const [withProxy, setWithProxy] = useState(false);
+  const [proxyHeight, setProxyHeight] = useState(540);
   const [imported, setImported] = useState<string | null>(null);
   const { client } = session;
 
@@ -752,19 +756,19 @@ function ProjectDialog({
       if (ok && typeof ok === "object" && "id" in ok) session.selectTimeline((ok as { id: string }).id);
     } else if (kind === "media") {
       const [n, d] = fps.split("/").map(Number);
+      // An import is a job: it reports its own progress in Jobs, and the
+      // derived work it starts reports its own.
       ok = await session.run("import media", () =>
-        client.ingest(text.trim(), {
+        client.importMedia(text.trim(), {
           sequence: asSequence ? true : undefined,
           rate: asSequence ? { num: n, den: d || 1 } : undefined,
+          thumbnail: withThumbnail,
+          waveform: withWaveform,
+          proxyHeight: withProxy ? proxyHeight : null,
         }),
       );
-      if (ok && typeof ok === "object" && "sequence" in ok) {
-        const r = ok as { sequence: boolean; frames?: number; pattern?: string; missing?: number[] };
-        setImported(
-          r.sequence
-            ? `${r.pattern}: ${r.frames} frames${r.missing?.length ? `, ${r.missing.length} missing` : ""}`
-            : "one file",
-        );
+      if (ok && typeof ok === "object" && "label" in ok) {
+        setImported(`${(ok as { label: string }).label} — watch it in Jobs`);
       }
     } else {
       ok = await session.run("import screenplay", () => client.importFountain(text, name || "screenplay.fountain"));
@@ -833,10 +837,53 @@ function ProjectDialog({
                   </select>
                 </label>
               )}
+              <div className="section-title">After importing</div>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  aria-label="Make thumbnail"
+                  checked={withThumbnail}
+                  onChange={(e) => setWithThumbnail(e.target.checked)}
+                />
+                Thumbnail
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  aria-label="Make waveform"
+                  checked={withWaveform}
+                  onChange={(e) => setWithWaveform(e.target.checked)}
+                />
+                Waveform
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  aria-label="Make proxy"
+                  checked={withProxy}
+                  onChange={(e) => setWithProxy(e.target.checked)}
+                />
+                Proxy
+                {withProxy && (
+                  <select
+                    aria-label="Import proxy height"
+                    value={proxyHeight}
+                    onChange={(e) => setProxyHeight(Number(e.target.value))}
+                  >
+                    {[1080, 720, 540, 360, 180].map((hgt) => (
+                      <option key={hgt} value={hgt}>
+                        {hgt}p
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </label>
               <p className="hint">
                 The file is probed and identified by its content. Codecs this build cannot decode are recorded
                 as such, not hidden. A run of files has no rate of its own, so a sequence takes the one chosen
                 here; a number inside the run with no file is a hole, and is reported rather than shown black.
+                Thumbnails and waveforms are quick; a proxy is minutes of work and gigabytes of disk, so it
+                happens only when asked for.
               </p>
               {imported && <div className="notice">Imported {imported}</div>}
             </>

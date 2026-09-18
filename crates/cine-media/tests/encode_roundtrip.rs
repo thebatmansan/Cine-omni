@@ -85,9 +85,15 @@ fn an_encoded_file_decodes_to_the_frames_that_went_in_in_order() {
         let decoded = reader.frame_at_index(i).unwrap().expect("a picture");
         let (level, bar) = read_back(&decoded);
         let want_level = f64::from(40 + (i * 7 % 160) as u8);
-        assert!((level - want_level).abs() < 3.0, "frame {i}: level {level:.1} vs {want_level}");
+        assert!(
+            (level - want_level).abs() < 3.0,
+            "frame {i}: level {level:.1} vs {want_level}"
+        );
         let want_bar = (i * 11) % (W - 16);
-        assert!(bar.abs_diff(want_bar) <= 2, "frame {i}: bar at {bar}, wrote {want_bar}");
+        assert!(
+            bar.abs_diff(want_bar) <= 2,
+            "frame {i}: bar at {bar}, wrote {want_bar}"
+        );
     }
 }
 

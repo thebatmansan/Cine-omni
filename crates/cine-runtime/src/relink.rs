@@ -133,9 +133,12 @@ fn wanted(project: &OmniProject, only: Option<EntityId>) -> Vec<Wanted> {
                 file_name: path.file_name().map(|f| f.to_string_lossy().into_owned()),
                 path,
                 info: info.clone(),
-                sha256: n
-                    .get(crate::jobs::CHECKSUM_ATTR)
-                    .and_then(|v| v.to_json().get("sha256").and_then(J::as_str).map(str::to_string)),
+                sha256: n.get(crate::jobs::CHECKSUM_ATTR).and_then(|v| {
+                    v.to_json()
+                        .get("sha256")
+                        .and_then(J::as_str)
+                        .map(str::to_string)
+                }),
             })
         })
         .collect()
@@ -201,7 +204,10 @@ pub fn scan(
     // Only files whose size matches some asset's are worth hashing: a file of
     // another length is certainly other content.
     let sizes: Vec<u64> = assets.iter().map(|a| a.size).collect();
-    let names: Vec<&str> = assets.iter().filter_map(|a| a.file_name.as_deref()).collect();
+    let names: Vec<&str> = assets
+        .iter()
+        .filter_map(|a| a.file_name.as_deref())
+        .collect();
     let mut by_hash: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut by_name: HashMap<String, Vec<Candidate>> = HashMap::new();
     let mut seen = 0usize;
@@ -209,11 +215,7 @@ pub fn scan(
     let mut cancelled = false;
     walk(folder, depth, &mut |path, size| {
         seen += 1;
-        if seen.is_multiple_of(32)
-            && !progress(
-                0.0,
-                &format!("{seen} files seen, {hashed} hashed"),
-            )
+        if seen.is_multiple_of(32) && !progress(0.0, &format!("{seen} files seen, {hashed} hashed"))
         {
             cancelled = true;
             return false;
@@ -228,7 +230,10 @@ pub fn scan(
             return true;
         };
         hashed += 1;
-        by_hash.entry(hash.hex().to_string()).or_default().push(path.to_path_buf());
+        by_hash
+            .entry(hash.hex().to_string())
+            .or_default()
+            .push(path.to_path_buf());
         if let Some(name) = name {
             by_name.entry(name).or_default().push(Candidate {
                 path: path.to_path_buf(),
@@ -280,7 +285,9 @@ pub fn scan(
             .unwrap_or_default();
 
         // What is at the recorded path now?
-        let here = ContentHash::fast(&asset.path).ok().map(|h| h.hex().to_string());
+        let here = ContentHash::fast(&asset.path)
+            .ok()
+            .map(|h| h.hex().to_string());
         if here.as_deref() == Some(asset.hash.as_str()) {
             outcomes.push(Outcome {
                 media: asset.media,
@@ -338,10 +345,7 @@ pub fn scan(
                     media: asset.media,
                     name: asset.name.clone(),
                     state: "relinked",
-                    note: format!(
-                        "found by content at {} ({confidence})",
-                        path.display()
-                    ),
+                    note: format!("found by content at {} ({confidence})", path.display()),
                     path: Some(path.clone()),
                     confidence: Some(confidence),
                     duplicates: found.into_iter().filter(|p| *p != path).collect(),
@@ -405,7 +409,9 @@ fn apply(project: &OmniProject, outcomes: &[Outcome]) -> Result<(), String> {
         .filter(|o| {
             let g = project.engine.read();
             let node = g.node(o.media);
-            let path_now = node.and_then(|n| n.get_str(attrs::MEDIA_PATH)).map(PathBuf::from);
+            let path_now = node
+                .and_then(|n| n.get_str(attrs::MEDIA_PATH))
+                .map(PathBuf::from);
             let state_now = node.and_then(|n| n.get_str(STATE_ATTR)).map(str::to_string);
             let online_now = node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR));
             match o.state {
@@ -433,7 +439,11 @@ fn apply(project: &OmniProject, outcomes: &[Outcome]) -> Result<(), String> {
                         if let Some(was) = was {
                             tx.set(o.media, FROM_ATTR, was)?;
                         }
-                        tx.set(o.media, CONFIDENCE_ATTR, o.confidence.unwrap_or("fingerprint"))?;
+                        tx.set(
+                            o.media,
+                            CONFIDENCE_ATTR,
+                            o.confidence.unwrap_or("fingerprint"),
+                        )?;
                         tx.remove_attr(o.media, STATE_ATTR)?;
                         tx.remove_attr(o.media, NOTE_ATTR)?;
                         cine_media::ucg::set_online(tx, o.media, true)
@@ -555,8 +565,12 @@ pub fn relink_to(project: &OmniProject, media: EntityId, path: &Path) -> Result<
                 .ok_or("the media has no content hash")?
                 .to_string(),
             n.name(),
-            n.get(crate::jobs::CHECKSUM_ATTR)
-                .and_then(|v| v.to_json().get("sha256").and_then(J::as_str).map(str::to_string)),
+            n.get(crate::jobs::CHECKSUM_ATTR).and_then(|v| {
+                v.to_json()
+                    .get("sha256")
+                    .and_then(J::as_str)
+                    .map(str::to_string)
+            }),
         )
     };
     if !path.is_file() {
@@ -596,6 +610,27 @@ pub fn relink_to(project: &OmniProject, media: EntityId, path: &Path) -> Result<
     };
     apply(project, std::slice::from_ref(&outcome))?;
     Ok(outcome.to_json())
+}
+
+/// Why this media cannot be read from where the project says it is, if it
+/// cannot.
+///
+/// The project's own record answers, never the presence of a file: the case
+/// this exists for is a file that *is* there and is not this content. Anything
+/// that reads an original — a frame served over HTTP, a decode for playback —
+/// asks this first, so no path ever hands back a stranger's picture.
+pub fn unreadable(graph: &ucg_core::Graph, media: EntityId) -> Option<&'static str> {
+    let node = graph.node(media)?;
+    if node.get_bool(cine_media::ucg::ONLINE_ATTR) != Some(false) {
+        return None;
+    }
+    match node.get_str(STATE_ATTR) {
+        Some("replaced") => Some(
+            "the file where this media lives is different media now; \
+             relink it to where its content actually is",
+        ),
+        _ => Some("that media is offline: the file it names is not there"),
+    }
 }
 
 /// What the application shows about an asset's resolution, for the media list.

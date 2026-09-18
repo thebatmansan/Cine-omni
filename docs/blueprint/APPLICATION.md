@@ -784,6 +784,135 @@ its file is damaged, refusing to be drawn from; media with no sound is refused;
 a cancelled overview leaves no files and no record. `cine-media` unit tests hold
 the levels, the window arithmetic and the file format.
 
+### Importing media, and what follows an import
+
+**Project → Import media** is a job now (`media.ingest`), and it does the whole
+of becoming an asset:
+
+```text
+discover → identify → probe → evaluate → register → dispatch derived work
+```
+
+*Discover* one file or the numbered run it belongs to; *identify* by content,
+through the same function relinking and proxies ask; *probe* container, codecs,
+sizes, rates, durations, colour and sound; *evaluate* what **this build** can do
+with what was found, from the capability registry rather than from hope;
+*register* in one transaction, so the asset exists whole or not at all; then
+*dispatch* the derived work asked for as jobs of its own.
+
+The dialog asks what should follow: **thumbnail** and **waveform** default on,
+because they are seconds of work and are what a browser needs to show media at
+all; **proxy** is off unless asked for, because it is minutes of work and
+gigabytes of disk, and no policy here decides that for someone. What cannot be
+done is said rather than skipped: a WAV gets no thumbnail and the answer says
+why.
+
+Cancelling is honoured up to the moment of registration — before it, nothing has
+been written; after it, the asset is real and the import finishes. There is no
+half-registered asset to find later. A file that is not media, or is not there,
+fails with the file named and registers nothing.
+
+The import job's key is the path **and** what is at it (size and modification
+time), so importing the same file twice is one piece of work, while a different
+file written over that path is not answered with the first import's asset.
+
+### What derived data depends on, and what it survives
+
+`derived_provenance.rs` walks the whole matrix in one place, because the value
+of recording provenance is an answer that is neither optimistic nor paranoid:
+
+| what happened | what follows |
+|---|---|
+| media moved or renamed, relinked | proxy, waveform and render all stay **current** |
+| the original is deleted | derived data stays current; the media is **offline**; Auto plays the proxy and says why; reading the original refuses |
+| a namesake with other content sits at its path | the media is **not online** (`replaced`); nothing derived changes |
+| that other content is imported | it is a **different asset**, with nothing derived |
+| the derived file itself changed | that one thing is **stale**, and nothing else |
+| the recipe version changed | that one thing is **stale**, and playback will not read it |
+| an edit outside the rendered frames | the render stays **current** |
+| an edit inside them | the render is **stale**; undo makes it current again |
+| the source's bytes changed where the project still vouches for it | the render is **stale**, naming the file |
+
+**The rule the last two rows turn on.** A fact about a file on disk is a reason
+a render is out of date only where it *contradicts what the project claims*.
+Where the project has already recorded that the media is away — offline, or a
+namesake its relinking refused — the same fact says only that the render cannot
+be **made again**; the render is still exactly what it was made from. Where the
+project still says "this media is its content, at this path" and the bytes there
+are not that content, something changed underneath and remaking now would give a
+different picture: that is staleness. The answer carries `reasons` (out of
+date), `notes` (true without meaning that) and `remakeable`, and the render list
+shows all three, notes in a quieter voice than reasons.
+
+**Defects this audit found and fixed.**
+
+* A render was called *stale* when its source went offline, and again when a
+  namesake sat at its path. Both are now notes.
+* Over-correcting that made a render whose source bytes really had changed read
+  as *current*. The rule above is what separates them; both cases now hold in
+  the same run.
+* `/frame` served a picture decoded from whatever file sat at an asset's path,
+  even where the project had already recorded that file as **`replaced`** — a
+  stranger's take, served as this one. Every read of an original now asks
+  `relink::unreadable` first, which answers from the project's record rather
+  than from a fresh hash on every frame.
+* The import job's key was the path alone, so a different file written over an
+  imported path was answered with the first import's asset.
+* `media.thumbnail` wrote straight to its cache path and then trusted the path's
+  existence, so a write interrupted halfway was taken for a finished thumbnail
+  by every later run. It is written beside itself and renamed, and a thumbnail
+  counts only if it is a whole PNG.
+* `media.waveform` wrote atomically but never read its output back. Succeeding
+  now means the file was read and holds the channels, rate and length it claims.
+
+### Media too large to hold
+
+Professional media is bigger than memory, so two things are measured rather than
+assumed.
+
+**Identifying and probing do not read the file.** `ContentHash::fast` hashes the
+size and both ends. Measured: a 536.9 MB file identified in 91.8 ms, with
+resident memory growing 1.4 MB (dev build, this machine).
+
+**A picture that will not fit is refused, not attempted.** An EXR's data window
+is declared in its header, and a large one — real or corrupt — used to be an
+allocation the kernel answered by killing the application, which is not a
+failure the application can report or a person can act on. The size is now
+checked against a budget before a byte is allocated, in one place
+(`cine_media::budget`), and the refusal names the real size, the real budget and
+`CINE_PICTURE_BUDGET`, which raises it. The default is half of the memory the
+machine reports available, clamped between one 8K float-RGBA picture and 16 GB.
+Reading the EXR also builds the frame's bytes directly rather than building
+floats and copying them, which halves what one picture costs while it is read.
+
+What is not claimed: this bounds the picture a decoder is asked to produce, not
+a decoder's own working memory.
+
+### What a job guarantees, audited
+
+Every long thing the application does is a job, so the guarantees below are the
+guarantees of all of it. Each was checked against the code, and the third column
+names where it is observed rather than asserted.
+
+| property | how it holds | observed in |
+|---|---|---|
+| persistent identity | an id for the job's whole life; with a journal, every transition is a line of JSON and reopening restores the history | `jobs.rs::history_survives_a_restart_and_interrupted_work_resumes` |
+| one job per identity | a spec whose `key` matches a pending or succeeded job returns that job — including when many callers ask at the same instant | `the_same_work_is_not_done_twice`, `the_same_work_asked_for_at_once_by_many_is_still_done_once` |
+| truthful progress | reported by the runner, reset to nothing at the start of every attempt, and set to complete only on success — never interpolated, never a timer | `cine-jobs/src/lib.rs` |
+| deterministic transitions | priority then submission order among ready jobs of a class; a dependant waits and fails naming its dependency | `higher_priority_runs_first_and_ties_run_in_order`, `a_dependant_waits_and_fails_when_its_dependency_fails` |
+| cancellation | cooperative and final: a queued job stops at once, a running one is told, and a runner that ignores it is still recorded as cancelled | `cancelling_a_running_job_stops_it_and_records_it` |
+| retry | bounded by `max_attempts`, keeping the last error; a panicking runner fails its job rather than the application | `failures_are_retried_to_the_limit_and_panics_are_contained` |
+| stale results | a job cancelled while running is recorded cancelled and its output is **discarded**, so work overtaken by a cancellation cannot be committed | `cine-jobs/src/lib.rs`, `proxy_protocol.rs::a_cancelled_proxy_leaves_nothing_and_no_record_of_itself` |
+| atomic derived output | proxy, waveform and render write into `….partial` and rename; the thumbnail writes beside itself and renames. A rename within a directory is atomic; a write is not | `proxy.rs`, `waveform.rs`, `render.rs`, `jobs.rs` |
+| no orphaned partials | a partial is temporary data that the job which made it removes, and re-running the same identity clears any left behind. `.partial` directories are skipped when renders are listed, so one can never be shown as a finished render | `provenance.rs`, `STORAGE-POLICY.md` |
+| validated completion | succeeding means the output was checked: a proxy is re-probed, a waveform is read back and must hold the channels, rate and length it claims, a render's every frame and its manifest must be present | `proxy.rs`, `waveform.rs`, `provenance.rs` |
+| restart and recovery | work that was queued or running when the process stopped is queued again and says so; runners are therefore safe to run from the start, which their keys make explicit | `history_survives_a_restart_and_interrupted_work_resumes` |
+| diagnostics | every record carries state, attempts out of the limit, the last error, elapsed time, the resource class, whether it was resumed, and the params it ran with | `jobs.rs::record_json`, the Jobs panel |
+
+What a job does **not** do: checkpoint inside itself (a resumed job starts
+over), distribute across machines, or decide what work is needed — the runtime
+and the reactors do that.
+
 ### Speed
 
 A retimed clip plays its media over a different length of track. The model

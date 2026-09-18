@@ -33,7 +33,9 @@
 //! * `failed` — a render job that did not produce a render (reported from the
 //!   job system, since a failed render leaves no directory).
 
-use crate::render::{frame_file, frame_range, render_root, Look, Output, RenderRequest, MOVIE_FILE, RENDER_KIND};
+use crate::render::{
+    frame_file, frame_range, render_root, Look, Output, RenderRequest, MOVIE_FILE, RENDER_KIND,
+};
 use cine_pipeline::OmniProject;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
@@ -87,7 +89,10 @@ pub fn dependencies(
         .filter(|(_, e)| e.record.overlaps(&range))
         .collect();
     let sounds: Vec<&crate::playlist::Entry> = if sound {
-        list.sound.iter().filter(|e| e.record.overlaps(&range)).collect()
+        list.sound
+            .iter()
+            .filter(|e| e.record.overlaps(&range))
+            .collect()
     } else {
         Vec::new()
     };
@@ -98,12 +103,16 @@ pub fn dependencies(
     // map and where it is anchored, so that is included whole.
     let describe = |e: &crate::playlist::Entry| {
         let start = e.record.start_time.max(range.start_time);
-        let end = e.record.end_time_exclusive().min(range.end_time_exclusive());
+        let end = e
+            .record
+            .end_time_exclusive()
+            .min(range.end_time_exclusive());
         let media = match &e.timing {
             Some(t) => format!("{t:?}"),
             None => format!(
                 "{:?}",
-                e.offset.map(|o| o.checked_add(&start.checked_sub(&e.record.start_time)))
+                e.offset
+                    .map(|o| o.checked_add(&start.checked_sub(&e.record.start_time)))
             ),
         };
         // The asset, not its path: media that moved is the same media, and the
@@ -120,7 +129,11 @@ pub fn dependencies(
     if request.whole_cut {
         // "The whole cut" is itself a dependency: a longer or shorter cut is
         // a different whole.
-        let total = list.end.rescale_checked(list.rate, Rounding::Ceil).0.ticks();
+        let total = list
+            .end
+            .rescale_checked(list.rate, Rounding::Ceil)
+            .0
+            .ticks();
         seq.push_str(&format!("whole cut of {total} frames\n"));
     }
     for (_, e) in &pictures {
@@ -137,7 +150,11 @@ pub fn dependencies(
     });
 
     let mut assets: Vec<(EntityId, String)> = Vec::new();
-    for e in pictures.iter().map(|(_, e)| *e).chain(sounds.iter().copied()) {
+    for e in pictures
+        .iter()
+        .map(|(_, e)| *e)
+        .chain(sounds.iter().copied())
+    {
         if let Some(a) = e.asset {
             if !assets.iter().any(|(x, _)| *x == a) {
                 assets.push((a, e.name.clone()));
@@ -218,7 +235,12 @@ pub fn status(project: &OmniProject, dir: &Path) -> J {
     };
     let request = match RenderRequest::from_params(&manifest["request"]) {
         Ok(r) => r,
-        Err(e) => return with(manifest, invalid(format!("its manifest's request is not valid: {e}"))),
+        Err(e) => {
+            return with(
+                manifest,
+                invalid(format!("its manifest's request is not valid: {e}")),
+            )
+        }
     };
     // The files it says it wrote.
     match request.output {
@@ -242,14 +264,36 @@ pub fn status(project: &OmniProject, dir: &Path) -> J {
     let recorded: Vec<Dependency> =
         serde_json::from_value(manifest["dependencies"].clone()).unwrap_or_default();
     if recorded.is_empty() {
-        return with(manifest, invalid("its manifest records no dependencies".into()));
+        return with(
+            manifest,
+            invalid("its manifest records no dependencies".into()),
+        );
     }
 
     let mut reasons: Vec<String> = Vec::new();
+    // Not every fact about a render is a reason it is out of date, and one
+    // fact about a file can be either, depending on what the project claims.
+    //
+    // A media the project has already recorded as away — offline, or a
+    // namesake at its path that relinking refused — cannot be re-read, so the
+    // render cannot be remade; but nothing it was made from has changed. That
+    // is a note. Calling it staleness would throw away good renders every time
+    // a card is unplugged, or because a stranger's file took a name.
+    //
+    // A media the project still claims is online at a path whose bytes are not
+    // its content is the other case entirely: the source changed under the
+    // project, the render would come out different if made again now, and that
+    // is staleness. The difference is not what is on disk — it is whether the
+    // disk contradicts what the project says.
+    let mut notes: Vec<String> = Vec::new();
+    // Whether every source could be read again to remake this.
+    let mut remakeable = true;
     if manifest["renderer"].as_str() != Some(RENDERER) {
         reasons.push(format!(
             "rendered by {}, not the current renderer",
-            manifest["renderer"].as_str().unwrap_or("an unknown renderer")
+            manifest["renderer"]
+                .as_str()
+                .unwrap_or("an unknown renderer")
         ));
     }
     let sound = !manifest["sound"].is_null();
@@ -274,52 +318,98 @@ pub fn status(project: &OmniProject, dir: &Path) -> J {
                     Some(_) => {}
                 }
             }
-            for d in now.iter().filter(|d| !recorded.iter().any(|r| r.key == d.key)) {
+            for d in now
+                .iter()
+                .filter(|d| !recorded.iter().any(|r| r.key == d.key))
+            {
                 reasons.push(format!("{} is now part of it", d.label));
             }
         }
     }
-    // Files on disk against the hashes they were rendered from.
+    // Files on disk, against the content they were rendered from.
+    //
+    // What is on disk today decides whether this render could be *made again*,
+    // never whether it is out of date. Out of date is decided above, from the
+    // project's own record: if the project now holds different content for
+    // that media, the media dependency's fingerprint differs and the render is
+    // stale. A file that is away, or a namesake sitting at its path, changes
+    // neither the render nor the project's record of what it read.
     for dep in recorded.iter().filter(|d| d.key.starts_with("media:")) {
-        // The fingerprint is the content hash; where the file is now is what
-        // the project says now, not what it said when the render was made.
+        // The fingerprint is the content hash; where the file is now, and
+        // whether the project still vouches for it, is what the project says
+        // now — not what it said when the render was made.
         let hash = dep.fingerprint.as_str();
-        let Some(path) = dep
+        let Some((path, claimed)) = dep
             .key
             .strip_prefix("media:")
             .and_then(EntityId::parse)
             .and_then(|id| {
                 let g = project.engine.read();
-                g.node(id)
-                    .and_then(|n| n.get_str(ucg_schema::attrs::MEDIA_PATH))
-                    .map(std::path::PathBuf::from)
+                let n = g.node(id)?;
+                let path = n.get_str(ucg_schema::attrs::MEDIA_PATH)?;
+                // The project claims this media is its content at this path
+                // unless it has recorded otherwise.
+                let claimed = n.get_bool(cine_media::ucg::ONLINE_ATTR) != Some(false)
+                    && n.get_str(crate::relink::STATE_ATTR).is_none();
+                Some((std::path::PathBuf::from(path), claimed))
             })
         else {
             reasons.push(format!("{} is no longer in the project", dep.label));
             continue;
         };
         let path = path.as_path();
-        if !path.is_file() {
-            reasons.push(format!("{} is offline", dep.label));
-        } else if !hash.is_empty() {
+        // What is on disk, against the content the render read.
+        let disagreement = if !path.is_file() {
+            Some(format!("{} is not at {}", dep.label, path.display()))
+        } else if hash.is_empty() {
+            None
+        } else {
             match cine_media::ContentHash::fast(path) {
-                Ok(h) if h.hex() != hash => {
-                    reasons.push(format!("{} changed on disk since it was rendered", dep.label))
-                }
-                Ok(_) => {}
-                Err(e) => reasons.push(format!("{} cannot be read: {e}", dep.label)),
+                Ok(h) if h.hex() != hash => Some(format!(
+                    "the file at {} is not the content this render read",
+                    path.display()
+                )),
+                Ok(_) => None,
+                Err(e) => Some(format!("{} cannot be read: {e}", dep.label)),
             }
+        };
+        let Some(what) = disagreement else { continue };
+        remakeable = false;
+        if claimed {
+            // The project vouches for content that is not there. The render
+            // was made from what the project meant, and remaking it now would
+            // not produce the same thing.
+            reasons.push(format!(
+                "{what}: the source changed on disk since it was rendered"
+            ));
+        } else {
+            notes.push(format!(
+                "{what}; the project already knows, so this render is still what it was — it \
+                 cannot be made again until that media is found"
+            ));
         }
     }
     reasons.dedup();
-    let state = if reasons.is_empty() { "current" } else { "stale" };
-    with(manifest, json!({ "state": state, "reasons": reasons }))
+    notes.dedup();
+    let state = if reasons.is_empty() {
+        "current"
+    } else {
+        "stale"
+    };
+    with(
+        manifest,
+        json!({ "state": state, "reasons": reasons, "notes": notes, "remakeable": remakeable }),
+    )
 }
 
 fn with(manifest: J, status: J) -> J {
     json!({
         "state": status["state"],
         "reasons": status["reasons"],
+        // True of the render, without meaning it is out of date.
+        "notes": status["notes"],
+        // Whether every source it read can be read again.
+        "remakeable": status["remakeable"],
         "output": manifest["request"]["output"],
         "frames": manifest["frames"],
         "width": manifest["width"],
@@ -342,7 +432,12 @@ pub fn renders(project: &OmniProject, root: &Path, timeline: Option<EntityId>) -
     let sequences: Vec<std::path::PathBuf> = match timeline {
         Some(t) => vec![render_root(root, t)],
         None => std::fs::read_dir(&base)
-            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect()
+            })
             .unwrap_or_default(),
     };
     let mut rows: Vec<(String, J)> = Vec::new();
@@ -366,7 +461,12 @@ pub fn renders(project: &OmniProject, root: &Path, timeline: Option<EntityId>) -
     }
     // Directory names begin with the render's start time in seconds.
     rows.sort_by(|a, b| {
-        let key = |s: &str| s.split('-').next().and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+        let key = |s: &str| {
+            s.split('-')
+                .next()
+                .and_then(|x| x.parse::<u64>().ok())
+                .unwrap_or(0)
+        };
         key(&b.0).cmp(&key(&a.0)).then(b.0.cmp(&a.0))
     });
     let failed: Vec<J> = project
@@ -377,7 +477,8 @@ pub fn renders(project: &OmniProject, root: &Path, timeline: Option<EntityId>) -
                 .into_iter()
                 .filter(|r| r.spec.kind == RENDER_KIND && r.state == cine_jobs::JobState::Failed)
                 .filter(|r| {
-                    timeline.is_none_or(|t| r.spec.params["timeline"].as_str() == Some(&t.to_string()))
+                    timeline
+                        .is_none_or(|t| r.spec.params["timeline"].as_str() == Some(&t.to_string()))
                 })
                 .map(|r| {
                     json!({

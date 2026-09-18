@@ -122,13 +122,17 @@ impl ProxySettings {
                 self.height
             ));
         }
-        let width = ((u64::from(w) * u64::from(self.height) + u64::from(h) / 2) / u64::from(h)) as u32;
+        let width =
+            ((u64::from(w) * u64::from(self.height) + u64::from(h) / 2) / u64::from(h)) as u32;
         let width = (width + 1) & !1;
         Ok((width.max(2), self.height))
     }
 
     pub fn recipe(&self, w: u32, h: u32) -> String {
-        format!("h264-baseline qp{} {w}x{h} pcm-s24le-48k {RECIPE_VERSION}", self.quality)
+        format!(
+            "h264-baseline qp{} {w}x{h} pcm-s24le-48k {RECIPE_VERSION}",
+            self.quality
+        )
     }
 }
 
@@ -205,13 +209,19 @@ pub fn choose(graph: &Graph, media: EntityId, preference: MediaPreference) -> Ch
                 best = Some((h, p));
             }
         } else if stale.is_none() {
-            stale = Some(format!("its proxy is {}: {}", st.state, st.reasons.join("; ")));
+            stale = Some(format!(
+                "its proxy is {}: {}",
+                st.state,
+                st.reasons.join("; ")
+            ));
         }
     }
     let proxy_choice = |p: EntityId, reason: Option<String>| {
         let n = graph.node(p);
         Choice {
-            path: n.and_then(|n| n.get_str(attrs::MEDIA_PATH)).map(PathBuf::from),
+            path: n
+                .and_then(|n| n.get_str(attrs::MEDIA_PATH))
+                .map(PathBuf::from),
             proxy: Some(p),
             online: Some(true),
             has_sound: n.and_then(|n| n.get_bool(SOUND_ATTR)).unwrap_or(false),
@@ -236,7 +246,10 @@ pub fn choose(graph: &Graph, media: EntityId, preference: MediaPreference) -> Ch
             } else if video.as_ref().is_some_and(|v| !v.decodable) {
                 Some(format!(
                     "this build cannot decode the original's {}",
-                    video.as_ref().map(|v| v.codec.as_str()).unwrap_or("picture")
+                    video
+                        .as_ref()
+                        .map(|v| v.codec.as_str())
+                        .unwrap_or("picture")
                 ))
             } else {
                 video.and_then(|v| v.video).and_then(|v| {
@@ -246,9 +259,14 @@ pub fn choose(graph: &Graph, media: EntityId, preference: MediaPreference) -> Ch
                 })
             };
             match (why, best) {
-                (Some(why), Some((_, p))) => proxy_choice(p, Some(format!("playing the proxy: {why}"))),
+                (Some(why), Some((_, p))) => {
+                    proxy_choice(p, Some(format!("playing the proxy: {why}")))
+                }
                 (Some(why), None) => Choice {
-                    reason: Some(format!("playing the original although {why}: {}", no_proxy())),
+                    reason: Some(format!(
+                        "playing the original although {why}: {}",
+                        no_proxy()
+                    )),
                     ..original
                 },
                 (None, _) => original,
@@ -295,9 +313,13 @@ pub fn generate(
     let began = Instant::now();
     let (path, hash, info, name) = {
         let g = project.engine.read();
-        let n = g.node(media).ok_or("the media is no longer in the project")?;
+        let n = g
+            .node(media)
+            .ok_or("the media is no longer in the project")?;
         if n.kind.as_str() != kinds::ASSET_MEDIA {
-            return Err(format!("{media} is not a camera original; proxies are made of originals"));
+            return Err(format!(
+                "{media} is not a camera original; proxies are made of originals"
+            ));
         }
         let path = n
             .get_str(attrs::MEDIA_PATH)
@@ -381,7 +403,10 @@ pub fn generate(
     let mut sound = match info.first_audio().and_then(|s| s.audio.map(|a| (s, a))) {
         None => None,
         Some((s, _)) if !s.decodable => {
-            notes.push(format!("no sound: this build cannot decode the original's {}", s.codec));
+            notes.push(format!(
+                "no sound: this build cannot decode the original's {}",
+                s.codec
+            ));
             None
         }
         Some((_, a)) if a.channels > 2 => {
@@ -422,7 +447,10 @@ pub fn generate(
     };
 
     let partial = {
-        let mut n = out.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        let mut n = out
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
         n.push(".partial");
         out.with_file_name(n)
     };
@@ -494,12 +522,15 @@ pub fn generate(
             let (px, fw, fh, describe, assumed) = crate::frames::rgba_f32(&frame)?;
             convert += t0.elapsed().as_micros();
             if assumed && i == 0 {
-                notes.push(format!("decoded as {describe}, which the original does not declare"));
+                notes.push(format!(
+                    "decoded as {describe}, which the original does not declare"
+                ));
             }
             let img = Image::from_data(fw as usize, fh as usize, ChannelSet::Rgba, px)
                 .ok_or("picture buffer has the wrong size")?;
             let t0 = Instant::now();
-            let small = resample::resize(&img, pw as usize, ph as usize).map_err(|e| e.to_string())?;
+            let small =
+                resample::resize(&img, pw as usize, ph as usize).map_err(|e| e.to_string())?;
             scale += t0.elapsed().as_micros();
             let t0 = Instant::now();
             let ([y, u, v], _) = cine_gpu::yuv::rgb_to_yuv8_cpu(&conversion, &small.data);
@@ -581,7 +612,10 @@ pub fn generate(
     // Replacing a stale proxy of the same recipe is what was asked for: the
     // new one is complete before the old one goes.
     if out.exists() {
-        let mut old = out.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        let mut old = out
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
         old.push(".replaced");
         let old = out.with_file_name(old);
         let _ = std::fs::remove_dir_all(&old);
@@ -607,11 +641,17 @@ pub fn generate(
             tx.set(id, HEIGHT_ATTR, i64::from(ph))?;
             tx.set(id, SOUND_ATTR, sound.is_some())?;
             tx.set(id, FILE_SIZE_ATTR, size as i64)?;
-            tx.set(id, NOTES_ATTR, ucg_core::Value::from_serde(&notes).map_err(|e| UcgError::Aborted(e.to_string()))?)?;
+            tx.set(
+                id,
+                NOTES_ATTR,
+                ucg_core::Value::from_serde(&notes)
+                    .map_err(|e| UcgError::Aborted(e.to_string()))?,
+            )?;
             tx.set(
                 id,
                 cine_media::ucg::MEDIA_INFO_ATTR,
-                ucg_core::Value::from_serde(&probed).map_err(|e| UcgError::Aborted(e.to_string()))?,
+                ucg_core::Value::from_serde(&probed)
+                    .map_err(|e| UcgError::Aborted(e.to_string()))?,
             )?;
             if let Some(job) = job {
                 tx.set(id, JOB_ATTR, job as i64)?;

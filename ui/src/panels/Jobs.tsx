@@ -271,6 +271,18 @@ function Renders({
               ))}
             </ul>
           )}
+          {/* True of the render without making it out of date: the runtime
+              separates the two, and so does this. */}
+          {r.notes?.length > 0 && (
+            <ul className="render-notes">
+              {r.notes.map((note, i) => (
+                <li key={i}>{note}</li>
+              ))}
+            </ul>
+          )}
+          {r.remakeable === false && (
+            <div className="render-notes">This render cannot be made again until its media is found.</div>
+          )}
           {r.sound && r.sound.clipped_samples > 0 && (
             <div className="bad">{r.sound.clipped_samples} sound samples clipped at full scale</div>
           )}

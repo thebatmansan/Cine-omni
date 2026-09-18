@@ -90,7 +90,11 @@ impl EditList {
 /// Renders use this: a deliverable is made from originals, whatever anyone is
 /// viewing with.
 pub fn edit_list(graph: &Graph, timeline: EntityId) -> Result<EditList, String> {
-    edit_list_for(graph, timeline, cine_pipeline::session::MediaPreference::Original)
+    edit_list_for(
+        graph,
+        timeline,
+        cine_pipeline::session::MediaPreference::Original,
+    )
 }
 
 /// Resolve a timeline into its edit list, reading originals or proxies as
@@ -135,10 +139,19 @@ pub fn edit_list_for(
         // the available range are the original's either way.
         let mut choice = asset.map(|a| crate::proxy::choose(graph, a, preference));
         if is_sound {
-            if let Some(c) = choice.as_mut().filter(|c| c.proxy.is_some() && !c.has_sound) {
+            if let Some(c) = choice
+                .as_mut()
+                .filter(|c| c.proxy.is_some() && !c.has_sound)
+            {
                 *c = crate::proxy::Choice {
-                    reason: Some("the proxy has no sound; the sound plays from the original".into()),
-                    ..crate::proxy::choose(graph, asset.expect("chosen for an asset"), cine_pipeline::session::MediaPreference::Original)
+                    reason: Some(
+                        "the proxy has no sound; the sound plays from the original".into(),
+                    ),
+                    ..crate::proxy::choose(
+                        graph,
+                        asset.expect("chosen for an asset"),
+                        cine_pipeline::session::MediaPreference::Original,
+                    )
                 };
             }
         }
@@ -211,7 +224,11 @@ pub fn edit_list_for(
 ///
 /// One answer for every surface that asks — the record monitor, the render —
 /// so a rendered frame is the frame the monitor showed at that instant.
-pub fn picture_index(graph: &Graph, entry: &Entry, at: RationalTime) -> (Option<RationalTime>, Option<i64>) {
+pub fn picture_index(
+    graph: &Graph,
+    entry: &Entry,
+    at: RationalTime,
+) -> (Option<RationalTime>, Option<i64>) {
     let available = entry
         .asset
         .and_then(|a| graph.node(a))

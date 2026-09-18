@@ -91,7 +91,9 @@ pub fn generate(
     let began = Instant::now();
     let (path, hash, info, name) = {
         let g = project.engine.read();
-        let n = g.node(media).ok_or("the media is no longer in the project")?;
+        let n = g
+            .node(media)
+            .ok_or("the media is no longer in the project")?;
         if n.kind.as_str() != kinds::ASSET_MEDIA {
             return Err(format!("{media} is not media"));
         }
@@ -136,8 +138,7 @@ pub fn generate(
     let id = derivative.entity_id();
     {
         let g = project.engine.read();
-        if g.node(id).is_some()
-            && crate::derived::status(&g, id, RECIPE_VERSION, true).is_current()
+        if g.node(id).is_some() && crate::derived::status(&g, id, RECIPE_VERSION, true).is_current()
         {
             return Ok(json!({ "waveform": id, "already_current": true, "path": derivative.path }));
         }
@@ -187,6 +188,24 @@ pub fn generate(
     }
 
     let written = dir.join("waveform.cinewav");
+    // Succeeded has to mean the file is there and reads back as what it says.
+    // Hashing it proves only that bytes exist; reading it proves the peaks a
+    // waveform panel will ask for are actually in there.
+    let back = wav::read(&written).map_err(|e| format!("{}: {e}", written.display()))?;
+    if (back.channels, back.sample_rate, back.frames)
+        != (overview.channels, overview.sample_rate, overview.frames)
+    {
+        return Err(format!(
+            "{}: the waveform read back as {} channels at {} Hz over {} samples, not {} at {} over {}",
+            written.display(),
+            back.channels,
+            back.sample_rate,
+            back.frames,
+            overview.channels,
+            overview.sample_rate,
+            overview.frames
+        ));
+    }
     let size = std::fs::metadata(&written).map(|m| m.len()).unwrap_or(0);
     let content = cine_media::ContentHash::fast(&written).map_err(|e| e.to_string())?;
     project

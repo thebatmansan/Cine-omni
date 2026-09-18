@@ -27,7 +27,7 @@
 //! be a second answer to "what colour is this picture".
 
 use cine_gpu::yuv::{yuv8_to_rgb_cpu, YuvConversion};
-use cine_media::{MediaFile, PixelFormat, Pictures, VideoFrame};
+use cine_media::{MediaFile, Pictures, PixelFormat, VideoFrame};
 use parking_lot::Mutex;
 use std::path::PathBuf;
 
@@ -227,7 +227,11 @@ pub fn rgba_f32(frame: &VideoFrame) -> Result<(Vec<f32>, u32, u32, String, bool)
     let mut planes: [&[u8]; 3] = [&[], &[], &[]];
     let mut strides = [0usize; 3];
     for i in 0..3 {
-        let (pw, ph) = if i == 0 { (w as usize, h as usize) } else { (cw as usize, ch as usize) };
+        let (pw, ph) = if i == 0 {
+            (w as usize, h as usize)
+        } else {
+            (cw as usize, ch as usize)
+        };
         let (data, stride) = frame
             .plane(i)
             .ok_or_else(|| format!("picture has no plane {i}"))?;

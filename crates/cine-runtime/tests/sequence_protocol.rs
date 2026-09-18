@@ -31,7 +31,8 @@ fn exr(path: &Path, frame: usize) {
 }
 
 fn png16(path: &Path, value: u16) {
-    let img = image::ImageBuffer::from_pixel(32, 18, image::Rgba([value, value / 2, value / 4, 65535]));
+    let img =
+        image::ImageBuffer::from_pixel(32, 18, image::Rgba([value, value / 2, value / 4, 65535]));
     image::DynamicImage::ImageRgba16(img).save(path).unwrap();
 }
 
@@ -46,7 +47,10 @@ fn wait_for(c: &mut Client, id: u64) -> Value {
     loop {
         let jobs = c.call("jobs", json!({}));
         if let Some(job) = jobs.as_array().unwrap().iter().find(|j| j["id"] == id) {
-            if matches!(job["state"].as_str().unwrap(), "succeeded" | "failed" | "cancelled") {
+            if matches!(
+                job["state"].as_str().unwrap(),
+                "succeeded" | "failed" | "cancelled"
+            ) {
                 return job.clone();
             }
         }
@@ -73,16 +77,24 @@ fn a_numbered_run_is_ingested_as_one_asset_with_its_own_rate() {
     );
     assert_eq!(answer["sequence"], true, "{answer}");
     assert_eq!(answer["pattern"], "shot_0010.####.exr");
-    assert_eq!((answer["first"].as_i64(), answer["last"].as_i64()), (Some(1), Some(8)));
+    assert_eq!(
+        (answer["first"].as_i64(), answer["last"].as_i64()),
+        (Some(1), Some(8))
+    );
     assert_eq!(answer["frames"], 8);
     assert_eq!(answer["missing"], json!([]));
     let media = answer["id"].as_str().unwrap().to_string();
 
     // One asset, whatever member of the run it was ingested from.
     let again = c.call("ingest", json!({ "path": plates.join("shot_0010.0005.exr").display().to_string(), "rate_num": 24000, "rate_den": 1001 }));
-    assert_eq!(again["id"], json!(media), "any file of the run is the same asset");
+    assert_eq!(
+        again["id"],
+        json!(media),
+        "any file of the run is the same asset"
+    );
 
-    let view = c.call("media", json!({}))
+    let view = c
+        .call("media", json!({}))
         .as_array()
         .unwrap()
         .iter()
@@ -97,9 +109,15 @@ fn a_numbered_run_is_ingested_as_one_asset_with_its_own_rate() {
     assert_eq!(view["online"], true);
 
     // It cuts like any other media, and its pictures reach the monitor.
-    let made = c.call("new_timeline", json!({ "name": "Comp", "rate_num": 24000, "rate_den": 1001 }));
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Comp", "rate_num": 24000, "rate_den": 1001 }),
+    );
     let tl = made["id"].as_str().unwrap().to_string();
-    let v1 = c.call("timeline", json!({ "id": tl }))["tracks"][0]["id"].as_str().unwrap().to_string();
+    let v1 = c.call("timeline", json!({ "id": tl }))["tracks"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let at = |n: i64| json!({ "ticks": n, "rate_num": 24000, "rate_den": 1001 });
     let placed = c.call(
         "place",
@@ -109,7 +127,10 @@ fn a_numbered_run_is_ingested_as_one_asset_with_its_own_rate() {
     assert_eq!(placed["clips"].as_array().unwrap().len(), 1, "{placed}");
     let shown = c.call("picture_at", json!({ "timeline": tl, "time": at(1) }));
     assert_eq!(shown["black"], false, "{shown}");
-    assert_eq!(shown["index"], 3, "frame 1 of the cut is picture 3 of the run");
+    assert_eq!(
+        shown["index"], 3,
+        "frame 1 of the cut is picture 3 of the run"
+    );
     assert_eq!(shown["playable"], true);
 
     let (status, headers, body) = h.get(&format!("/frame?media={media}&index=3"));
@@ -132,9 +153,16 @@ fn a_hole_in_the_run_is_part_of_it_and_refuses_rather_than_going_black() {
     }
     let h = Harness::start_in(project(dir.path()));
     let mut c = h.client();
-    let answer = c.call("ingest", json!({ "path": plates.join("p.0001.exr").display().to_string() }));
+    let answer = c.call(
+        "ingest",
+        json!({ "path": plates.join("p.0001.exr").display().to_string() }),
+    );
     assert_eq!(answer["frames"], 6, "the run covers its whole range");
-    assert_eq!(answer["missing"], json!([4]), "and says which number has no file");
+    assert_eq!(
+        answer["missing"],
+        json!([4]),
+        "and says which number has no file"
+    );
     let media = answer["id"].as_str().unwrap().to_string();
 
     // The hole is not black: asking for it says which file is missing.
@@ -143,7 +171,10 @@ fn a_hole_in_the_run_is_part_of_it_and_refuses_rather_than_going_black() {
     // The frame service answers a picture it cannot produce with 422 and the
     // reason, never with 200 and a black image.
     assert!(status.contains("422"), "{status} {message}");
-    assert!(message.contains("p.0004.exr") && message.contains("missing"), "{message}");
+    assert!(
+        message.contains("p.0004.exr") && message.contains("missing"),
+        "{message}"
+    );
     // Its neighbours are fine.
     let (status, _, _) = h.get(&format!("/frame?media={media}&index=4"));
     assert!(status.contains("200"), "{status}");
@@ -157,7 +188,10 @@ fn a_single_numbered_file_is_a_still_unless_a_run_is_asked_for() {
     png16(&plates.join("only.0001.png"), 513);
     let h = Harness::start_in(project(dir.path()));
     let mut c = h.client();
-    let answer = c.call("ingest", json!({ "path": plates.join("only.0001.png").display().to_string() }));
+    let answer = c.call(
+        "ingest",
+        json!({ "path": plates.join("only.0001.png").display().to_string() }),
+    );
     assert_eq!(answer["sequence"], false, "one file is one still: {answer}");
 
     // Asked for as a run, one file is a run of one.
@@ -170,7 +204,11 @@ fn a_single_numbered_file_is_a_still_unless_a_run_is_asked_for() {
     assert_eq!(answer["frames"], 2);
 
     // A file with no number cannot be a run, and says so rather than guessing.
-    std::fs::write(plates.join("plain.png"), std::fs::read(plates.join("only.0001.png")).unwrap()).unwrap();
+    std::fs::write(
+        plates.join("plain.png"),
+        std::fs::read(plates.join("only.0001.png")).unwrap(),
+    )
+    .unwrap();
     let refused = c
         .call_result(
             "ingest",
@@ -190,13 +228,22 @@ fn scene_linear_delivers_through_a_view_or_as_exr_and_refuses_to_be_clamped() {
     }
     let h = Harness::start_in(project(dir.path()));
     let mut c = h.client();
-    let media = c.call("ingest", json!({ "path": plates.join("p.0001.exr").display().to_string() }))["id"]
+    let media = c.call(
+        "ingest",
+        json!({ "path": plates.join("p.0001.exr").display().to_string() }),
+    )["id"]
         .as_str()
         .unwrap()
         .to_string();
-    let made = c.call("new_timeline", json!({ "name": "Comp", "rate_num": 24, "rate_den": 1 }));
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Comp", "rate_num": 24, "rate_den": 1 }),
+    );
     let tl = made["id"].as_str().unwrap().to_string();
-    let v1 = c.call("timeline", json!({ "id": tl }))["tracks"][0]["id"].as_str().unwrap().to_string();
+    let v1 = c.call("timeline", json!({ "id": tl }))["tracks"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let at = |n: i64| json!({ "ticks": n, "rate_num": 24, "rate_den": 1 });
     c.call(
         "place",
@@ -215,7 +262,10 @@ fn scene_linear_delivers_through_a_view_or_as_exr_and_refuses_to_be_clamped() {
     );
     assert_eq!(refused["state"], "failed", "{refused}");
     let why = refused["error"].as_str().unwrap();
-    assert!(why.contains("scene-linear") && why.contains("clamp every highlight"), "{why}");
+    assert!(
+        why.contains("scene-linear") && why.contains("clamp every highlight"),
+        "{why}"
+    );
 
     // Through the project's view, the same pictures deliver.
     let began = Instant::now();
@@ -229,20 +279,41 @@ fn scene_linear_delivers_through_a_view_or_as_exr_and_refuses_to_be_clamped() {
         began.elapsed().as_millis()
     );
     let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
-    let manifest: Value = serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["look"]["worst_lattice_error"], 0.0, "the exact path has no lattice error");
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["look"]["worst_lattice_error"], 0.0,
+        "the exact path has no lattice error"
+    );
     assert!(
-        manifest["look"]["transforms"][0].as_str().unwrap().contains("exact, scene-linear"),
-        "the manifest says how it was transformed: {}", manifest["look"]["transforms"]
+        manifest["look"]["transforms"][0]
+            .as_str()
+            .unwrap()
+            .contains("exact, scene-linear"),
+        "the manifest says how it was transformed: {}",
+        manifest["look"]["transforms"]
     );
 
     // The highlights rolled off rather than clipping: this picture's scene
     // values run from 5.0 up, and a clamp would make every pixel pure white.
-    let img = image::open(out.join("frame_000000.png")).unwrap().to_rgba16();
+    let img = image::open(out.join("frame_000000.png"))
+        .unwrap()
+        .to_rgba16();
     let ramp: Vec<u16> = (0..32).map(|x| img.get_pixel(x, 9)[1]).collect();
-    assert!(ramp.windows(2).all(|w| w[1] >= w[0]), "brighter scene values stay brighter: {ramp:?}");
-    assert!(ramp[0] < 6000, "the shadow end is dark, not lifted: {}", ramp[0]);
-    assert!(ramp[31] > 40_000, "the highlight end is bright: {}", ramp[31]);
+    assert!(
+        ramp.windows(2).all(|w| w[1] >= w[0]),
+        "brighter scene values stay brighter: {ramp:?}"
+    );
+    assert!(
+        ramp[0] < 6000,
+        "the shadow end is dark, not lifted: {}",
+        ramp[0]
+    );
+    assert!(
+        ramp[31] > 40_000,
+        "the highlight end is bright: {}",
+        ramp[31]
+    );
     assert!(
         ramp.iter().filter(|v| **v == u16::MAX).count() <= 8,
         "a clamped render would be white across most of the ramp: {ramp:?}"
@@ -260,7 +331,9 @@ fn scene_linear_delivers_through_a_view_or_as_exr_and_refuses_to_be_clamped() {
     let read = x::read_first_rgba_layer_from_file(
         &written,
         |size: x::Vec2<usize>, _| -> (Vec<f32>, usize) { (vec![0.0; size.0 * size.1 * 4], size.0) },
-        |(pixels, width): &mut (Vec<f32>, usize), pos: x::Vec2<usize>, (r, g, b, a): (f32, f32, f32, f32)| {
+        |(pixels, width): &mut (Vec<f32>, usize),
+         pos: x::Vec2<usize>,
+         (r, g, b, a): (f32, f32, f32, f32)| {
             let i = (pos.1 * *width + pos.0) * 4;
             pixels[i] = r;
             pixels[i + 1] = g;
@@ -317,15 +390,24 @@ fn a_proxy_of_scene_linear_media_is_refused_because_it_would_bake_a_view() {
     }
     let h = Harness::start_in(project(dir.path()));
     let mut c = h.client();
-    let media = c.call("ingest", json!({ "path": plates.join("p.0001.exr").display().to_string() }))["id"]
+    let media = c.call(
+        "ingest",
+        json!({ "path": plates.join("p.0001.exr").display().to_string() }),
+    )["id"]
         .as_str()
         .unwrap()
         .to_string();
-    let job = c.call("job_submit", json!({ "kind": "media.proxy", "media": media, "height": 16 }));
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.proxy", "media": media, "height": 16 }),
+    );
     let done = wait_for(&mut c, job["id"].as_u64().unwrap());
     assert_eq!(done["state"], "failed", "{done}");
     let error = done["error"].as_str().unwrap();
-    assert!(error.contains("scene-linear") && error.contains("applied twice"), "{error}");
+    assert!(
+        error.contains("scene-linear") && error.contains("applied twice"),
+        "{error}"
+    );
 }
 
 /// The monitor can look at scene-linear pictures through the project's view,
@@ -341,7 +423,10 @@ fn a_picture_can_be_previewed_through_the_project_view() {
     }
     let h = Harness::start_in(project(dir.path()));
     let mut c = h.client();
-    let media = c.call("ingest", json!({ "path": plates.join("p.0001.exr").display().to_string() }))["id"]
+    let media = c.call(
+        "ingest",
+        json!({ "path": plates.join("p.0001.exr").display().to_string() }),
+    )["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -349,15 +434,22 @@ fn a_picture_can_be_previewed_through_the_project_view() {
     // As decoded: clamped, and it says so.
     let (status, headers, _) = h.get(&format!("/frame?media={media}&index=0"));
     assert!(status.contains("200"), "{status}");
-    let plain = common::header(&headers, "x-cine-colour").unwrap().to_string();
+    let plain = common::header(&headers, "x-cine-colour")
+        .unwrap()
+        .to_string();
     assert!(plain.contains("clamped"), "{plain}");
 
     // Through the view: transformed, and it says which.
     let (status, headers, body) = h.get(&format!("/frame?media={media}&index=0&view=project"));
     assert!(status.contains("200"), "{status}");
     assert!(body.starts_with(b"\x89PNG"));
-    let viewed = common::header(&headers, "x-cine-colour").unwrap().to_string();
-    assert!(viewed.contains("exact%2C%20scene-linear") || viewed.contains("exact"), "{viewed}");
+    let viewed = common::header(&headers, "x-cine-colour")
+        .unwrap()
+        .to_string();
+    assert!(
+        viewed.contains("exact%2C%20scene-linear") || viewed.contains("exact"),
+        "{viewed}"
+    );
     assert!(viewed.contains("Display"), "the view is named: {viewed}");
 
     // The two pictures differ: a view is not a no-op.

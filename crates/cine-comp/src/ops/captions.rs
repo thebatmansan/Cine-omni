@@ -174,7 +174,11 @@ pub fn burn_in(
                 let (x, y) = (x as usize, y as usize);
                 let under = image.get_rgba(x, y);
                 let mix = |v: f32| v + (1.0 - v) * coverage;
-                image.set_rgba(x, y, [mix(under[0]), mix(under[1]), mix(under[2]), under[3]]);
+                image.set_rgba(
+                    x,
+                    y,
+                    [mix(under[0]), mix(under[1]), mix(under[2]), under[3]],
+                );
             });
         }
         boxes.push(lb);
@@ -218,17 +222,32 @@ mod tests {
     fn a_bottom_caption_sits_in_the_lower_safe_area_white_on_black() {
         let font = font_or_skip!();
         let mut image = grey(1920, 1080);
-        let boxes = burn_in(&mut image, &["We ride at dawn.".into()], Placement::Bottom, &font).unwrap();
+        let boxes = burn_in(
+            &mut image,
+            &["We ride at dawn.".into()],
+            Placement::Bottom,
+            &font,
+        )
+        .unwrap();
         assert_eq!(boxes.len(), 1);
         let b = boxes[0];
-        assert!(b.y + b.height <= 972 && b.y > 850, "inside the lower safe area: {b:?}");
+        assert!(
+            b.y + b.height <= 972 && b.y > 850,
+            "inside the lower safe area: {b:?}"
+        );
         let centre = b.x + b.width / 2;
         assert!((centre as i64 - 960).abs() <= 1, "centred: {b:?}");
-        assert!(whites_in(&image, &b) > 1000, "there is white text in the box");
+        assert!(
+            whites_in(&image, &b) > 1000,
+            "there is white text in the box"
+        );
         // The box's corner is black, and outside the box the picture is untouched.
         assert_eq!(image.get_rgba(b.x + 1, b.y + 1)[..3], [0.0, 0.0, 0.0]);
         assert_eq!(image.get_rgba(10, 10), [0.5, 0.5, 0.5, 1.0]);
-        assert_eq!(image.get_rgba(b.x.saturating_sub(2), b.y + 5), [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(
+            image.get_rgba(b.x.saturating_sub(2), b.y + 5),
+            [0.5, 0.5, 0.5, 1.0]
+        );
     }
 
     #[test]
@@ -243,11 +262,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(boxes.len(), 2);
-        assert!(boxes[0].y < boxes[1].y, "the first line is above the second");
+        assert!(
+            boxes[0].y < boxes[1].y,
+            "the first line is above the second"
+        );
         assert!(boxes[1].y + boxes[1].height <= 648);
 
         let mut image = grey(1280, 720);
-        let top = burn_in(&mut image, &["HARBOUR OFFICE".into()], Placement::Top, &font).unwrap();
+        let top = burn_in(
+            &mut image,
+            &["HARBOUR OFFICE".into()],
+            Placement::Top,
+            &font,
+        )
+        .unwrap();
         assert!(top[0].y >= 72 && top[0].y < 90, "{:?}", top[0]);
     }
 
@@ -255,10 +283,15 @@ mod tests {
     fn a_line_too_wide_for_the_safe_area_is_refused_not_shrunk() {
         let font = font_or_skip!();
         let mut image = grey(640, 360);
-        let long = "This caption line is far too long to fit inside the safe area of the picture".to_string();
+        let long = "This caption line is far too long to fit inside the safe area of the picture"
+            .to_string();
         let e = burn_in(&mut image, &[long], Placement::Bottom, &font).unwrap_err();
         assert!(e.to_string().contains("safe area"), "{e}");
-        assert_eq!(image.get_rgba(320, 300), [0.5, 0.5, 0.5, 1.0], "nothing was drawn");
+        assert_eq!(
+            image.get_rgba(320, 300),
+            [0.5, 0.5, 0.5, 1.0],
+            "nothing was drawn"
+        );
     }
 
     /// Only the second line is too wide: the first must not have been drawn.
@@ -289,6 +322,9 @@ mod tests {
         let s = burn_in(&mut small, &["Scale".into()], Placement::Bottom, &font).unwrap()[0];
         let l = burn_in(&mut large, &["Scale".into()], Placement::Bottom, &font).unwrap()[0];
         let ratio = l.width as f64 / s.width as f64;
-        assert!((ratio - 3.0).abs() < 0.1, "three times the picture, three times the text: {ratio:.3}");
+        assert!(
+            (ratio - 3.0).abs() < 0.1,
+            "three times the picture, three times the text: {ratio:.3}"
+        );
     }
 }

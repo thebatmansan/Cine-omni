@@ -162,12 +162,9 @@ impl ProjectLink for RuntimeLink {
         let graph = self.runtime.project.engine.read();
         let id = current_timeline(&graph, self.runtime.project.session.focus())?;
         // Originals or proxies, as the session prefers, clip by clip.
-        let list = cine_runtime::playlist::edit_list_for(
-            &graph,
-            id,
-            self.runtime.project.session.media(),
-        )
-        .ok()?;
+        let list =
+            cine_runtime::playlist::edit_list_for(&graph, id, self.runtime.project.session.media())
+                .ok()?;
         let timeline = cine_timeline::graph::export_timeline(&graph, id).ok()?;
         let entries = list
             .entries
@@ -204,12 +201,9 @@ impl ProjectLink for RuntimeLink {
             None => cine_color::view::default_view(&config)?,
         };
         let id = current_timeline(&graph, self.runtime.project.session.focus())?;
-        let list = cine_runtime::playlist::edit_list_for(
-            &graph,
-            id,
-            self.runtime.project.session.media(),
-        )
-        .ok()?;
+        let list =
+            cine_runtime::playlist::edit_list_for(&graph, id, self.runtime.project.session.media())
+                .ok()?;
         let inputs = cine_color::view::input_colorspaces(&graph);
         let working = config.role("scene_linear").unwrap_or("ACEScg").to_string();
         let mut luts = Vec::with_capacity(list.entries.len());

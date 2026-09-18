@@ -14,9 +14,9 @@
 //! those is not one this writes.
 
 use crate::error::{Error, Result};
-use rusty_h264::{Encoder, EncoderConfig};
 /// A picture to encode: 8-bit 4:2:0 planes.
 pub use rusty_h264::YuvFrame;
+use rusty_h264::{Encoder, EncoderConfig};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -135,8 +135,10 @@ pub fn write_h264_mp4(
                 timescale: rate.num(),
                 language: "und".into(),
                 media_conf: mp4::MediaConfig::AvcConfig(mp4::AvcConfig {
-                    width: u16::try_from(width).map_err(|_| Error::Unsupported("too wide".into()))?,
-                    height: u16::try_from(height).map_err(|_| Error::Unsupported("too tall".into()))?,
+                    width: u16::try_from(width)
+                        .map_err(|_| Error::Unsupported("too wide".into()))?,
+                    height: u16::try_from(height)
+                        .map_err(|_| Error::Unsupported("too tall".into()))?,
                     seq_param_set: sps.to_vec(),
                     pic_param_set: pps.to_vec(),
                 }),

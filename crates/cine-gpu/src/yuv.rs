@@ -237,11 +237,7 @@ pub fn yuv_to_rgb_cpu(
 /// sample against it (`the_byte_path_is_the_reference_conversion`) — without
 /// building a float plane per channel first, which is most of the cost of
 /// converting a picture.
-pub fn yuv8_to_rgb_cpu(
-    conv: &YuvConversion,
-    planes: [&[u8]; 3],
-    strides: [usize; 3],
-) -> Vec<f32> {
+pub fn yuv8_to_rgb_cpu(conv: &YuvConversion, planes: [&[u8]; 3], strides: [usize; 3]) -> Vec<f32> {
     let m = conv.choice.matrix();
     let (yo, yg, co, cg) = conv.range.normalisation();
     let (w, h) = (conv.width as usize, conv.height as usize);
@@ -358,7 +354,10 @@ mod tests {
             &plane(&cr, sc, cw, ch),
         );
         let fast = yuv8_to_rgb_cpu(&c, [&luma, &cb, &cr], [sy, sc, sc]);
-        assert!(fast == reference, "the byte path differs from the reference");
+        assert!(
+            fast == reference,
+            "the byte path differs from the reference"
+        );
     }
 
     /// Encoding and decoding again lands every sample within one code value of
@@ -378,8 +377,12 @@ mod tests {
                         Range::Full => 50 + (i * 11 % 150) as u8,
                     })
                     .collect();
-                let cb: Vec<u8> = (0..(w / 2) * (h / 2)).map(|i| 120 + (i % 16) as u8).collect();
-                let cr: Vec<u8> = (0..(w / 2) * (h / 2)).map(|i| 124 + (i * 3 % 12) as u8).collect();
+                let cb: Vec<u8> = (0..(w / 2) * (h / 2))
+                    .map(|i| 120 + (i % 16) as u8)
+                    .collect();
+                let cr: Vec<u8> = (0..(w / 2) * (h / 2))
+                    .map(|i| 124 + (i * 3 % 12) as u8)
+                    .collect();
                 let f = |v: &[u8]| v.iter().map(|b| f32::from(*b) / 255.0).collect::<Vec<_>>();
                 let rgb = yuv_to_rgb_cpu(&c, &f(&luma), &f(&cb), &f(&cr));
                 let ([y2, u2, v2], clipped) = rgb_to_yuv8_cpu(&c, &rgb);

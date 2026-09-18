@@ -16,6 +16,7 @@
 //!    frame.
 
 pub mod av;
+pub mod budget;
 pub mod cache;
 pub mod capability;
 pub mod clock;
@@ -23,6 +24,7 @@ pub mod colr;
 pub mod decode_ahead;
 pub mod decoder;
 pub mod edit_list;
+pub mod encode;
 pub mod error;
 pub mod frame;
 pub mod h264_sps;
@@ -35,7 +37,6 @@ pub mod probe;
 pub mod reader;
 pub mod schedule;
 pub mod sequence;
-pub mod encode;
 pub mod sequence_audio;
 pub mod sound;
 pub mod testsignal;
@@ -53,11 +54,11 @@ pub use decoder::{Packet, VideoDecoder};
 pub use edit_list::{EditEntry, EditListSource};
 pub use error::{Error, Result};
 pub use frame::{AlphaMode, AudioFrame, ColorMetadata, Frame, PixelFormat, VideoFrame};
-pub use pictures::Pictures;
 pub use identity::{
     ContainerKind, ContentHash, Derivative, DerivativeKind, MediaFile, PhysicalSource, StreamInfo,
     StreamKind,
 };
+pub use pictures::Pictures;
 pub use probe::probe;
 pub use reader::MediaReader;
 pub use schedule::{FrameSource, Presentation, Presented, ScheduleStats, Scheduler};

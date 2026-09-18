@@ -247,3 +247,55 @@ fn listeners_see_every_transition() {
     assert!(states.contains(&JobState::Running));
     assert_eq!(states.last(), Some(&JobState::Succeeded));
 }
+
+#[test]
+fn the_same_work_asked_for_at_once_by_many_is_still_done_once() {
+    // The identity guarantee is only worth anything under a race: an import
+    // that dispatches a thumbnail, a browser that asks for the same one, and a
+    // reactor that notices the same media, all in the same instant.
+    let jobs = Arc::new(system(4));
+    let runs = Arc::new(AtomicUsize::new(0));
+    let r = runs.clone();
+    jobs.register("count", move |ctx: &JobContext, _: &JobSpec| {
+        r.fetch_add(1, Ordering::SeqCst);
+        // Long enough that every other thread submits while this one runs.
+        for _ in 0..20 {
+            if ctx.is_cancelled() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(json!("done"))
+    });
+
+    let start = Arc::new(std::sync::Barrier::new(16));
+    let ids: Vec<JobId> = (0..16)
+        .map(|_| {
+            let jobs = jobs.clone();
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                jobs.submit(JobSpec::new("count", "the:one", "count", Resource::Cpu))
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect();
+
+    let first = ids[0];
+    assert!(
+        ids.iter().all(|id| *id == first),
+        "every caller was given the same job: {ids:?}"
+    );
+    assert_eq!(jobs.wait(first, T).unwrap().state, JobState::Succeeded);
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the work was done once");
+
+    // And asking again once it has succeeded is still that one job, not a
+    // second run of work already done.
+    assert_eq!(
+        jobs.submit(JobSpec::new("count", "the:one", "count", Resource::Cpu)),
+        first
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+}

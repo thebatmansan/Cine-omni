@@ -43,7 +43,10 @@ fn children(body: &[u8]) -> Vec<([u8; 4], &[u8])> {
 }
 
 fn child<'a>(body: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
-    children(body).into_iter().find(|(k, _)| k == kind).map(|(_, b)| b)
+    children(body)
+        .into_iter()
+        .find(|(k, _)| k == kind)
+        .map(|(_, b)| b)
 }
 
 /// The `moov` box of a file, read without reading the media.
@@ -92,11 +95,18 @@ pub fn container_colour(path: &Path, track_id: u32) -> Option<ColorMetadata> {
         }
         let tkhd = child(trak, b"tkhd")?;
         // version 1 has 64-bit times: the id follows 8 + 8 bytes, else 4 + 4.
-        let id_at = if tkhd.first() == Some(&1) { 4 + 16 } else { 4 + 8 };
+        let id_at = if tkhd.first() == Some(&1) {
+            4 + 16
+        } else {
+            4 + 8
+        };
         let id = u32::from_be_bytes(tkhd.get(id_at..id_at + 4)?.try_into().ok()?);
         (id == track_id).then_some(trak)
     })?;
-    let stsd = child(child(child(child(trak, b"mdia")?, b"minf")?, b"stbl")?, b"stsd")?;
+    let stsd = child(
+        child(child(child(trak, b"mdia")?, b"minf")?, b"stbl")?,
+        b"stsd",
+    )?;
     // Full box header (4) and entry count (4), then the first entry.
     let entries = children(stsd.get(8..)?);
     let (_, entry) = entries.first()?;
@@ -130,7 +140,11 @@ pub fn container_colour(path: &Path, track_id: u32) -> Option<ColorMetadata> {
 /// handed with the pictures. A range the stream leaves at its default — no
 /// video signal type at all — takes the container's `nclx` flag when there is
 /// one.
-pub fn merge(stream: ColorMetadata, stream_declares_range: bool, container: Option<ColorMetadata>) -> ColorMetadata {
+pub fn merge(
+    stream: ColorMetadata,
+    stream_declares_range: bool,
+    container: Option<ColorMetadata>,
+) -> ColorMetadata {
     let Some(c) = container else {
         return stream;
     };

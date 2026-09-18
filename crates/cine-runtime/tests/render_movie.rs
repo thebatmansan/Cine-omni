@@ -43,7 +43,11 @@ fn picture(i: usize) -> YuvFrame {
 /// The integer a coded source holds at sample `n`, channel `c`.
 fn code(seed: i64, n: i64, c: usize) -> i32 {
     let v = ((n * 37 + seed * 100_003) % 1_000_000) as i32 - 500_000;
-    if c == 0 { v } else { -v }
+    if c == 0 {
+        v
+    } else {
+        -v
+    }
 }
 
 enum Sound {
@@ -61,7 +65,10 @@ fn movie(dir: &Path, name: &str, frames: usize, sound: Sound) -> PathBuf {
         Rate::F24,
         MovSettings {
             h264: H264Settings { qp: 16, gop: 12 },
-            sound: Some(SoundFormat { sample_rate: 48_000, channels: 2 }),
+            sound: Some(SoundFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            }),
             colour: ColourTags::BT709,
             first_picture: 0,
         },
@@ -97,7 +104,10 @@ fn wait_for(c: &mut Client, id: u64) -> Value {
     loop {
         let jobs = c.call("jobs", json!({}));
         if let Some(job) = jobs.as_array().unwrap().iter().find(|j| j["id"] == id) {
-            if matches!(job["state"].as_str().unwrap(), "succeeded" | "failed" | "cancelled") {
+            if matches!(
+                job["state"].as_str().unwrap(),
+                "succeeded" | "failed" | "cancelled"
+            ) {
                 return job.clone();
             }
         }
@@ -122,7 +132,10 @@ struct Seq {
 }
 
 fn sequence(c: &mut Client) -> Seq {
-    let made = c.call("new_timeline", json!({ "name": "Deliverable", "rate_num": 24, "rate_den": 1 }));
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Deliverable", "rate_num": 24, "rate_den": 1 }),
+    );
     let tl = made["id"].as_str().unwrap().to_string();
     let t = c.call("timeline", json!({ "id": tl }));
     Seq {
@@ -192,7 +205,10 @@ fn a_movie_of_the_cut_has_its_pictures_in_order_and_its_sound_bit_exact() {
     place(&mut c, &s, &b, 34, 0, 12);
 
     let began = Instant::now();
-    let done = render(&mut c, json!({ "kind": "render.sequence", "timeline": s.tl, "output": "movie" }));
+    let done = render(
+        &mut c,
+        json!({ "kind": "render.sequence", "timeline": s.tl, "output": "movie" }),
+    );
     assert_eq!(done["state"], "succeeded", "{done}");
     println!(
         "MEASURED movie of 46 frames 320x180 with 48 kHz stereo sound: {} ms (dev profile)",
@@ -200,7 +216,8 @@ fn a_movie_of_the_cut_has_its_pictures_in_order_and_its_sound_bit_exact() {
     );
     let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
     let mov = out.join("movie.mov");
-    let manifest: Value = serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["sound"]["frames"], 46 * SPF);
     assert_eq!(manifest["sound"]["clipped_samples"], 0);
 
@@ -212,12 +229,20 @@ fn a_movie_of_the_cut_has_its_pictures_in_order_and_its_sound_bit_exact() {
         match n {
             0..=23 => {
                 let got = bar.expect("A has a bar");
-                assert!((got - expected_bar(10 + n)).abs() <= 2.0, "frame {n}: A picture {}", 10 + n);
+                assert!(
+                    (got - expected_bar(10 + n)).abs() <= 2.0,
+                    "frame {n}: A picture {}",
+                    10 + n
+                );
             }
             24..=33 => assert!(bar.is_none(), "frame {n} is the gap: black"),
             _ => {
                 let got = bar.expect("B has a bar");
-                assert!((got - expected_bar(n - 34)).abs() <= 2.0, "frame {n}: B picture {}", n - 34);
+                assert!(
+                    (got - expected_bar(n - 34)).abs() <= 2.0,
+                    "frame {n}: B picture {}",
+                    n - 34
+                );
             }
         }
     }
@@ -239,24 +264,55 @@ fn a_movie_of_the_cut_has_its_pictures_in_order_and_its_sound_bit_exact() {
 
     // A picture of the cut's own media travels with its colour declared, not
     // assumed, in a header a browser reads exactly.
-    let asset = c.call("ingest", json!({ "path": a.display().to_string() }))["id"].as_str().unwrap().to_string();
+    let asset = c.call("ingest", json!({ "path": a.display().to_string() }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let (_, headers, _) = h.get(&format!("/frame?media={asset}&index=3"));
-    assert_eq!(common::header(&headers, "x-cine-colour-assumed"), Some("false"), "{headers:?}");
-    assert!(common::header(&headers, "x-cine-colour").unwrap().is_ascii());
+    assert_eq!(
+        common::header(&headers, "x-cine-colour-assumed"),
+        Some("false"),
+        "{headers:?}"
+    );
+    assert!(common::header(&headers, "x-cine-colour")
+        .unwrap()
+        .is_ascii());
 
     // What the application serves: the movie itself, and a picture decoded
     // from it; nothing outside the project's renders.
     let name = out.file_name().unwrap().to_string_lossy().into_owned();
-    let (status, headers, body) = h.get(&format!("/render-file?timeline={}&render={name}&file=movie.mov", s.tl));
+    let (status, headers, body) = h.get(&format!(
+        "/render-file?timeline={}&render={name}&file=movie.mov",
+        s.tl
+    ));
     assert!(status.contains("200"), "{status}");
-    assert_eq!(body, std::fs::read(&mov).unwrap(), "the served movie is the file");
-    assert_eq!(common::header(&headers, "content-type"), Some("video/quicktime"));
-    let (status, _, body) = h.get(&format!("/render-frame?timeline={}&render={name}&index=40", s.tl));
-    assert!(status.contains("200") && body.starts_with(b"\x89PNG"), "{status}");
+    assert_eq!(
+        body,
+        std::fs::read(&mov).unwrap(),
+        "the served movie is the file"
+    );
+    assert_eq!(
+        common::header(&headers, "content-type"),
+        Some("video/quicktime")
+    );
+    let (status, _, body) = h.get(&format!(
+        "/render-frame?timeline={}&render={name}&index=40",
+        s.tl
+    ));
+    assert!(
+        status.contains("200") && body.starts_with(b"\x89PNG"),
+        "{status}"
+    );
     for bad in [
         format!("/render-file?timeline={}&render=..&file=movie.mov", s.tl),
-        format!("/render-file?timeline={}&render={name}&file=../../project.cine", s.tl),
-        format!("/render-file?timeline={}&render={name}/..&file=manifest.json", s.tl),
+        format!(
+            "/render-file?timeline={}&render={name}&file=../../project.cine",
+            s.tl
+        ),
+        format!(
+            "/render-file?timeline={}&render={name}/..&file=manifest.json",
+            s.tl
+        ),
     ] {
         let (status, _, _) = h.get(&bad);
         assert!(status.contains("404"), "{bad} was served: {status}");
@@ -272,9 +328,16 @@ fn a_movie_of_the_cut_has_its_pictures_in_order_and_its_sound_bit_exact() {
     assert_eq!(VideoReader::open_path(&mov).unwrap().frame_count(), 10);
     let (l, _) = movie_sound(&mov);
     assert_eq!(l.len() as i64, 10 * SPF);
-    assert!(l[..(4 * SPF) as usize].iter().all(|v| *v == 0), "frames 30–33 are the gap");
+    assert!(
+        l[..(4 * SPF) as usize].iter().all(|v| *v == 0),
+        "frames 30–33 are the gap"
+    );
     for k in 0..(6 * SPF) {
-        assert_eq!(l[(4 * SPF + k) as usize], i64::from(code(2, k, 0)), "B sample {k}");
+        assert_eq!(
+            l[(4 * SPF + k) as usize],
+            i64::from(code(2, k, 0)),
+            "B sample {k}"
+        );
     }
 
     // Without sound, by choice: no sound track at all.
@@ -284,7 +347,10 @@ fn a_movie_of_the_cut_has_its_pictures_in_order_and_its_sound_bit_exact() {
     );
     assert_eq!(done["state"], "succeeded", "{done}");
     let mov = PathBuf::from(done["output"]["path"].as_str().unwrap()).join("movie.mov");
-    assert!(cine_media::probe::probe(&mov).unwrap().first_audio().is_none());
+    assert!(cine_media::probe::probe(&mov)
+        .unwrap()
+        .first_audio()
+        .is_none());
 
     // Sound asked for where the cut has none is refused, not written silent.
     let refused = render(
@@ -292,12 +358,21 @@ fn a_movie_of_the_cut_has_its_pictures_in_order_and_its_sound_bit_exact() {
         json!({ "kind": "render.sequence", "timeline": s.tl, "output": "movie", "sound": true, "start_frame": 25, "end_frame": 33 }),
     );
     assert_eq!(refused["state"], "failed");
-    assert!(refused["error"].as_str().unwrap().contains("no sound"), "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("no sound"),
+        "{refused}"
+    );
     let refused = render(
         &mut c,
         json!({ "kind": "render.sequence", "timeline": s.tl, "output": "png8", "sound": true }),
     );
-    assert!(refused["error"].as_str().unwrap().contains("PNG frames carry no sound"), "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("PNG frames carry no sound"),
+        "{refused}"
+    );
 }
 
 #[test]
@@ -314,7 +389,10 @@ fn a_retimed_clip_renders_its_pictures_and_its_sound_in_sync() {
     for clip in &clips {
         c.call("retime", json!({ "clip": clip, "played": f24(48) }));
     }
-    let done = render(&mut c, json!({ "kind": "render.sequence", "timeline": s.tl, "output": "movie" }));
+    let done = render(
+        &mut c,
+        json!({ "kind": "render.sequence", "timeline": s.tl, "output": "movie" }),
+    );
     assert_eq!(done["state"], "succeeded", "{done}");
     let mov = PathBuf::from(done["output"]["path"].as_str().unwrap()).join("movie.mov");
 
@@ -323,7 +401,11 @@ fn a_retimed_clip_renders_its_pictures_and_its_sound_in_sync() {
     for n in 0..48usize {
         let f = v.frame_at_index(n).unwrap().unwrap();
         let got = bar_centre(&f).unwrap();
-        assert!((got - expected_bar(2 * n)).abs() <= 2.0, "frame {n} shows picture {}", 2 * n);
+        assert!(
+            (got - expected_bar(2 * n)).abs() <= 2.0,
+            "frame {n} shows picture {}",
+            2 * n
+        );
     }
 
     // Each source picture's tick sounds where that picture is shown: source
@@ -338,7 +420,9 @@ fn a_retimed_clip_renders_its_pictures_and_its_sound_in_sync() {
         let peak = (lo..hi).max_by_key(|i| l[*i].abs()).unwrap() as i64;
         worst = worst.max((peak - expected).abs());
     }
-    println!("MEASURED retimed (2x varispeed) tick placement: worst {worst} samples from the picture");
+    println!(
+        "MEASURED retimed (2x varispeed) tick placement: worst {worst} samples from the picture"
+    );
     assert!(worst <= 1, "sound drifts from picture by {worst} samples");
 }
 
@@ -360,12 +444,19 @@ fn a_render_scales_only_as_asked_and_says_how() {
     );
     assert_eq!(done["state"], "succeeded", "{done}");
     let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
-    let img = image::open(out.join("frame_000005.png")).unwrap().to_rgba8();
+    let img = image::open(out.join("frame_000005.png"))
+        .unwrap()
+        .to_rgba8();
     assert_eq!(img.dimensions(), (160, 90));
     let row = 45;
-    let cols: Vec<u32> = (0..160).filter(|x| img.get_pixel(*x, row)[0] > 200).collect();
+    let cols: Vec<u32> = (0..160)
+        .filter(|x| img.get_pixel(*x, row)[0] > 200)
+        .collect();
     let centre = cols.iter().sum::<u32>() as f64 / cols.len() as f64;
-    assert!((centre - (expected_bar(5) + 0.5) / 2.0 + 0.5).abs() <= 1.5, "bar at {centre}");
+    assert!(
+        (centre - (expected_bar(5) + 0.5) / 2.0 + 0.5).abs() <= 1.5,
+        "bar at {centre}"
+    );
 
     // A different shape needs a decision.
     let refused = render(
@@ -373,7 +464,10 @@ fn a_render_scales_only_as_asked_and_says_how() {
         json!({ "kind": "render.sequence", "timeline": s.tl, "output": "png8", "width": 320, "height": 320 }),
     );
     assert_eq!(refused["state"], "failed");
-    assert!(refused["error"].as_str().unwrap().contains("letterbox"), "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("letterbox"),
+        "{refused}"
+    );
 
     // Letterboxed: the picture whole, bars above and below.
     let done = render(
@@ -382,12 +476,18 @@ fn a_render_scales_only_as_asked_and_says_how() {
     );
     assert_eq!(done["state"], "succeeded", "{done}");
     let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
-    let img = image::open(out.join("frame_000000.png")).unwrap().to_rgba8();
+    let img = image::open(out.join("frame_000000.png"))
+        .unwrap()
+        .to_rgba8();
     assert_eq!(img.get_pixel(100, 30).0, [0, 0, 0, 255], "bar above");
     assert_eq!(img.get_pixel(100, 300).0, [0, 0, 0, 255], "bar below");
     assert!(img.get_pixel(100, 160)[0] > 20, "picture in the middle");
-    let manifest: Value = serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["sources"][0]["placement"]["covers"], json!([0, 70, 320, 180]));
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["sources"][0]["placement"]["covers"],
+        json!([0, 70, 320, 180])
+    );
     assert_eq!(manifest["fit"], "letterbox");
 
     // An odd-sized movie is refused before anything is written.
@@ -395,7 +495,10 @@ fn a_render_scales_only_as_asked_and_says_how() {
         &mut c,
         json!({ "kind": "render.sequence", "timeline": s.tl, "output": "movie", "width": 161, "height": 91, "fit": "stretch" }),
     );
-    assert!(refused["error"].as_str().unwrap().contains("even"), "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("even"),
+        "{refused}"
+    );
 }
 
 #[test]
@@ -415,7 +518,9 @@ fn sixteen_bit_frames_keep_what_the_view_computed() {
     );
     assert_eq!(done["state"], "succeeded", "{done}");
     let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
-    let img = image::open(out.join("frame_000003.png")).unwrap().to_rgba16();
+    let img = image::open(out.join("frame_000003.png"))
+        .unwrap()
+        .to_rgba16();
 
     // Independently: the file's picture 3 through the same bake.
     let (config, input, display, view, working) = {
@@ -427,8 +532,13 @@ fn sixteen_bit_frames_keep_what_the_view_computed() {
         let working = config.role("scene_linear").unwrap_or("ACEScg").to_string();
         (config, input, display, view, working)
     };
-    let baked = cine_color::view::bake_view(&config, &input, &working, None, &display, &view).unwrap();
-    let frame = VideoReader::open_path(&a).unwrap().frame_at_index(3).unwrap().unwrap();
+    let baked =
+        cine_color::view::bake_view(&config, &input, &working, None, &display, &view).unwrap();
+    let frame = VideoReader::open_path(&a)
+        .unwrap()
+        .frame_at_index(3)
+        .unwrap()
+        .unwrap();
     let (px, ..) = cine_runtime::frames::rgba_f32(&frame).unwrap();
     let mut off_grid = 0usize;
     for (i, p) in px.chunks(4).enumerate() {
@@ -444,8 +554,14 @@ fn sixteen_bit_frames_keep_what_the_view_computed() {
     }
     // An 8-bit image widened to 16 bits has every value on multiples of 257.
     // These frames do not: the view's precision was kept, not quantised away.
-    println!("MEASURED 16-bit samples not representable in 8 bits: {off_grid} of {}", px.len() / 4 * 3);
-    assert!(off_grid > px.len() / 4, "the 16-bit render was quantised to 8 bits");
+    println!(
+        "MEASURED 16-bit samples not representable in 8 bits: {off_grid} of {}",
+        px.len() / 4 * 3
+    );
+    assert!(
+        off_grid > px.len() / 4,
+        "the 16-bit render was quantised to 8 bits"
+    );
 }
 
 #[test]
@@ -469,7 +585,13 @@ fn a_cancelled_movie_leaves_nothing_behind() {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let jobs = c.call("jobs", json!({}));
-        let j = jobs.as_array().unwrap().iter().find(|j| j["id"] == id).unwrap().clone();
+        let j = jobs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == id)
+            .unwrap()
+            .clone();
         if j["state"] == "running" && j["progress"].as_f64().unwrap_or(0.0) > 0.0 {
             break;
         }
@@ -519,7 +641,10 @@ fn a_render_knows_when_it_is_stale_and_only_then() {
         json!({ "track": s.v1, "op": { "op": "ripple_trim", "index": 0, "edge": "tail", "delta": f24(-2) } }),
     );
     let st = state(&mut c);
-    assert_eq!(st["state"], "current", "an edit outside the range is not a change to it: {st}");
+    assert_eq!(
+        st["state"], "current",
+        "an edit outside the range is not a change to it: {st}"
+    );
 
     // Related: trimming A's head changes which pictures frames 0–11 show.
     c.call(
@@ -528,7 +653,10 @@ fn a_render_knows_when_it_is_stale_and_only_then() {
     );
     let st = state(&mut c);
     assert_eq!(st["state"], "stale", "{st}");
-    assert!(st["reasons"][0].as_str().unwrap().contains("the cut"), "{st}");
+    assert!(
+        st["reasons"][0].as_str().unwrap().contains("the cut"),
+        "{st}"
+    );
 
     // Undo it and the render is current again: the same inputs.
     c.call("undo", json!({}));
@@ -543,7 +671,14 @@ fn a_render_knows_when_it_is_stale_and_only_then() {
     std::fs::write(&a, &changed).unwrap();
     let st = state(&mut c);
     assert_eq!(st["state"], "stale", "{st}");
-    assert!(st["reasons"].as_array().unwrap().iter().any(|r| r.as_str().unwrap().contains("changed on disk")), "{st}");
+    assert!(
+        st["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r.as_str().unwrap().contains("changed on disk")),
+        "{st}"
+    );
     std::fs::write(&a, &original).unwrap();
     assert_eq!(state(&mut c)["state"], "current");
 
@@ -556,13 +691,25 @@ fn a_render_knows_when_it_is_stale_and_only_then() {
     // A whole-cut render records the frames it holds, and goes stale when the
     // cut is longer or shorter — while a ranged render of frames the change
     // did not reach stays current.
-    let whole = render(&mut c, json!({ "kind": "render.sequence", "timeline": s.tl, "output": "png8" }));
+    let whole = render(
+        &mut c,
+        json!({ "kind": "render.sequence", "timeline": s.tl, "output": "png8" }),
+    );
     assert_eq!(whole["state"], "succeeded", "{whole}");
     let whole_name = PathBuf::from(whole["output"]["path"].as_str().unwrap())
-        .file_name().unwrap().to_string_lossy().into_owned();
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let find = |c: &mut Client, name: &str| -> Value {
         let r = c.call("renders", json!({ "timeline": s.tl }));
-        r["renders"].as_array().unwrap().iter().find(|x| x["name"] == name).unwrap().clone()
+        r["renders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["name"] == name)
+            .unwrap()
+            .clone()
     };
     assert_eq!(find(&mut c, &whole_name)["state"], "current");
     c.call(
@@ -571,7 +718,10 @@ fn a_render_knows_when_it_is_stale_and_only_then() {
     );
     let st = find(&mut c, &whole_name);
     assert_eq!(st["state"], "stale", "{st}");
-    assert!(st["reasons"][0].as_str().unwrap().contains("frames 0–43"), "the reason names the frames rendered (A was ripple-trimmed by two above): {st}");
+    assert!(
+        st["reasons"][0].as_str().unwrap().contains("frames 0–43"),
+        "the reason names the frames rendered (A was ripple-trimmed by two above): {st}"
+    );
     c.call("undo", json!({}));
 
     // A failed render is listed as failed.

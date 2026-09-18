@@ -21,6 +21,10 @@
 //!   [`SYNC_MAX_SECONDS`]), cross-correlated against the active angle's, and an
 //!   angle whose best match is not clearly better than chance is left alone and
 //!   reported rather than moved to a guess. The offsets are one undoable commit.
+//! * **`media.ingest`** — a file becomes an asset: discovered, identified by
+//!   content, probed, evaluated against what this build can decode, registered
+//!   in one transaction, and followed by the derived work asked for. See
+//!   [`crate::ingest`].
 //! * **`media.waveform`** — a recording's envelope, decoded once and kept as
 //!   peaks at several zoom levels. See [`crate::waveform`].
 //! * **`media.relink`** — looks for the *content* of the project's media under
@@ -79,6 +83,21 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
         sync_angles(&project, ctx, spec)
     });
     let p = Arc::downgrade(project);
+    jobs.register(
+        crate::ingest::INGEST_KIND,
+        move |ctx: &JobContext, spec: &JobSpec| {
+            let project = p.upgrade().ok_or("the project has closed")?;
+            let request = crate::ingest::Request::from_params(&spec.params)?;
+            match crate::ingest::ingest(&project, &request, &mut |f, m| {
+                ctx.progress(f, m);
+                !ctx.is_cancelled()
+            })? {
+                Some(done) => Ok(done.to_json()),
+                None => Ok(json!({ "cancelled": true })),
+            }
+        },
+    );
+    let p = Arc::downgrade(project);
     let root = root_dir.to_path_buf();
     jobs.register(
         crate::waveform::WAVEFORM_KIND,
@@ -95,21 +114,24 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
         },
     );
     let p = Arc::downgrade(project);
-    jobs.register(crate::relink::RELINK_KIND, move |ctx: &JobContext, spec: &JobSpec| {
-        let project = p.upgrade().ok_or("the project has closed")?;
-        let folder = spec.params["folder"]
-            .as_str()
-            .ok_or("the job names no folder to search")?;
-        let only = spec.params["media"].as_str().and_then(EntityId::parse);
-        let depth = spec.params["depth"]
-            .as_u64()
-            .map(|d| d as usize)
-            .unwrap_or(crate::relink::DEFAULT_DEPTH);
-        crate::relink::scan(&project, Path::new(folder), only, depth, &mut |f, m| {
-            ctx.progress(f, m);
-            !ctx.is_cancelled()
-        })
-    });
+    jobs.register(
+        crate::relink::RELINK_KIND,
+        move |ctx: &JobContext, spec: &JobSpec| {
+            let project = p.upgrade().ok_or("the project has closed")?;
+            let folder = spec.params["folder"]
+                .as_str()
+                .ok_or("the job names no folder to search")?;
+            let only = spec.params["media"].as_str().and_then(EntityId::parse);
+            let depth = spec.params["depth"]
+                .as_u64()
+                .map(|d| d as usize)
+                .unwrap_or(crate::relink::DEFAULT_DEPTH);
+            crate::relink::scan(&project, Path::new(folder), only, depth, &mut |f, m| {
+                ctx.progress(f, m);
+                !ctx.is_cancelled()
+            })
+        },
+    );
     let p = Arc::downgrade(project);
     let root = root_dir.to_path_buf();
     jobs.register(
@@ -121,10 +143,17 @@ pub fn start(project: &Arc<OmniProject>, root_dir: &Path) -> std::io::Result<Job
                 .and_then(EntityId::parse)
                 .ok_or("the job names no media")?;
             let settings = crate::proxy::ProxySettings::from_params(&spec.params)?;
-            crate::proxy::generate(&project, &root, media, settings, Some(ctx.id()), &mut |f, m| {
-                ctx.progress(f, m);
-                !ctx.is_cancelled()
-            })
+            crate::proxy::generate(
+                &project,
+                &root,
+                media,
+                settings,
+                Some(ctx.id()),
+                &mut |f, m| {
+                    ctx.progress(f, m);
+                    !ctx.is_cancelled()
+                },
+            )
         },
     );
     let p = Arc::downgrade(project);
@@ -342,6 +371,35 @@ fn sync_angles(project: &OmniProject, ctx: &JobContext, spec: &JobSpec) -> Resul
 
 /// Build the spec for a kind of work a client asked for.
 pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec, String> {
+    if kind == crate::ingest::INGEST_KIND {
+        // An import is named by the file it reads: asking twice for the same
+        // file while the first is still running is the same work.
+        let request = crate::ingest::Request::from_params(params)?;
+        if !request.path.exists() {
+            return Err(format!("no file at {}", request.path.display()));
+        }
+        // The key is the path *and* what is at it: asking twice for the same
+        // file is the same work, but a different file written over that path
+        // is not, and must not be answered with the first import's asset.
+        let stamp = std::fs::metadata(&request.path)
+            .map(|m| {
+                let modified = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                format!("{}:{modified}", m.len())
+            })
+            .unwrap_or_default();
+        return Ok(JobSpec::new(
+            kind,
+            &format!("ingest:{}:{stamp}", request.path.display()),
+            &crate::ingest::label(&request.path),
+            Resource::Io,
+        )
+        .params(request.to_params()));
+    }
     if kind == crate::relink::RELINK_KIND {
         let folder = params
             .get("folder")
@@ -357,7 +415,11 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
         };
         let mut spec = JobSpec::new(
             kind,
-            &format!("relink:{folder}:{}:{}", media.unwrap_or("all"), project.engine.revision()),
+            &format!(
+                "relink:{folder}:{}:{}",
+                media.unwrap_or("all"),
+                project.engine.revision()
+            ),
             &label,
             Resource::Io,
         );
@@ -486,7 +548,7 @@ pub fn spec_for(project: &OmniProject, kind: &str, params: &J) -> Result<JobSpec
             .attempts(2))
         }
         other => Err(format!(
-            "unknown kind of work `{other}` (known: media.checksum, media.thumbnail, media.proxy, media.waveform, media.relink, multicam.sync, render.sequence)"
+            "unknown kind of work `{other}` (known: media.ingest, media.checksum, media.thumbnail, media.proxy, media.waveform, media.relink, multicam.sync, render.sequence)"
         )),
     }
 }
@@ -578,7 +640,10 @@ fn thumbnail(
     let _ = &path;
     let index = spec.params["index"].as_u64().unwrap_or(0) as usize;
     let out = thumbnail_path(cache, hash.as_deref().unwrap_or("unhashed"), index);
-    if out.exists() {
+    // A thumbnail already there counts only if it is a whole PNG. This job
+    // used to write straight to `out`, so a write interrupted halfway left a
+    // truncated file that every later run took for a finished thumbnail.
+    if is_whole_png(&out) {
         return Ok(json!({ "path": out, "cached": true }));
     }
     ctx.progress(0.1, "decoding");
@@ -611,8 +676,44 @@ fn thumbnail(
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
+    // Written beside itself and renamed, so the file at `out` is either absent
+    // or whole — a rename within one directory is atomic, a write is not.
+    let mut name = out
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".partial");
+    let partial = out.with_file_name(name);
+    let written = std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &out));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("{}: {e}", out.display()));
+    }
+    // Succeeded means the output is there and is what it says it is.
+    if !is_whole_png(&out) {
+        return Err(format!(
+            "{}: the thumbnail did not survive being written",
+            out.display()
+        ));
+    }
     Ok(json!({ "path": out, "width": tw, "height": th, "bytes": bytes.len(), "cached": false }))
+}
+
+/// Whether `path` holds a complete PNG: the signature at the front and an
+/// `IEND` chunk at the back. Cheap, and enough to tell a finished thumbnail
+/// from one that was cut off.
+fn is_whole_png(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 8];
+    if f.read_exact(&mut head).is_err() || head != SIGNATURE {
+        return false;
+    }
+    let mut tail = [0u8; 8];
+    f.seek(SeekFrom::End(-8)).is_ok() && f.read_exact(&mut tail).is_ok() && &tail[..4] == b"IEND"
 }
 
 /// The thumbnail cache of a project directory.

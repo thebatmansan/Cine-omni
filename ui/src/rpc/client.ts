@@ -495,7 +495,15 @@ export type RenderState = "current" | "stale" | "invalid" | "failed";
 /** One render on disk, with whether it still matches the project. */
 export interface RenderView {
   state: RenderState;
+  /** Why it is out of date. Empty when it is not. */
   reasons: string[];
+  /**
+   * True of the render without meaning it is out of date — a source that is
+   * away, or a namesake at its path. Shown, never counted as staleness.
+   */
+  notes: string[];
+  /** Whether every source it read can be read again, so it could be remade. */
+  remakeable: boolean | null;
   name: string;
   timeline: string;
   path: string;
@@ -1123,6 +1131,32 @@ export class RpcClient {
       from_sample: Math.max(0, Math.round(from)),
       to_sample: Math.round(to),
       buckets,
+    });
+  }
+  /**
+   * Import media as a job: the runtime discovers, identifies by content,
+   * probes, registers one asset, and starts the derived work asked for. The
+   * job is watched like any other; nothing here guesses at progress.
+   */
+  importMedia(
+    path: string,
+    options?: {
+      sequence?: boolean;
+      rate?: { num: number; den: number };
+      thumbnail?: boolean;
+      waveform?: boolean;
+      proxyHeight?: number | null;
+    },
+  ) {
+    return this.call<JobView>("job_submit", {
+      kind: "media.ingest",
+      path,
+      sequence: options?.sequence,
+      rate_num: options?.rate?.num,
+      rate_den: options?.rate?.den,
+      thumbnail: options?.thumbnail,
+      waveform: options?.waveform,
+      proxy_height: options?.proxyHeight ?? undefined,
     });
   }
   /** Look for each original on disk now and record what is there. */

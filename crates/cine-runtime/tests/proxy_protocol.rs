@@ -37,7 +37,11 @@ fn picture(w: usize, h: usize, i: usize) -> YuvFrame {
 
 fn code(n: i64, c: usize) -> i32 {
     let v = ((n * 37) % 1_000_000) as i32 - 500_000;
-    if c == 0 { v } else { -v }
+    if c == 0 {
+        v
+    } else {
+        -v
+    }
 }
 
 fn source(dir: &Path, name: &str, w: usize, h: usize, frames: usize, channels: u16) -> PathBuf {
@@ -49,7 +53,10 @@ fn source(dir: &Path, name: &str, w: usize, h: usize, frames: usize, channels: u
         Rate::F24,
         MovSettings {
             h264: H264Settings { qp: 16, gop: 12 },
-            sound: (channels > 0).then_some(SoundFormat { sample_rate: 48_000, channels }),
+            sound: (channels > 0).then_some(SoundFormat {
+                sample_rate: 48_000,
+                channels,
+            }),
             colour: ColourTags::BT709,
             first_picture: 0,
         },
@@ -76,7 +83,10 @@ fn wait_for(c: &mut Client, id: u64) -> Value {
     loop {
         let jobs = c.call("jobs", json!({}));
         if let Some(job) = jobs.as_array().unwrap().iter().find(|j| j["id"] == id) {
-            if matches!(job["state"].as_str().unwrap(), "succeeded" | "failed" | "cancelled") {
+            if matches!(
+                job["state"].as_str().unwrap(),
+                "succeeded" | "failed" | "cancelled"
+            ) {
                 return job.clone();
             }
         }
@@ -86,7 +96,10 @@ fn wait_for(c: &mut Client, id: u64) -> Value {
 }
 
 fn make_proxy(c: &mut Client, media: &str, height: u32) -> Value {
-    let job = c.call("job_submit", json!({ "kind": "media.proxy", "media": media, "height": height }));
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.proxy", "media": media, "height": height }),
+    );
     wait_for(c, job["id"].as_u64().unwrap())
 }
 
@@ -135,7 +148,10 @@ struct Seq {
 }
 
 fn sequence_with(c: &mut Client, media: &str, frames: i64) -> Seq {
-    let made = c.call("new_timeline", json!({ "name": "Cut", "rate_num": 24, "rate_den": 1 }));
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Cut", "rate_num": 24, "rate_den": 1 }),
+    );
     let tl = made["id"].as_str().unwrap().to_string();
     let t = c.call("timeline", json!({ "id": tl }));
     let (v1, a1) = (
@@ -169,7 +185,10 @@ fn a_proxy_is_made_as_a_job_and_is_its_originals_pictures_and_sound() {
     let done = make_proxy(&mut c, &media, 180);
     assert_eq!(done["state"], "succeeded", "{done}");
     let out = &done["output"];
-    assert_eq!((out["width"].as_u64(), out["height"].as_u64()), (Some(320), Some(180)));
+    assert_eq!(
+        (out["width"].as_u64(), out["height"].as_u64()),
+        (Some(320), Some(180))
+    );
     assert_eq!(out["frames"], 48);
     assert_eq!(out["sound"], true);
     println!(
@@ -187,7 +206,10 @@ fn a_proxy_is_made_as_a_job_and_is_its_originals_pictures_and_sound() {
     let proxy_path = PathBuf::from(proxy["path"].as_str().unwrap());
     let all = c.call("media", json!({}));
     assert!(
-        all.as_array().unwrap().iter().all(|m| m["path"] != json!(proxy_path.display().to_string())),
+        all.as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["path"] != json!(proxy_path.display().to_string())),
         "a proxy is never media in its own right"
     );
 
@@ -199,11 +221,17 @@ fn a_proxy_is_made_as_a_job_and_is_its_originals_pictures_and_sound() {
     for i in [0usize, 17, 47] {
         let a = bar_fraction(&o.frame_at_index(i).unwrap().unwrap());
         let b = bar_fraction(&p.frame_at_index(i).unwrap().unwrap());
-        assert!((a - b).abs() < 0.02, "picture {i}: bar at {a} of the original, {b} of the proxy");
+        assert!(
+            (a - b).abs() < 0.02,
+            "picture {i}: bar at {a} of the original, {b} of the proxy"
+        );
     }
     let (so, sp) = (sound_of(&original), sound_of(&proxy_path));
     assert_eq!(sp.len(), so.len());
-    assert!(sp == so, "the proxy's sound is the original's, sample for sample");
+    assert!(
+        sp == so,
+        "the proxy's sound is the original's, sample for sample"
+    );
 
     // Asking again for the same proxy does not make it twice.
     let again = make_proxy(&mut c, &media, 180);
@@ -223,7 +251,10 @@ fn playback_reads_a_proxy_only_when_asked_and_never_a_stale_one() {
     let at = |n: i64| json!({ "ticks": n, "rate_num": 24, "rate_den": 1 });
 
     // By default the original plays, and nothing needs saying.
-    assert_eq!(c.call("media_preference", json!({}))["preference"], "original");
+    assert_eq!(
+        c.call("media_preference", json!({}))["preference"],
+        "original"
+    );
     let shown = c.call("picture_at", json!({ "timeline": s.tl, "time": at(5) }));
     assert_eq!(shown["proxy"], Value::Null);
     assert_eq!(shown["substitution"], Value::Null);
@@ -237,7 +268,10 @@ fn playback_reads_a_proxy_only_when_asked_and_never_a_stale_one() {
         "proxy"
     );
     let shown = c.call("picture_at", json!({ "timeline": s.tl, "time": at(5) }));
-    let proxy = shown["proxy"].as_str().expect("the proxy plays").to_string();
+    let proxy = shown["proxy"]
+        .as_str()
+        .expect("the proxy plays")
+        .to_string();
     assert_eq!(shown["index"], 5, "the same picture of the same take");
     let list = c.call("edit_list", json!({ "timeline": s.tl }));
     assert_eq!(list["entries"][0]["proxy"], json!(proxy));
@@ -246,7 +280,11 @@ fn playback_reads_a_proxy_only_when_asked_and_never_a_stale_one() {
     assert_eq!(u32::from_be_bytes(body[16..20].try_into().unwrap()), 320);
 
     // A proxy that changed on disk is never played, and says why.
-    let proxy_path = PathBuf::from(media_view(&mut c, &media)["proxies"][0]["path"].as_str().unwrap());
+    let proxy_path = PathBuf::from(
+        media_view(&mut c, &media)["proxies"][0]["path"]
+            .as_str()
+            .unwrap(),
+    );
     let kept = std::fs::read(&proxy_path).unwrap();
     std::fs::write(&proxy_path, [kept.clone(), vec![0u8; 64]].concat()).unwrap();
     let view = media_view(&mut c, &media);
@@ -254,11 +292,17 @@ fn playback_reads_a_proxy_only_when_asked_and_never_a_stale_one() {
     let shown = c.call("picture_at", json!({ "timeline": s.tl, "time": at(5) }));
     assert_eq!(shown["proxy"], Value::Null, "a stale proxy never plays");
     assert!(
-        shown["substitution"].as_str().unwrap_or_default().contains("stale"),
+        shown["substitution"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("stale"),
         "and the reason is shown: {shown}"
     );
     let (status, _, _) = h.get(&format!("/frame?media={media}&index=5&proxy={proxy}"));
-    assert!(status.contains("404"), "a stale proxy is not served: {status}");
+    assert!(
+        status.contains("404"),
+        "a stale proxy is not served: {status}"
+    );
 
     // Made again, it is current again.
     std::fs::write(&proxy_path, &kept).unwrap();
@@ -325,9 +369,18 @@ fn auto_reads_the_proxy_of_an_original_larger_than_hd() {
     println!("MEASURED per stage: {}", done["output"]["stages"]);
     let s = sequence_with(&mut c, &media, 4);
     c.call("media_preference", json!({ "preference": "auto" }));
-    let shown = c.call("picture_at", json!({ "timeline": s.tl, "time": json!({ "ticks": 1, "rate_num": 24, "rate_den": 1 }) }));
+    let shown = c.call(
+        "picture_at",
+        json!({ "timeline": s.tl, "time": json!({ "ticks": 1, "rate_num": 24, "rate_den": 1 }) }),
+    );
     assert!(shown["proxy"].is_string(), "{shown}");
-    assert!(shown["substitution"].as_str().unwrap().contains("larger than HD"), "{shown}");
+    assert!(
+        shown["substitution"]
+            .as_str()
+            .unwrap()
+            .contains("larger than HD"),
+        "{shown}"
+    );
 }
 
 #[test]
@@ -341,15 +394,25 @@ fn a_proxy_of_many_channels_carries_no_sound_and_the_sound_stays_on_the_original
     assert_eq!(done["state"], "succeeded", "{done}");
     assert_eq!(done["output"]["sound"], false);
     let notes = done["output"]["notes"][0].as_str().unwrap();
-    assert!(notes.contains("6 channels") && notes.contains("downmix"), "{notes}");
+    assert!(
+        notes.contains("6 channels") && notes.contains("downmix"),
+        "{notes}"
+    );
 
     let s = sequence_with(&mut c, &media, 12);
     c.call("media_preference", json!({ "preference": "proxy" }));
     let list = c.call("edit_list", json!({ "timeline": s.tl }));
     let picture = &list["entries"][0];
-    assert!(picture["proxy"].is_string(), "the picture plays from the proxy: {picture}");
+    assert!(
+        picture["proxy"].is_string(),
+        "the picture plays from the proxy: {picture}"
+    );
     let sound = &list["sound"][0];
-    assert_eq!(sound["proxy"], Value::Null, "the sound stays on the original: {sound}");
+    assert_eq!(
+        sound["proxy"],
+        Value::Null,
+        "the sound stays on the original: {sound}"
+    );
     assert!(
         sound["substitution"].as_str().unwrap().contains("no sound"),
         "and says why: {sound}"
@@ -368,19 +431,34 @@ fn a_proxy_that_cannot_be_made_is_refused_and_leaves_nothing() {
     // Not smaller is not a proxy.
     let refused = make_proxy(&mut c, &media, 360);
     assert_eq!(refused["state"], "failed");
-    assert!(refused["error"].as_str().unwrap().contains("not be smaller"), "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("not be smaller"),
+        "{refused}"
+    );
 
     // An original that is not there cannot be read.
     let moved = dir.path().join("moved.mov");
     std::fs::rename(&original, &moved).unwrap();
     let refused = make_proxy(&mut c, &media, 180);
     assert_eq!(refused["state"], "failed");
-    assert!(refused["error"].as_str().unwrap().contains("offline"), "{refused}");
-    assert!(walk(&root.join("derived")).is_empty(), "a refusal left files");
+    assert!(
+        refused["error"].as_str().unwrap().contains("offline"),
+        "{refused}"
+    );
+    assert!(
+        walk(&root.join("derived")).is_empty(),
+        "a refusal left files"
+    );
     assert_eq!(media_view(&mut c, &media)["proxies"], json!([]));
 
     // Retried once the original is back, the same job succeeds.
-    let job = c.call("job_submit", json!({ "kind": "media.proxy", "media": media, "height": 180 }));
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.proxy", "media": media, "height": 180 }),
+    );
     let id = job["id"].as_u64().unwrap();
     let failed = wait_for(&mut c, id);
     assert_eq!(failed["state"], "failed", "{failed}");
@@ -399,12 +477,21 @@ fn a_cancelled_proxy_leaves_nothing_and_no_record_of_itself() {
     let h = Harness::start_in(root.clone());
     let mut c = h.client();
     let media = ingest(&mut c, &original);
-    let job = c.call("job_submit", json!({ "kind": "media.proxy", "media": media, "height": 180 }));
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.proxy", "media": media, "height": 180 }),
+    );
     let id = job["id"].as_u64().unwrap();
     let deadline = Instant::now() + Duration::from_secs(300);
     loop {
         let jobs = c.call("jobs", json!({}));
-        let j = jobs.as_array().unwrap().iter().find(|j| j["id"] == id).unwrap().clone();
+        let j = jobs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == id)
+            .unwrap()
+            .clone();
         if j["state"] == "running" && j["progress"].as_f64().unwrap_or(0.0) > 0.0 {
             break;
         }
@@ -413,8 +500,14 @@ fn a_cancelled_proxy_leaves_nothing_and_no_record_of_itself() {
     }
     c.call("job_cancel", json!({ "id": id }));
     let done = wait_for(&mut c, id);
-    assert!(done["state"] == "cancelled" || done["output"]["cancelled"] == true, "{done}");
-    assert!(walk(&root.join("derived")).is_empty(), "a cancelled proxy left files");
+    assert!(
+        done["state"] == "cancelled" || done["output"]["cancelled"] == true,
+        "{done}"
+    );
+    assert!(
+        walk(&root.join("derived")).is_empty(),
+        "a cancelled proxy left files"
+    );
     assert_eq!(media_view(&mut c, &media)["proxies"], json!([]));
 }
 
@@ -435,9 +528,13 @@ fn a_render_reads_the_original_whatever_is_being_watched() {
     );
     let done = wait_for(&mut c, job["id"].as_u64().unwrap());
     assert_eq!(done["state"], "succeeded", "{done}");
-    assert_eq!(done["output"]["width"], 640, "a deliverable is made from originals");
+    assert_eq!(
+        done["output"]["width"], 640,
+        "a deliverable is made from originals"
+    );
     let out = PathBuf::from(done["output"]["path"].as_str().unwrap());
-    let manifest: Value = serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(
         manifest["sources"][0]["path"],
         json!(original.display().to_string()),

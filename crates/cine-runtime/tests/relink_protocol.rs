@@ -26,7 +26,13 @@ fn picture(i: usize, seed: usize) -> YuvFrame {
             y[row * w + col] = 235;
         }
     }
-    YuvFrame { width: w, height: h, y, u: vec![128; (w / 2) * (h / 2)], v: vec![128; (w / 2) * (h / 2)] }
+    YuvFrame {
+        width: w,
+        height: h,
+        y,
+        u: vec![128; (w / 2) * (h / 2)],
+        v: vec![128; (w / 2) * (h / 2)],
+    }
 }
 
 /// A movie whose content depends on `seed`: two seeds are two different takes.
@@ -41,7 +47,10 @@ fn movie(path: &Path, frames: usize, seed: usize) -> PathBuf {
         Rate::F24,
         MovSettings {
             h264: H264Settings { qp: 18, gop: 12 },
-            sound: Some(SoundFormat { sample_rate: 48_000, channels: 2 }),
+            sound: Some(SoundFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            }),
             colour: ColourTags::BT709,
             first_picture: 0,
         },
@@ -63,7 +72,10 @@ fn wait_for(c: &mut Client, id: u64) -> Value {
     loop {
         let jobs = c.call("jobs", json!({}));
         if let Some(job) = jobs.as_array().unwrap().iter().find(|j| j["id"] == id) {
-            if matches!(job["state"].as_str().unwrap(), "succeeded" | "failed" | "cancelled") {
+            if matches!(
+                job["state"].as_str().unwrap(),
+                "succeeded" | "failed" | "cancelled"
+            ) {
                 return job.clone();
             }
         }
@@ -141,7 +153,10 @@ fn media_that_moved_or_was_renamed_is_found_by_its_content() {
     assert_eq!(view["online"], true);
     assert_eq!(view["path"], json!(moved.display().to_string()));
     assert_eq!(view["id"], json!(media), "the asset keeps its identity");
-    assert_eq!(view["resolution"]["relinked_from"], json!(original.display().to_string()));
+    assert_eq!(
+        view["resolution"]["relinked_from"],
+        json!(original.display().to_string())
+    );
 
     // Scanning again says so, and changes nothing.
     let again = relink_scan(&mut c, &cards);
@@ -168,10 +183,20 @@ fn a_different_file_of_the_same_name_is_refused_and_the_reason_is_kept() {
     assert!(note.contains("different media now"), "{note}");
 
     let view = media_view(&mut c, &media);
-    assert_eq!(view["online"], false, "it is not online because a namesake is there");
-    assert_eq!(view["path"], json!(original.display().to_string()), "and it still names its own file");
+    assert_eq!(
+        view["online"], false,
+        "it is not online because a namesake is there"
+    );
+    assert_eq!(
+        view["path"],
+        json!(original.display().to_string()),
+        "and it still names its own file"
+    );
     assert_eq!(view["resolution"]["state"], "replaced");
-    assert!(view["resolution"]["note"].as_str().unwrap().contains("separate decision"));
+    assert!(view["resolution"]["note"]
+        .as_str()
+        .unwrap()
+        .contains("separate decision"));
 
     // Relinking it by hand to that file is refused too, with both hashes.
     let refused = c.call_result(
@@ -180,7 +205,10 @@ fn a_different_file_of_the_same_name_is_refused_and_the_reason_is_kept() {
     );
     let message = refused.unwrap_err();
     assert!(message.contains("is not `A001C001.mov`"), "{message}");
-    assert!(message.contains("other pictures under every edit"), "{message}");
+    assert!(
+        message.contains("other pictures under every edit"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -219,7 +247,11 @@ fn two_copies_of_the_same_take_are_not_an_ambiguity_and_the_other_is_reported() 
     let o = outcome(&out, &media);
     assert_eq!(o["state"], "relinked", "{o}");
     assert_eq!(o["path"], json!(copy.display().to_string()));
-    assert_eq!(o["duplicates"], json!([]), "there is only one copy left to find");
+    assert_eq!(
+        o["duplicates"],
+        json!([]),
+        "there is only one copy left to find"
+    );
 
     // Put the first one back: now both hold the content, and the scan says so.
     std::fs::copy(&copy, &original).unwrap();
@@ -242,7 +274,10 @@ fn a_verified_checksum_makes_a_relink_exact_rather_than_a_fingerprint() {
     let mut c = h.client();
     let media = ingest(&mut c, &original);
     // Establish the reference checksum, then move the file.
-    let job = c.call("job_submit", json!({ "kind": "media.checksum", "media": media }));
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.checksum", "media": media }),
+    );
     let done = wait_for(&mut c, job["id"].as_u64().unwrap());
     assert_eq!(done["state"], "succeeded", "{done}");
     let moved = cards.join("elsewhere/take.mov");
@@ -252,8 +287,14 @@ fn a_verified_checksum_makes_a_relink_exact_rather_than_a_fingerprint() {
     let out = relink_scan(&mut c, &cards);
     let o = outcome(&out, &media);
     assert_eq!(o["state"], "relinked", "{o}");
-    assert_eq!(o["confidence"], "exact", "a verified checksum is checked in full: {o}");
-    assert_eq!(media_view(&mut c, &media)["resolution"]["confidence"], "exact");
+    assert_eq!(
+        o["confidence"], "exact",
+        "a verified checksum is checked in full: {o}"
+    );
+    assert_eq!(
+        media_view(&mut c, &media)["resolution"]["confidence"],
+        "exact"
+    );
 }
 
 #[test]
@@ -267,7 +308,10 @@ fn everything_that_referenced_the_media_still_does_after_a_relink() {
     let media = ingest(&mut c, &original);
 
     // A cut, a proxy and a render of it.
-    let made = c.call("new_timeline", json!({ "name": "Cut", "rate_num": 24, "rate_den": 1 }));
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Cut", "rate_num": 24, "rate_den": 1 }),
+    );
     let tl = made["id"].as_str().unwrap().to_string();
     let t = c.call("timeline", json!({ "id": tl }));
     let f24 = |n: i64| json!({ "ticks": n, "rate_num": 24, "rate_den": 1 });
@@ -277,14 +321,26 @@ fn everything_that_referenced_the_media_still_does_after_a_relink() {
                 "clip": { "media": media, "source_range": { "start_time": f24(0), "duration": f24(12) } } }),
     );
     c.call("focus", json!({ "timeline": tl }));
-    let job = c.call("job_submit", json!({ "kind": "media.proxy", "media": media, "height": 90 }));
-    assert_eq!(wait_for(&mut c, job["id"].as_u64().unwrap())["state"], "succeeded");
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.proxy", "media": media, "height": 90 }),
+    );
+    assert_eq!(
+        wait_for(&mut c, job["id"].as_u64().unwrap())["state"],
+        "succeeded"
+    );
     let job = c.call(
         "job_submit",
         json!({ "kind": "render.sequence", "timeline": tl, "output": "png8", "start_frame": 0, "end_frame": 2 }),
     );
-    assert_eq!(wait_for(&mut c, job["id"].as_u64().unwrap())["state"], "succeeded");
-    assert_eq!(c.call("renders", json!({ "timeline": tl }))["renders"][0]["state"], "current");
+    assert_eq!(
+        wait_for(&mut c, job["id"].as_u64().unwrap())["state"],
+        "succeeded"
+    );
+    assert_eq!(
+        c.call("renders", json!({ "timeline": tl }))["renders"][0]["state"],
+        "current"
+    );
 
     // Move the original and relink.
     let moved = cards.join("moved/A001C001.mov");
@@ -306,7 +362,10 @@ fn everything_that_referenced_the_media_still_does_after_a_relink() {
     assert_eq!(view["proxies"][0]["state"], "current", "{view}");
     c.call("media_preference", json!({ "preference": "proxy" }));
     let shown = c.call("picture_at", json!({ "timeline": tl, "time": f24(3) }));
-    assert!(shown["proxy"].is_string(), "the proxy still stands in: {shown}");
+    assert!(
+        shown["proxy"].is_string(),
+        "the proxy still stands in: {shown}"
+    );
     c.call("media_preference", json!({ "preference": "original" }));
 
     // And the render is still current: the media moved, it did not change.

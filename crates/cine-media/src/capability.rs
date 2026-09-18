@@ -177,7 +177,8 @@ pub const REGISTRY: &[Capability] = &[
         chroma: Chroma::Yuv420,
         backend: BackendKind::Software,
         verification: Verification::Verified {
-            evidence: "encode_roundtrip::an_encoded_file_decodes_to_the_frames_that_went_in_in_order \
+            evidence:
+                "encode_roundtrip::an_encoded_file_decodes_to_the_frames_that_went_in_in_order \
                        (Constrained Baseline written by this build, read back frame-exact)",
         },
     },
@@ -412,7 +413,10 @@ impl PathState {
     pub fn is_offered(&self) -> bool {
         matches!(
             self,
-            PathState::Verified | PathState::Implemented | PathState::Partial | PathState::Prototype
+            PathState::Verified
+                | PathState::Implemented
+                | PathState::Partial
+                | PathState::Prototype
         )
     }
 }
@@ -739,6 +743,34 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
     },
     // -------------------------------------------------------- identity
     MediaPath {
+        id: "identity.ingest",
+        name: "Importing media",
+        area: "Identity",
+        state: PathState::Verified,
+        detail: "A job discovers one file or the run it belongs to, identifies it by content, \
+                 probes it, evaluates it against this build's decoders, registers one asset in \
+                 one transaction, and dispatches the derived work asked for. Cancellable before \
+                 registration; nothing half-registered after a failure; re-importing the same \
+                 file is the same asset",
+        evidence: Some(
+            "cine-runtime/tests/ingest_protocol.rs, ingest_proxy_workflow.rs::\
+             an_import_that_asks_for_a_proxy_ends_with_that_proxy_being_watched",
+        ),
+    },
+    MediaPath {
+        id: "safety.picture_budget",
+        name: "Refusing a picture too large to hold",
+        area: "Large media",
+        state: PathState::Verified,
+        detail: "A picture's size is read from the file's header and checked against what this \
+                 machine can hold before anything is allocated; one that does not fit is refused \
+                 by name, with the real size, the real budget and how to raise it. \
+                 CINE_PICTURE_BUDGET overrides the default of half of reported available memory. \
+                 What is not claimed: nothing here bounds a decoder's own working memory, only \
+                 the picture it is asked to produce",
+        evidence: Some("cine-media/tests/large_media.rs"),
+    },
+    MediaPath {
         id: "identity.content_hash",
         name: "Content identity",
         area: "Identity",
@@ -920,9 +952,10 @@ mod tests {
             assert!(!seen.contains(&p.id), "duplicate media path id {}", p.id);
             assert!(
                 p.id.contains('.')
-                    && p.id
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_'),
+                    && p.id.chars().all(|c| c.is_ascii_lowercase()
+                        || c.is_ascii_digit()
+                        || c == '.'
+                        || c == '_'),
                 "{} is not a dotted lowercase id",
                 p.id
             );

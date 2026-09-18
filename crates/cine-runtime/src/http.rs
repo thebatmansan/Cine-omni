@@ -288,7 +288,10 @@ mod header_tests {
 
     #[test]
     fn non_ascii_is_encoded_and_ascii_is_left_alone() {
-        assert_eq!(header_text("BT.709 · limited range"), "BT.709 %C2%B7 limited range");
+        assert_eq!(
+            header_text("BT.709 · limited range"),
+            "BT.709 %C2%B7 limited range"
+        );
         assert_eq!(header_text("50%"), "50%25");
         assert_eq!(header_text("plain"), "plain");
         assert!(header_text("ASSUMED — no matrix\r\n").is_ascii());

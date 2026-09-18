@@ -81,7 +81,9 @@ pub fn status(graph: &Graph, derived: EntityId, recipe_version: &str, deep: bool
         .get_str("recipe")
         .is_some_and(|r| r.ends_with(recipe_version))
     {
-        reasons.push(format!("it was made by an older recipe than {recipe_version}"));
+        reasons.push(format!(
+            "it was made by an older recipe than {recipe_version}"
+        ));
     }
     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     if node.get_int(FILE_SIZE_ATTR) != Some(size as i64) {
@@ -96,7 +98,11 @@ pub fn status(graph: &Graph, derived: EntityId, recipe_version: &str, deep: bool
         }
     }
     Status {
-        state: if reasons.is_empty() { "current" } else { "stale" },
+        state: if reasons.is_empty() {
+            "current"
+        } else {
+            "stale"
+        },
         reasons,
     }
 }

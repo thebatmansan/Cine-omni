@@ -29,7 +29,9 @@
 
 use crate::error::{Error, Result};
 use crate::frame::{AlphaMode, ColorMetadata, PixelFormat, VideoFrame};
-use crate::identity::{ContainerKind, ContentHash, MediaFile, StreamInfo, StreamKind, VideoStreamInfo};
+use crate::identity::{
+    ContainerKind, ContentHash, MediaFile, StreamInfo, StreamKind, VideoStreamInfo,
+};
 use crate::time::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -159,7 +161,10 @@ pub fn discover(one_file: &Path) -> Result<Sequence> {
         ))
     })?;
     let kind = SequenceKind::from_extension(suffix.trim_start_matches('.')).ok_or_else(|| {
-        Error::UnknownContainer(format!("{}: not a picture this build reads", one_file.display()))
+        Error::UnknownContainer(format!(
+            "{}: not a picture this build reads",
+            one_file.display()
+        ))
     })?;
 
     let mut numbers: Vec<i64> = Vec::new();
@@ -370,15 +375,35 @@ impl SequenceReader {
 /// alpha is premultiplied by the format's convention.
 fn read_exr(path: &Path, pts: Timestamp, index: i64) -> Result<VideoFrame> {
     use exr::prelude as x;
+    // The picture is built straight into the bytes the frame will carry, not
+    // into floats that are then copied into bytes: at sixteen bytes a pixel a
+    // 4K EXR is 141 MB, and the copy used to make every one of them cost two.
+    //
+    // The size comes out of the file's header, so it is checked against what
+    // this machine can decode before a byte of it is allocated. An enormous
+    // data window — a real one, or a corrupt one — used to be an allocation
+    // the kernel answered by killing the application.
+    let what = path.display().to_string();
+    // The header alone says how big the picture is, so the refusal happens
+    // before anything is read, let alone allocated.
+    let meta = x::MetaData::read_from_file(path, false).map_err(|e| Error::Decode {
+        at: what.clone(),
+        message: e.to_string(),
+    })?;
+    for header in &meta.headers {
+        let size = header.layer_size;
+        crate::budget::check_picture(&what, size.0 as u64, size.1 as u64, 16)?;
+    }
     let image = x::read_first_rgba_layer_from_file(
         path,
-        |size: x::Vec2<usize>, _| -> (Vec<f32>, usize) { (vec![0.0; size.0 * size.1 * 4], size.0) },
-        |(pixels, width): &mut (Vec<f32>, usize), position: x::Vec2<usize>, (r, g, b, a): (f32, f32, f32, f32)| {
-            let i = (position.1 * *width + position.0) * 4;
-            pixels[i] = r;
-            pixels[i + 1] = g;
-            pixels[i + 2] = b;
-            pixels[i + 3] = a;
+        |size: x::Vec2<usize>, _| -> (Vec<u8>, usize) { (vec![0u8; size.0 * size.1 * 16], size.0) },
+        |(pixels, width): &mut (Vec<u8>, usize),
+         position: x::Vec2<usize>,
+         (r, g, b, a): (f32, f32, f32, f32)| {
+            let i = (position.1 * *width + position.0) * 16;
+            for (k, v) in [r, g, b, a].iter().enumerate() {
+                pixels[i + k * 4..i + k * 4 + 4].copy_from_slice(&v.to_ne_bytes());
+            }
         },
     )
     .map_err(|e| Error::Decode {
@@ -386,8 +411,7 @@ fn read_exr(path: &Path, pts: Timestamp, index: i64) -> Result<VideoFrame> {
         message: e.to_string(),
     })?;
     let size = image.layer_data.size;
-    let (pixels, _) = image.layer_data.channel_data.pixels;
-    let bytes: Vec<u8> = pixels.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let (bytes, _) = image.layer_data.channel_data.pixels;
     Ok(VideoFrame {
         pts,
         frame_index: Some(index),

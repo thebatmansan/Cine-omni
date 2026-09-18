@@ -30,7 +30,8 @@ fn exr(path: &Path, frame: usize) {
 }
 
 fn png16(path: &Path, value: u16) {
-    let img = image::ImageBuffer::from_pixel(8, 4, image::Rgba([value, value / 2, value / 3, 65535]));
+    let img =
+        image::ImageBuffer::from_pixel(8, 4, image::Rgba([value, value / 2, value / 3, 65535]));
     image::DynamicImage::ImageRgba16(img).save(path).unwrap();
 }
 
@@ -61,7 +62,10 @@ fn an_exr_sequence_is_one_asset_with_its_own_rate_and_length() {
 
     // Its identity is the run's, and it is stable.
     let again = probe_sequence(&dir.path().join("shot_0010.0003.exr"), rate).unwrap();
-    assert_eq!(info.hash, again.hash, "any file of the run identifies the run");
+    assert_eq!(
+        info.hash, again.hash,
+        "any file of the run identifies the run"
+    );
     assert_eq!(info.entity_id(), again.entity_id());
 
     // A longer run is a different asset.
@@ -117,8 +121,14 @@ fn a_sixteen_bit_still_sequence_is_not_quantised_to_eight() {
     let (bytes, stride) = frame.plane(0).unwrap();
     assert_eq!(stride, 8 * 4 * 2);
     let first = u16::from_ne_bytes(bytes[0..2].try_into().unwrap());
-    assert_eq!(first, 513, "the sample is the file's, not a widened 8-bit one");
-    assert!(!first.is_multiple_of(257), "513 is not representable in 8 bits");
+    assert_eq!(
+        first, 513,
+        "the sample is the file's, not a widened 8-bit one"
+    );
+    assert!(
+        !first.is_multiple_of(257),
+        "513 is not representable in 8 bits"
+    );
 }
 
 #[test]
@@ -136,7 +146,16 @@ fn a_missing_frame_is_a_hole_that_refuses_rather_than_a_black_picture() {
     assert!(reader.frame_at_index(0).unwrap().is_some());
     let refused = reader.frame_at_index(2).unwrap_err();
     let message = refused.to_string();
-    assert!(message.contains("p.0003.exr") && message.contains("missing"), "{message}");
-    assert!(reader.frame_at_index(3).unwrap().is_some(), "the run continues past the hole");
-    assert!(reader.frame_at_index(4).unwrap().is_none(), "past the end there is nothing");
+    assert!(
+        message.contains("p.0003.exr") && message.contains("missing"),
+        "{message}"
+    );
+    assert!(
+        reader.frame_at_index(3).unwrap().is_some(),
+        "the run continues past the hole"
+    );
+    assert!(
+        reader.frame_at_index(4).unwrap().is_none(),
+        "past the end there is nothing"
+    );
 }

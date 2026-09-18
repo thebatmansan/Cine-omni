@@ -42,7 +42,11 @@ pub fn bt709_limited(rgb: [f64; 3]) -> (u8, u8, u8) {
     let cb = (rgb[2] - y) / (2.0 * (1.0 - kb));
     let cr = (rgb[0] - y) / (2.0 * (1.0 - kr));
     let code = |v: f64| v.round().clamp(0.0, 255.0) as u8;
-    (code(16.0 + 219.0 * y), code(128.0 + 224.0 * cb), code(128.0 + 224.0 * cr))
+    (
+        code(16.0 + 219.0 * y),
+        code(128.0 + 224.0 * cb),
+        code(128.0 + 224.0 * cr),
+    )
 }
 
 /// Whether picture `k` at `rate` is the first picture of a second.
@@ -57,9 +61,17 @@ pub fn is_pop(rate: Rate, k: u64) -> bool {
 }
 
 /// Write `seconds` of bars and pops, `width × height` at `rate`, to `path`.
-pub fn bars_and_pops(path: &Path, width: usize, height: usize, rate: Rate, seconds: u32) -> Result<MovReport> {
+pub fn bars_and_pops(
+    path: &Path,
+    width: usize,
+    height: usize,
+    rate: Rate,
+    seconds: u32,
+) -> Result<MovReport> {
     if height < 16 {
-        return Err(Error::Unsupported("bars need a picture at least 16 lines tall".into()));
+        return Err(Error::Unsupported(
+            "bars need a picture at least 16 lines tall".into(),
+        ));
     }
     let frames = (u64::from(seconds) * u64::from(rate.num())).div_ceil(u64::from(rate.den()));
     let mut w = MovWriter::create(
@@ -69,7 +81,10 @@ pub fn bars_and_pops(path: &Path, width: usize, height: usize, rate: Rate, secon
         rate,
         MovSettings {
             h264: H264Settings { qp: 12, gop: 24 },
-            sound: Some(SoundFormat { sample_rate: SAMPLE_RATE, channels: 2 }),
+            sound: Some(SoundFormat {
+                sample_rate: SAMPLE_RATE,
+                channels: 2,
+            }),
             colour: ColourTags::BT709,
             first_picture: 0,
         },
@@ -104,14 +119,25 @@ pub fn bars_and_pops(path: &Path, width: usize, height: usize, rate: Rate, secon
         let mut sound = Vec::with_capacity(due as usize * 2);
         for i in 0..due {
             let s = if pop {
-                (POP_AMPLITUDE * (std::f64::consts::TAU * POP_HZ * i as f64 / f64::from(SAMPLE_RATE)).sin()) as f32
+                (POP_AMPLITUDE
+                    * (std::f64::consts::TAU * POP_HZ * i as f64 / f64::from(SAMPLE_RATE)).sin())
+                    as f32
             } else {
                 0.0
             };
             sound.push(s);
             sound.push(s);
         }
-        w.write_frame(&YuvFrame { width, height, y, u, v }, &sound)?;
+        w.write_frame(
+            &YuvFrame {
+                width,
+                height,
+                y,
+                u,
+                v,
+            },
+            &sound,
+        )?;
     }
     w.finish()
 }

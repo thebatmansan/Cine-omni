@@ -111,6 +111,30 @@ export function Browser({
               <span className="meta">
                 {m.checksum?.last?.result === "mismatch" && <span className="bad">checksum ✗ </span>}
                 {m.checksum?.last && m.checksum.last.result !== "mismatch" && <span className="good">✓ </span>}
+                {/* Every mark below is the runtime's state, never inferred here. */}
+                {m.proxies.some((p) => p.state === "current") && (
+                  <span className="chip small" title="A current proxy exists">
+                    P
+                  </span>
+                )}
+                {m.proxies.some((p) => p.state !== "current") && (
+                  <span className="chip small stale" title={m.proxies.map((p) => p.reasons.join("; ")).join(" · ")}>
+                    P
+                  </span>
+                )}
+                {m.waveform && (
+                  <span
+                    className={`chip small${m.waveform.state === "current" ? "" : " stale"}`}
+                    title={m.waveform.state === "current" ? "Waveform" : m.waveform.reasons.join("; ")}
+                  >
+                    ∿
+                  </span>
+                )}
+                {m.resolution?.state === "replaced" && (
+                  <span className="chip small bad" title={m.resolution.note ?? ""}>
+                    ≠
+                  </span>
+                )}
                 {m.online === false ? "offline" : m.video?.frames ? `${m.video.frames}f` : ""}
               </span>
             </div>

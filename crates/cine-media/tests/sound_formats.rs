@@ -51,14 +51,27 @@ fn read_all(path: &Path) -> (Vec<f32>, Vec<f32>) {
 fn twenty_four_bit_sound_is_heard_exactly() {
     let dir = tempfile::tempdir().unwrap();
     let codes: Vec<(i64, i64)> = (0..4800i64)
-        .map(|i| ((i * 1747) % 16_777_216 - 8_388_608, -((i * 911) % 8_388_608)))
+        .map(|i| {
+            (
+                (i * 1747) % 16_777_216 - 8_388_608,
+                -((i * 911) % 8_388_608),
+            )
+        })
         .collect();
     let path = wav(dir.path(), "s24.wav", 24, false, &codes);
     let (l, r) = read_all(&path);
     assert_eq!(l.len(), codes.len());
     for (i, &(cl, cr)) in codes.iter().enumerate() {
-        assert_eq!((f64::from(l[i]) * 8_388_608.0).round() as i64, cl, "left {i}");
-        assert_eq!((f64::from(r[i]) * 8_388_608.0).round() as i64, cr, "right {i}");
+        assert_eq!(
+            (f64::from(l[i]) * 8_388_608.0).round() as i64,
+            cl,
+            "left {i}"
+        );
+        assert_eq!(
+            (f64::from(r[i]) * 8_388_608.0).round() as i64,
+            cr,
+            "right {i}"
+        );
     }
     // Full-scale negative is exactly -1.
     assert_eq!(l[0], -1.0);
@@ -74,7 +87,9 @@ fn eight_bit_and_thirty_two_bit_integer_sound_are_heard() {
     assert_eq!(l[128], 0.0);
     assert_eq!(l[0], -1.0);
 
-    let s32: Vec<(i64, i64)> = (0..1000).map(|i| (i * 2_000_000 - 1_000_000_000, 7)).collect();
+    let s32: Vec<(i64, i64)> = (0..1000)
+        .map(|i| (i * 2_000_000 - 1_000_000_000, 7))
+        .collect();
     let (l, _) = read_all(&wav(dir.path(), "s32.wav", 32, false, &s32));
     assert_eq!(l.len(), 1000);
     assert!((f64::from(l[500]) - 0.0).abs() < 1e-6);

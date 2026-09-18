@@ -394,7 +394,9 @@ fn render_dir(runtime: &Runtime, query: &str) -> Result<PathBuf, &'static str> {
     let render = render.ok_or("missing `render`")?;
     let plain = !render.is_empty()
         && !render.starts_with('.')
-        && render.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        && render
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if !plain {
         return Err("`render` must be a render's directory name");
     }
@@ -410,7 +412,14 @@ fn render_dir(runtime: &Runtime, query: &str) -> Result<PathBuf, &'static str> {
 fn serve_render_file(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     let dir = match render_dir(runtime, query) {
         Ok(d) => d,
-        Err(why) => return respond(stream, "404 Not Found", "text/plain; charset=utf-8", why.as_bytes()),
+        Err(why) => {
+            return respond(
+                stream,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                why.as_bytes(),
+            )
+        }
     };
     let file = query
         .split('&')
@@ -435,15 +444,25 @@ fn serve_render_file(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     };
     let path = dir.join(file);
     let Ok(mut f) = std::fs::File::open(&path) else {
-        return respond(stream, "404 Not Found", "text/plain; charset=utf-8", b"no such file in that render");
+        return respond(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"no such file in that render",
+        );
     };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut head = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {len}\r\nCache-Control: no-cache\r\n"
     );
     if file == crate::render::MOVIE_FILE {
-        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        head.push_str(&format!("Content-Disposition: attachment; filename=\"{name}.mov\"\r\n"));
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        head.push_str(&format!(
+            "Content-Disposition: attachment; filename=\"{name}.mov\"\r\n"
+        ));
     }
     head.push_str("Connection: close\r\n\r\n");
     if stream.write_all(head.as_bytes()).is_ok() {
@@ -459,7 +478,14 @@ fn serve_render_file(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
 fn serve_render_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     let dir = match render_dir(runtime, query) {
         Ok(d) => d,
-        Err(why) => return respond(stream, "404 Not Found", "text/plain; charset=utf-8", why.as_bytes()),
+        Err(why) => {
+            return respond(
+                stream,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                why.as_bytes(),
+            )
+        }
     };
     let index: i64 = query
         .split('&')
@@ -481,12 +507,22 @@ fn serve_render_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
             });
         return match png {
             Ok(bytes) => respond(stream, "200 OK", "image/png", &bytes),
-            Err(e) => respond(stream, "404 Not Found", "text/plain; charset=utf-8", e.as_bytes()),
+            Err(e) => respond(
+                stream,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                e.as_bytes(),
+            ),
         };
     }
     match std::fs::read(dir.join(crate::render::frame_file(index))) {
         Ok(bytes) => respond(stream, "200 OK", "image/png", &bytes),
-        Err(_) => respond(stream, "404 Not Found", "text/plain; charset=utf-8", b"no such frame in that render"),
+        Err(_) => respond(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"no such frame in that render",
+        ),
     }
 }
 
@@ -574,7 +610,16 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     // stale stand-in can never be shown as the picture.
     let wanted = {
         let g = runtime.project.engine.read();
+        // An original the project has recorded as not being where it says is
+        // never decoded from that path. The file there may well open — a
+        // namesake is a whole other take — and serving a picture out of it
+        // would be the substitution the whole resolution model exists to
+        // prevent. The project's record decides; hashing on every frame would
+        // be the wrong price for an answer the project already has.
         match proxy {
+            None if crate::relink::unreadable(&g, media).is_some() => {
+                Err(crate::relink::unreadable(&g, media).unwrap_or("that media cannot be read"))
+            }
             None => cine_media::ucg::read_media(&g, media)
                 .ok_or("no media with that id in this project"),
             Some(p) if !crate::proxy::proxies_of(&g, media).contains(&p) => {
@@ -589,7 +634,12 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     let wanted = match wanted {
         Ok(p) => p,
         Err(why) => {
-            respond(stream, "404 Not Found", "text/plain; charset=utf-8", why.as_bytes());
+            respond(
+                stream,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                why.as_bytes(),
+            );
             return;
         }
     };
@@ -599,14 +649,22 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
         match project_view_for(runtime, media) {
             Ok(v) => Some(v),
             Err(why) => {
-                respond(stream, "422 Unprocessable Content", "text/plain; charset=utf-8", why.as_bytes());
+                respond(
+                    stream,
+                    "422 Unprocessable Content",
+                    "text/plain; charset=utf-8",
+                    why.as_bytes(),
+                );
                 return;
             }
         }
     } else {
         None
     };
-    match runtime.frames.picture_through(&wanted, index, view.as_ref()) {
+    match runtime
+        .frames
+        .picture_through(&wanted, index, view.as_ref())
+    {
         Ok(picture) => {
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\

@@ -37,7 +37,11 @@ fn picture(i: usize) -> YuvFrame {
 /// The 24-bit integer written at absolute sample `n` of channel `c`.
 fn sound_value(n: u64, c: usize) -> i32 {
     let v = ((n * 37) % 1_000_000) as i32 - 500_000;
-    if c == 0 { v } else { -v }
+    if c == 0 {
+        v
+    } else {
+        -v
+    }
 }
 
 /// The centre column of the bright bar. H.264 is lossy, so an edge may move
@@ -49,7 +53,12 @@ fn bar_centre(frame: &cine_media::VideoFrame) -> f64 {
     cols.iter().sum::<usize>() as f64 / cols.len() as f64
 }
 
-fn write_movie(path: &Path, rate: Rate, frames: usize, sound: Option<SoundFormat>) -> cine_media::mov::MovReport {
+fn write_movie(
+    path: &Path,
+    rate: Rate,
+    frames: usize,
+    sound: Option<SoundFormat>,
+) -> cine_media::mov::MovReport {
     let settings = MovSettings {
         h264: H264Settings { qp: 18, gop: 12 },
         sound,
@@ -78,7 +87,10 @@ fn a_movie_reads_back_picture_for_picture_and_sample_for_sample() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cut.mov");
     let rate = Rate::new(30000, 1001).unwrap();
-    let sound = SoundFormat { sample_rate: 48_000, channels: 2 };
+    let sound = SoundFormat {
+        sample_rate: 48_000,
+        channels: 2,
+    };
     let report = write_movie(&path, rate, 60, Some(sound));
     assert_eq!(report.frames, 60);
     // 60 frames at 30000/1001 is 2.002 s: exactly 96096 samples.
@@ -97,12 +109,18 @@ fn a_movie_reads_back_picture_for_picture_and_sample_for_sample() {
     // with: not assumed. Regression: only the stream's SPS was consulted, so
     // this build's own movies read back as "BT.601, assumed" at SD heights.
     let f0 = video.frame_at_index(0).unwrap().unwrap();
-    assert_eq!((f0.color.primaries, f0.color.transfer, f0.color.matrix), (Some(1), Some(1), Some(1)));
+    assert_eq!(
+        (f0.color.primaries, f0.color.transfer, f0.color.matrix),
+        (Some(1), Some(1), Some(1))
+    );
     for i in 0..60 {
         let f = video.frame_at_index(i).unwrap().unwrap();
         let expected = ((i * 11) % (W - 16)) as f64 + 7.5;
         let got = bar_centre(&f);
-        assert!((got - expected).abs() <= 2.0, "picture {i} in order: bar at {got}, expected {expected}");
+        assert!(
+            (got - expected).abs() <= 2.0,
+            "picture {i} in order: bar at {got}, expected {expected}"
+        );
     }
 
     let info = cine_media::probe::probe(&path).unwrap();
@@ -110,7 +128,10 @@ fn a_movie_reads_back_picture_for_picture_and_sample_for_sample() {
     assert_eq!(audio.codec, "pcm_s24le");
     assert!(audio.decodable);
     let a = audio.audio.as_ref().unwrap();
-    assert_eq!((a.sample_rate, a.channels, a.bits_per_sample), (48_000, 2, Some(24)));
+    assert_eq!(
+        (a.sample_rate, a.channels, a.bits_per_sample),
+        (48_000, 2, Some(24))
+    );
 
     let mut reader = MediaReader::open_path(&path).expect("our reader opens the sound");
     let mut n = 0u64;
@@ -133,24 +154,44 @@ fn a_movie_reads_back_picture_for_picture_and_sample_for_sample() {
 
 #[test]
 fn gstreamer_reads_the_same_movie() {
-    if Command::new("gst-discoverer-1.0").arg("--version").output().is_err() {
+    if Command::new("gst-discoverer-1.0")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         eprintln!("SKIP: GStreamer is not installed; the independent container check did not run");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cut.mov");
     let rate = Rate::new(24000, 1001).unwrap();
-    let sound = SoundFormat { sample_rate: 48_000, channels: 2 };
+    let sound = SoundFormat {
+        sample_rate: 48_000,
+        channels: 2,
+    };
     let report = write_movie(&path, rate, 48, Some(sound));
 
-    let out = Command::new("gst-discoverer-1.0").arg("-v").arg(&path).output().unwrap();
+    let out = Command::new("gst-discoverer-1.0")
+        .arg("-v")
+        .arg(&path)
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{text}");
     assert!(text.contains("video/x-h264"), "{text}");
-    assert!(text.contains("width=(int)320") && text.contains("height=(int)180"), "{text}");
+    assert!(
+        text.contains("width=(int)320") && text.contains("height=(int)180"),
+        "{text}"
+    );
     assert!(text.contains("framerate=(fraction)24000/1001"), "{text}");
-    assert!(text.contains("audio/x-raw") && text.contains("S24LE"), "{text}");
-    assert!(text.contains("rate=(int)48000") && text.contains("channels=(int)2"), "{text}");
+    assert!(
+        text.contains("audio/x-raw") && text.contains("S24LE"),
+        "{text}"
+    );
+    assert!(
+        text.contains("rate=(int)48000") && text.contains("channels=(int)2"),
+        "{text}"
+    );
     // 48 × 1001/24000 s = 2.002 s.
     assert!(text.contains("Duration: 0:00:02.002"), "{text}");
 
@@ -172,7 +213,10 @@ fn gstreamer_reads_the_same_movie() {
             expected.extend_from_slice(&sound_value(n, c).to_le_bytes()[..3]);
         }
     }
-    assert!(bytes == expected, "GStreamer's sound differs from what was written");
+    assert!(
+        bytes == expected,
+        "GStreamer's sound differs from what was written"
+    );
 
     // And it counts the pictures.
     let status = Command::new("gst-launch-1.0")
@@ -185,7 +229,13 @@ fn gstreamer_reads_the_same_movie() {
     assert!(status.success());
     let pictures = std::fs::read_dir(dir.path())
         .unwrap()
-        .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".h264"))
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".h264")
+        })
         .count();
     assert_eq!(pictures, 48);
 }
@@ -204,7 +254,10 @@ fn a_movie_without_sound_has_no_sound_track() {
 fn sound_of_the_wrong_length_for_a_picture_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wrong.mov");
-    let sound = SoundFormat { sample_rate: 48_000, channels: 2 };
+    let sound = SoundFormat {
+        sample_rate: 48_000,
+        channels: 2,
+    };
     let settings = MovSettings {
         h264: H264Settings::default(),
         sound: Some(sound),
@@ -213,6 +266,8 @@ fn sound_of_the_wrong_length_for_a_picture_is_refused() {
     };
     let mut w = MovWriter::create(&path, W, H, Rate::F24, settings).unwrap();
     assert_eq!(w.sound_frames_due(), 2000);
-    let err = w.write_frame(&picture(0), &vec![0.0; 1999 * 2]).unwrap_err();
+    let err = w
+        .write_frame(&picture(0), &vec![0.0; 1999 * 2])
+        .unwrap_err();
     assert!(err.to_string().contains("2000"), "{err}");
 }

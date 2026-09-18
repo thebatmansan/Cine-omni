@@ -60,11 +60,20 @@ pub struct ColourTags {
 
 impl ColourTags {
     /// BT.709 primaries and transfer.
-    pub const BT709: ColourTags = ColourTags { primaries: 1, transfer: 1 };
+    pub const BT709: ColourTags = ColourTags {
+        primaries: 1,
+        transfer: 1,
+    };
     /// BT.709 primaries, IEC 61966-2-1 (sRGB) transfer.
-    pub const SRGB: ColourTags = ColourTags { primaries: 1, transfer: 13 };
+    pub const SRGB: ColourTags = ColourTags {
+        primaries: 1,
+        transfer: 13,
+    };
     /// Nothing is known about primaries or transfer, and the file says so.
-    pub const UNSPECIFIED: ColourTags = ColourTags { primaries: 2, transfer: 2 };
+    pub const UNSPECIFIED: ColourTags = ColourTags {
+        primaries: 2,
+        transfer: 2,
+    };
 }
 
 /// How a movie is written.
@@ -308,7 +317,9 @@ impl MovWriter {
     /// Write the movie's index and close it.
     pub fn finish(mut self) -> Result<MovReport> {
         if self.report.frames == 0 {
-            return Err(Error::Unsupported("a movie needs at least one picture".into()));
+            return Err(Error::Unsupported(
+                "a movie needs at least one picture".into(),
+            ));
         }
         let mdat_size = self.pos - self.mdat_start;
         let video_duration = self.report.frames * u64::from(self.rate.den());
@@ -350,7 +361,8 @@ impl MovWriter {
             .map_err(|e| Error::Io(e.into_error()))?;
         file.seek(SeekFrom::Start(self.mdat_start + 8))
             .map_err(Error::Io)?;
-        file.write_all(&mdat_size.to_be_bytes()).map_err(Error::Io)?;
+        file.write_all(&mdat_size.to_be_bytes())
+            .map_err(Error::Io)?;
         file.sync_all().map_err(Error::Io)?;
         self.report.file_bytes = self.pos;
         Ok(self.report)
@@ -467,7 +479,9 @@ impl MovWriter {
                                 b.extend_from_slice(&0u16.to_be_bytes());
                                 b.extend_from_slice(&65536u32.to_be_bytes());
                                 b.extend_from_slice(&72u32.to_be_bytes());
-                                b.extend_from_slice(&f64::from(sound.sample_rate).to_bits().to_be_bytes());
+                                b.extend_from_slice(
+                                    &f64::from(sound.sample_rate).to_bits().to_be_bytes(),
+                                );
                                 b.extend_from_slice(&u32::from(sound.channels).to_be_bytes());
                                 b.extend_from_slice(&0x7F00_0000u32.to_be_bytes());
                                 b.extend_from_slice(&SOUND_BITS.to_be_bytes());
@@ -476,7 +490,9 @@ impl MovWriter {
                                 b.extend_from_slice(&bytes_per_frame.to_be_bytes());
                                 b.extend_from_slice(&1u32.to_be_bytes());
                                 full_atom(b, b"chan", 0, 0, |b| {
-                                    b.extend_from_slice(&channel_layout_tag(sound.channels).to_be_bytes());
+                                    b.extend_from_slice(
+                                        &channel_layout_tag(sound.channels).to_be_bytes(),
+                                    );
                                     b.extend_from_slice(&0u32.to_be_bytes());
                                     b.extend_from_slice(&0u32.to_be_bytes());
                                 });
@@ -637,7 +653,13 @@ mod tests {
 
     #[test]
     fn sound_follows_the_picture_to_the_sample_at_any_rate() {
-        for (num, den) in [(24, 1), (24000, 1001), (30000, 1001), (25, 1), (60000, 1001)] {
+        for (num, den) in [
+            (24, 1),
+            (24000, 1001),
+            (30000, 1001),
+            (25, 1),
+            (60000, 1001),
+        ] {
             let rate = Rate::new(num, den).unwrap();
             for sr in [44_100u32, 48_000, 96_000] {
                 let frames = 10_000u64;

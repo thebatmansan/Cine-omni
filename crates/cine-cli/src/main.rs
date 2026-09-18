@@ -161,7 +161,10 @@ fn run(args: &[String]) -> CliResult {
         "demo" => demo()?,
         "bars" => {
             let out = args.get(1).ok_or("missing <out.mov>")?;
-            let seconds: u32 = flag(args, "--seconds").map(|s| s.parse()).transpose()?.unwrap_or(10);
+            let seconds: u32 = flag(args, "--seconds")
+                .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(10);
             let (w, h) = match flag(args, "--size") {
                 Some(s) => {
                     let (w, h) = s.split_once('x').ok_or("--size is WIDTHxHEIGHT")?;
@@ -176,7 +179,13 @@ fn run(args: &[String]) -> CliResult {
                 }
                 None => ucg_core::Rate::F24,
             };
-            let report = cine_media::testsignal::bars_and_pops(std::path::Path::new(out), w, h, rate, seconds)?;
+            let report = cine_media::testsignal::bars_and_pops(
+                std::path::Path::new(out),
+                w,
+                h,
+                rate,
+                seconds,
+            )?;
             println!(
                 "wrote {out}: {} pictures {w}x{h} at {}/{}, {} sound samples at 48 kHz, a sync pop every second",
                 report.frames,

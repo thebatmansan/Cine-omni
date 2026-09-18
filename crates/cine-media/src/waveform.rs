@@ -33,11 +33,11 @@
 //! are what is written.
 
 use crate::error::{Error, Result};
-use parking_lot::Mutex;
-use ucg_core::EntityId;
 use crate::reader::MediaReader;
+use parking_lot::Mutex;
 use std::io::Read;
 use std::path::Path;
+use ucg_core::EntityId;
 
 /// Bucket sizes, in samples, smallest first. Each is eight times the last.
 pub const LEVELS: &[u32] = &[256, 2_048, 16_384, 131_072];
@@ -136,19 +136,16 @@ impl Waveform {
 /// `progress` is called with how far through the file the decode is, and
 /// returns `false` to stop; stopping answers `None` rather than half an
 /// overview.
-pub fn compute(
-    path: &Path,
-    progress: &mut dyn FnMut(f32) -> bool,
-) -> Result<Option<Waveform>> {
+pub fn compute(path: &Path, progress: &mut dyn FnMut(f32) -> bool) -> Result<Option<Waveform>> {
     let mut reader = MediaReader::open_path(path)?;
     let stream = reader
         .info()
         .first_audio()
         .cloned()
         .ok_or(Error::NoSuchStream(0))?;
-    let audio = stream
-        .audio
-        .ok_or_else(|| Error::Container(format!("{}: the sound declares no format", path.display())))?;
+    let audio = stream.audio.ok_or_else(|| {
+        Error::Container(format!("{}: the sound declares no format", path.display()))
+    })?;
     let channels = audio.channels.max(1);
     let sample_rate = audio.sample_rate.max(1);
     let total = stream
@@ -364,7 +361,6 @@ impl Cache {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,7 +401,11 @@ mod tests {
         // A wide window over four seconds cannot be drawn at 256 samples a
         // bucket in 200 pixels; a coarser level is chosen.
         let wide = w.window(0, 48_000 * 4, 200);
-        assert!(wide.bucket > LEVELS[0], "a coarse level for a wide view: {}", wide.bucket);
+        assert!(
+            wide.bucket > LEVELS[0],
+            "a coarse level for a wide view: {}",
+            wide.bucket
+        );
         assert!(wide.peaks.len() / 2 <= 200 + 1, "and it fits the request");
 
         // A narrow window gets the finest level.
@@ -440,7 +440,10 @@ mod tests {
         let w = wave(2_048, 1, |n, _| if n % 8 == 0 { 0.9 } else { -0.1 });
         let (min, max) = w.levels[0].peaks[0];
         assert!(max > 29_000, "the positive peak is kept: {max}");
-        assert!((-4_000..-2_000).contains(&min), "and so is the negative one: {min}");
+        assert!(
+            (-4_000..-2_000).contains(&min),
+            "and so is the negative one: {min}"
+        );
     }
 
     #[test]

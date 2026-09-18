@@ -154,18 +154,25 @@ fn a_cut_renders_picture_for_picture_with_gaps_black_and_captions_burned_in() {
     assert_eq!(manifest["look"]["kind"], "as_decoded");
     assert_eq!(manifest["sources"].as_array().unwrap().len(), 2);
     assert_eq!(manifest["captions"]["language"], "en");
-    assert!(!project_dir.join("derived/render").read_dir().unwrap().any(|d| d
-        .unwrap()
-        .path()
+    assert!(!project_dir
+        .join("derived/render")
         .read_dir()
         .unwrap()
-        .any(|e| e.unwrap().path().to_string_lossy().ends_with(".partial"))));
+        .any(|d| d.unwrap().path().read_dir().unwrap().any(|e| e
+            .unwrap()
+            .path()
+            .to_string_lossy()
+            .ends_with(".partial"))));
 
     // Record frame n of the head clip is picture 10 + n of A, exactly.
     for n in [0i64, 4, 15, 23] {
         let (px, w, hgt) = rendered(&out, n);
         assert_eq!((w, hgt), (320, 180));
-        assert!(px == decoded(&a, 10 + n as usize), "frame {n} is A picture {}", 10 + n);
+        assert!(
+            px == decoded(&a, 10 + n as usize),
+            "frame {n} is A picture {}",
+            10 + n
+        );
     }
     // A caption changes the bottom of the picture and nothing above the safe
     // area's caption rows.
@@ -174,14 +181,21 @@ fn a_cut_renders_picture_for_picture_with_gaps_black_and_captions_burned_in() {
     let row_bytes = 320 * 4;
     let top = 90 * row_bytes;
     assert!(px[..top] == reference[..top], "the top half is untouched");
-    assert!(px[top..] != reference[top..], "the caption is in the bottom half");
+    assert!(
+        px[top..] != reference[top..],
+        "the caption is in the bottom half"
+    );
     // The gap is black, opaque.
     let (px, _, _) = rendered(&out, 28);
     assert!(px.as_chunks::<4>().0.iter().all(|p| p == &[0, 0, 0, 255]));
     // After the gap, B from its first picture.
     for n in [34i64, 45] {
         let (px, _, _) = rendered(&out, n);
-        assert!(px == decoded(&b, (n - 34) as usize), "frame {n} is B picture {}", n - 34);
+        assert!(
+            px == decoded(&b, (n - 34) as usize),
+            "frame {n} is B picture {}",
+            n - 34
+        );
     }
 }
 
@@ -205,11 +219,11 @@ fn a_render_it_cannot_stand_behind_is_refused_and_leaves_nothing() {
         done["error"].as_str().unwrap().to_string()
     };
 
-    let mixed = refused(
-        &mut c,
-        json!({ "kind": "render.sequence", "timeline": tl }),
+    let mixed = refused(&mut c, json!({ "kind": "render.sequence", "timeline": tl }));
+    assert!(
+        mixed.contains("160x90") && mixed.contains("320x180"),
+        "{mixed}"
     );
-    assert!(mixed.contains("160x90") && mixed.contains("320x180"), "{mixed}");
 
     let no_captions = refused(
         &mut c,
@@ -271,7 +285,10 @@ fn a_render_through_the_project_view_is_the_windows_bake_applied_to_the_file() {
     assert_eq!(look["view"], view.as_str());
     let baked = cine_color::view::bake_view(&config, &input, &working, None, &display, &view)
         .expect("bakeable");
-    assert_eq!(look["worst_lattice_error"].as_f64().unwrap() as f32, baked.worst_error);
+    assert_eq!(
+        look["worst_lattice_error"].as_f64().unwrap() as f32,
+        baked.worst_error
+    );
 
     let mut reader = cine_media::VideoReader::open_path(&a).unwrap();
     for n in [0usize, 7] {
@@ -286,7 +303,10 @@ fn a_render_through_the_project_view_is_the_windows_bake_applied_to_the_file() {
             .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
             .collect();
         let (got, _, _) = rendered(&out, n as i64);
-        assert!(got == expected, "frame {n} is the view applied to picture {n}");
+        assert!(
+            got == expected,
+            "frame {n} is the view applied to picture {n}"
+        );
         assert!(got != decoded(&a, n), "the view changed the picture");
     }
 }

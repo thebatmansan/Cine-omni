@@ -175,7 +175,11 @@ impl RenderRequest {
             .filter(|s| !s.is_empty())
             .map(str::to_string);
         let text = |k: &str| params.get(k).and_then(J::as_str).map(str::to_string);
-        let look = match params.get("look").and_then(J::as_str).unwrap_or("as_decoded") {
+        let look = match params
+            .get("look")
+            .and_then(J::as_str)
+            .unwrap_or("as_decoded")
+        {
             "as_decoded" => Look::AsDecoded,
             "project_view" => Look::ProjectView {
                 display: text("display"),
@@ -199,7 +203,10 @@ impl RenderRequest {
                 )
             }
         };
-        let whole_cut = params.get("whole_cut").and_then(J::as_bool).unwrap_or(false);
+        let whole_cut = params
+            .get("whole_cut")
+            .and_then(J::as_bool)
+            .unwrap_or(false);
         let output = Output::parse(params.get("output").and_then(J::as_str).unwrap_or("png8"))?;
         let sound = params.get("sound").and_then(J::as_bool);
         let size = match (
@@ -291,7 +298,10 @@ struct Gathered {
 
 /// The record range `[first, last)` frames cover, at `rate`.
 pub fn frame_range(rate: Rate, first: i64, last: i64) -> TimeRange {
-    TimeRange::from_start_end(RationalTime::exact(first, rate), RationalTime::exact(last, rate))
+    TimeRange::from_start_end(
+        RationalTime::exact(first, rate),
+        RationalTime::exact(last, rate),
+    )
 }
 
 fn gather(project: &OmniProject, request: &RenderRequest) -> Result<Gathered, String> {
@@ -785,7 +795,9 @@ pub fn render_sequence(
             .collect();
         let files = match request.output {
             Output::Movie => json!({ "movie": MOVIE_FILE }),
-            Output::Exr => json!({ "pattern": "frame_%06d.exr", "first": first, "count": plan.len() }),
+            Output::Exr => {
+                json!({ "pattern": "frame_%06d.exr", "first": first, "count": plan.len() })
+            }
             _ => json!({ "pattern": "frame_%06d.png", "first": first, "count": plan.len() }),
         };
         let precision = match request.output {
@@ -938,7 +950,12 @@ pub fn png16(rgba: &[f32], w: u32, h: u32) -> Result<Vec<u8>, String> {
 /// this cannot identify — is refused rather than labelled Rec.709.
 pub fn display_tags(display: &str) -> Result<ColourTags, String> {
     let d = display.to_ascii_lowercase();
-    if d.contains("p3") || d.contains("2100") || d.contains("2020") || d.contains("pq") || d.contains("hlg") {
+    if d.contains("p3")
+        || d.contains("2100")
+        || d.contains("2020")
+        || d.contains("pq")
+        || d.contains("hlg")
+    {
         return Err(format!(
             "a movie through `{display}` would be declared Rec.709 and shown wrongly; this writer declares only Rec.709-primaries displays — render PNG frames for it"
         ));
@@ -1051,7 +1068,10 @@ fn resolve_views(
                 entry.name, w.display, w.view
             ));
         };
-        let key = format!("{input}|{}", cine_color::view::cdl_fingerprint(cdl.as_ref()));
+        let key = format!(
+            "{input}|{}",
+            cine_color::view::cdl_fingerprint(cdl.as_ref())
+        );
         let transform = match cache.get(&key) {
             Some(t) => t.clone(),
             None => {

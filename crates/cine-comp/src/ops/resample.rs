@@ -246,14 +246,25 @@ pub fn placement(
 }
 
 /// Place `src` into an `out_w × out_h` RGBA frame of `background` as `p` says.
-pub fn fit(src: &Image, out_w: usize, out_h: usize, p: &Placement, background: [f32; 4]) -> Result<Image> {
+pub fn fit(
+    src: &Image,
+    out_w: usize,
+    out_h: usize,
+    p: &Placement,
+    background: [f32; 4],
+) -> Result<Image> {
     let src = if src.channels == ChannelSet::Rgba {
         std::borrow::Cow::Borrowed(src)
     } else {
         std::borrow::Cow::Owned(src.to_rgba())
     };
     let (cx, cy, cw, ch) = p.covers;
-    if cx == 0 && cy == 0 && cw == out_w && ch == out_h && cw == src.width && ch == src.height
+    if cx == 0
+        && cy == 0
+        && cw == out_w
+        && ch == out_h
+        && cw == src.width
+        && ch == src.height
         && p.keeps == (0.0, 0.0, src.width as f64, src.height as f64)
     {
         return Ok(src.into_owned());
@@ -287,7 +298,11 @@ mod tests {
         let src = flat(97, 53, 0.4375);
         for (w, h) in [(32, 18), (200, 111), (97, 53), (1, 1), (13, 400)] {
             let out = resize(&src, w, h).unwrap();
-            let worst = out.data.iter().map(|v| (v - 0.4375).abs()).fold(0.0f32, f32::max);
+            let worst = out
+                .data
+                .iter()
+                .map(|v| (v - 0.4375).abs())
+                .fold(0.0f32, f32::max);
             assert!(worst < 1e-6, "{w}x{h}: {worst}");
         }
     }
@@ -310,7 +325,10 @@ mod tests {
         let interior = (3..97)
             .map(|x| (out.get_rgba(x, 5)[0] - 0.5).abs())
             .fold(0.0f32, f32::max);
-        assert!(interior < 1e-4, "stripes aliased: worst interior deviation {interior}");
+        assert!(
+            interior < 1e-4,
+            "stripes aliased: worst interior deviation {interior}"
+        );
         let edge = (out.get_rgba(0, 5)[0] - 0.5).abs();
         assert!(edge < 0.05, "edge bias is bounded: {edge}");
     }

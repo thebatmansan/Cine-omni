@@ -45,6 +45,7 @@ pub mod derived;
 pub mod frames;
 pub mod http;
 pub mod impact;
+pub mod ingest;
 pub mod jobs;
 pub mod lock;
 pub mod playlist;

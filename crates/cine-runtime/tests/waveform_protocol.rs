@@ -68,7 +68,10 @@ fn wait_for(c: &mut Client, id: u64) -> Value {
     loop {
         let jobs = c.call("jobs", json!({}));
         if let Some(job) = jobs.as_array().unwrap().iter().find(|j| j["id"] == id) {
-            if matches!(job["state"].as_str().unwrap(), "succeeded" | "failed" | "cancelled") {
+            if matches!(
+                job["state"].as_str().unwrap(),
+                "succeeded" | "failed" | "cancelled"
+            ) {
                 return job.clone();
             }
         }
@@ -78,7 +81,10 @@ fn wait_for(c: &mut Client, id: u64) -> Value {
 }
 
 fn make(c: &mut Client, media: &str) -> Value {
-    let job = c.call("job_submit", json!({ "kind": "media.waveform", "media": media }));
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.waveform", "media": media }),
+    );
     wait_for(c, job["id"].as_u64().unwrap())
 }
 
@@ -155,12 +161,23 @@ fn a_waveform_is_the_recordings_own_shape_at_every_zoom() {
     // Inside the quiet passage, not from its first sample: a window starts on
     // a bucket edge, so asking from exactly 3 s would include the bucket that
     // straddles the loud second before it.
-    let after = ask(&mut c, 3 * i64::from(SR) + 10_000, 4 * i64::from(SR) - 10_000, 200);
+    let after = ask(
+        &mut c,
+        3 * i64::from(SR) + 10_000,
+        4 * i64::from(SR) - 10_000,
+        200,
+    );
     let loud_peak = loudest(&loud["peaks"], 2);
     let quiet_peak = loudest(&quiet["peaks"], 2);
     let after_peak = loudest(&after["peaks"], 2);
-    assert!(loud_peak[0] > 29_000, "the loud passage is loud: {loud_peak:?}");
-    assert!(quiet_peak[0] < 200, "the near-silence is near-silent: {quiet_peak:?}");
+    assert!(
+        loud_peak[0] > 29_000,
+        "the loud passage is loud: {loud_peak:?}"
+    );
+    assert!(
+        quiet_peak[0] < 200,
+        "the near-silence is near-silent: {quiet_peak:?}"
+    );
     assert!(
         (5_000..8_000).contains(&after_peak[0]),
         "and the quiet passage is in between: {after_peak:?}"
@@ -179,7 +196,8 @@ fn a_waveform_is_the_recordings_own_shape_at_every_zoom() {
     assert!(
         wide["bucket"].as_u64().unwrap() > narrow["bucket"].as_u64().unwrap(),
         "a wider view uses coarser buckets: {} vs {}",
-        wide["bucket"], narrow["bucket"]
+        wide["bucket"],
+        narrow["bucket"]
     );
     assert!(
         wide["peaks"].as_array().unwrap().len() / 2 <= 101,
@@ -187,20 +205,31 @@ fn a_waveform_is_the_recordings_own_shape_at_every_zoom() {
     );
     assert_eq!(narrow["bucket"], 256, "the finest level for a close view");
     let first = narrow["first_sample"].as_i64().unwrap();
-    assert_eq!(first % narrow["bucket"].as_i64().unwrap(), 0, "windows start on a bucket edge");
+    assert_eq!(
+        first % narrow["bucket"].as_i64().unwrap(),
+        0,
+        "windows start on a bucket edge"
+    );
     assert!(first <= 96_000);
 
     // Asking again does not make it again: the job system knows this work by
     // its key, and hands back the job that already did it.
     let before = c.call("jobs", json!({})).as_array().unwrap().len();
-    let again = c.call("job_submit", json!({ "kind": "media.waveform", "media": media }));
+    let again = c.call(
+        "job_submit",
+        json!({ "kind": "media.waveform", "media": media }),
+    );
     assert_eq!(again["state"], "succeeded", "{again}");
     assert_eq!(
         c.call("jobs", json!({})).as_array().unwrap().len(),
         before,
         "no second job was made for work already done"
     );
-    assert_eq!(again["output"]["frames"], 4 * SR, "and it is the same overview: {again}");
+    assert_eq!(
+        again["output"]["frames"],
+        4 * SR,
+        "and it is the same overview: {again}"
+    );
 }
 
 #[test]
@@ -227,7 +256,11 @@ fn a_waveform_goes_stale_with_its_source_and_survives_a_relink() {
     let done = wait_for(&mut c, job["id"].as_u64().unwrap());
     assert_eq!(done["output"]["relinked"], 1, "{done}");
     let view = media_view(&mut c, &media);
-    assert_eq!(view["waveform"]["state"], "current", "a relink is not a content change: {}", view["waveform"]);
+    assert_eq!(
+        view["waveform"]["state"], "current",
+        "a relink is not a content change: {}",
+        view["waveform"]
+    );
     // And it still answers.
     let peaks = c.call(
         "waveform",
@@ -270,13 +303,20 @@ fn media_with_no_sound_is_refused_and_a_cancelled_waveform_leaves_nothing() {
     cine_media::testsignal::bars_and_pops(&silent, 64, 36, ucg_core::Rate::F24, 1).unwrap();
     // Bars carry sound; a still image does not.
     let still = dir.path().join("plate.png");
-    image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(8, 8, image::Rgba([1u8, 2, 3, 255])))
-        .save(&still)
-        .unwrap();
+    image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+        8,
+        8,
+        image::Rgba([1u8, 2, 3, 255]),
+    ))
+    .save(&still)
+    .unwrap();
     let media = ingest(&mut c, &still);
     let refused = make(&mut c, &media);
     assert_eq!(refused["state"], "failed", "{refused}");
-    assert!(refused["error"].as_str().unwrap().contains("no sound"), "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("no sound"),
+        "{refused}"
+    );
     assert!(
         walk(&root.join("derived").join("waveform")).is_empty(),
         "a refusal left files"
@@ -285,12 +325,21 @@ fn media_with_no_sound_is_refused_and_a_cancelled_waveform_leaves_nothing() {
     // A long recording, cancelled while it decodes: nothing kept, no record.
     let long = wav(&dir.path().join("long.wav"), 180);
     let media = ingest(&mut c, &long);
-    let job = c.call("job_submit", json!({ "kind": "media.waveform", "media": media }));
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.waveform", "media": media }),
+    );
     let id = job["id"].as_u64().unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let jobs = c.call("jobs", json!({}));
-        let j = jobs.as_array().unwrap().iter().find(|j| j["id"] == id).unwrap().clone();
+        let j = jobs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == id)
+            .unwrap()
+            .clone();
         if j["state"] == "running" {
             break;
         }
