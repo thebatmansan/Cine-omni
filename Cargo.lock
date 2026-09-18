@@ -430,6 +430,7 @@ name = "cine-media"
 version = "0.1.0"
 dependencies = [
  "cine-audio",
+ "exr",
  "image",
  "indexmap",
  "md-5",
@@ -503,6 +504,7 @@ dependencies = [
  "cine-script",
  "cine-timeline",
  "crossbeam-channel",
+ "exr",
  "image",
  "parking_lot",
  "serde",
