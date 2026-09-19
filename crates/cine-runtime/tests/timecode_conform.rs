@@ -530,3 +530,151 @@ fn a_retimed_events_m2_record_is_in_source_timecode_too() {
         "which is the frame the event starts on: {text}"
     );
 }
+
+/// A sequence at `rate` starting at `start_timecode`, with `frames` of `media`
+/// from `offset` frames into the take.
+fn cut_starting(
+    c: &mut Client,
+    media: &str,
+    start_timecode: &str,
+    offset: i64,
+    frames: i64,
+    rate: Rate,
+) -> String {
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Reel 1", "rate_num": rate.num(), "rate_den": rate.den(),
+                "start_timecode": start_timecode }),
+    );
+    let tl = made["id"].as_str().unwrap().to_string();
+    let t = c.call("timeline", json!({ "id": tl }));
+    let at = |n: i64| json!({ "ticks": n, "rate_num": rate.num(), "rate_den": rate.den() });
+    c.call(
+        "place",
+        json!({ "tracks": [t["tracks"][0]["id"], t["tracks"][1]["id"]], "time": at(0),
+                "clip": { "media": media,
+                          "source_range": { "start_time": at(offset), "duration": at(frames) } } }),
+    );
+    c.call("focus", json!({ "timeline": tl }));
+    tl
+}
+
+#[test]
+fn a_sequence_has_a_record_timecode_and_the_edls_record_columns_are_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("A001C001.mov");
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, Rate::F24, 3).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+
+    // A reel that starts at an hour, cut from a take that starts at an hour:
+    // the two clocks are independent and both have to come out right.
+    let tl = cut_starting(&mut c, &media, "01:00:00:00", 24, 12, Rate::F24);
+    let state = c.call("sequence_start", json!({ "timeline": tl }));
+    assert_eq!(state["start_timecode"], "01:00:00:00", "{state}");
+    assert_eq!(state["frame"], 86_400);
+
+    let text = edl(&mut c);
+    let event = text.lines().find(|l| l.starts_with("001")).unwrap();
+    assert!(
+        event.contains("01:00:01:00 01:00:01:12 01:00:00:00 01:00:00:12"),
+        "source columns from the take, record columns from the reel: {event}\n{text}"
+    );
+
+    // Moved to a different reel start, the record columns move and the source
+    // columns do not: they are different clocks.
+    let moved = c.call(
+        "sequence_start",
+        json!({ "timeline": tl, "start_timecode": "10:00:00:00" }),
+    );
+    assert_eq!(moved["start_timecode"], "10:00:00:00", "{moved}");
+    let event = edl(&mut c)
+        .lines()
+        .find(|l| l.starts_with("001"))
+        .unwrap()
+        .to_string();
+    assert!(
+        event.contains("01:00:01:00 01:00:01:12 10:00:00:00 10:00:00:12"),
+        "only the record columns moved: {event}"
+    );
+}
+
+#[test]
+fn a_sequence_start_is_read_at_the_sequences_own_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("B001C001.mov");
+    let rate = Rate::new(30000, 1001).unwrap();
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, rate, 2).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+
+    // At 29.97 a drop-frame label and a non-drop one are different instants,
+    // so the sequence is started with the one that was meant.
+    let tl = cut_starting(&mut c, &media, "01:00:00;00", 0, 10, rate);
+    let state = c.call("sequence_start", json!({ "timeline": tl }));
+    assert_eq!(
+        state["frame"], 107_892,
+        "the drop-frame label was meant: {state}"
+    );
+    assert_eq!(state["drop_frame"], true);
+    assert_eq!(state["start_timecode"], "01:00:00;00");
+
+    // The non-drop label of the same name is 108 frames later.
+    let other = c.call(
+        "sequence_start",
+        json!({ "timeline": tl, "start_timecode": "01:00:00:00" }),
+    );
+    assert_eq!(other["frame"], 108_000, "a different instant: {other}");
+
+    // A label that does not exist in drop-frame naming is refused rather than
+    // rounded to one that does.
+    let refused = c
+        .call_result(
+            "sequence_start",
+            json!({ "timeline": tl, "start_timecode": "00:01:00;00" }),
+        )
+        .expect_err("a label drop-frame skips is not a time");
+    assert!(
+        refused.contains("start_timecode"),
+        "a dropped label is not a time: {refused}"
+    );
+}
+
+#[test]
+fn a_rendered_movie_carries_the_record_timecode_of_its_first_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("C001C001.mov");
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, Rate::F24, 3).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+    let tl = cut_starting(&mut c, &media, "01:00:00:00", 0, 24, Rate::F24);
+
+    // A ranged render is called what those frames are called in the cut, not
+    // what the head of the cut is called.
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "render.sequence", "timeline": tl, "output": "movie",
+                "start_frame": 6, "end_frame": 18 }),
+    );
+    let done = wait_for(&mut c, job["id"].as_u64().unwrap());
+    assert_eq!(done["state"], "succeeded", "{done}");
+    let movie =
+        std::path::PathBuf::from(done["output"]["path"].as_str().unwrap()).join("movie.mov");
+    assert!(movie.is_file(), "{movie:?}");
+
+    let found = cine_media::tmcd::source_timecode(&movie).expect("a timecode track");
+    assert_eq!(found.start.to_string(), "01:00:00:06", "{found:?}");
+    assert!(!found.counter);
+    assert_eq!(found.runs, 1);
+    assert_eq!(
+        cine_media::probe::probe(&movie)
+            .unwrap()
+            .labelling_timecode()
+            .map(|t| t.to_string()),
+        Some("01:00:00:06".to_string()),
+        "and it is a clock, so it labels frames"
+    );
+}

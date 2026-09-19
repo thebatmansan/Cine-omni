@@ -813,12 +813,27 @@ pub fn dispatch_with(
                 .zip(u32::try_from(den).ok())
                 .and_then(|(n, d)| ucg_core::Rate::new(n, d))
                 .ok_or_else(|| format!("invalid rate {num}/{den}"))?;
+            // Where the cut's own clock starts. A label is read at the
+            // sequence's rate, so `01:00:00;00` and `01:00:00:00` at 29.97 are
+            // two different instants and the caller says which it means.
+            let start = match params.get("start_timecode") {
+                None | Some(J::Null) => None,
+                Some(J::String(text)) => {
+                    let tc = cine_media::time::Timecode::parse(text, rate)
+                        .map_err(|e| format!("`start_timecode`: {e}"))?;
+                    Some(ucg_core::RationalTime::exact(
+                        tc.to_frame_number().map_err(|e| e.to_string())?,
+                        rate,
+                    ))
+                }
+                Some(_) => return Err("`start_timecode` is a timecode string".into()),
+            };
             let root = p.root;
             let mut id = EntityId::nil();
             let group = p
                 .engine
                 .transact(&format!("new sequence {name}"), |tx| {
-                    id = cine_timeline::graph::create_sequence(tx, root, &name, rate)
+                    id = cine_timeline::graph::create_sequence(tx, root, &name, rate, start)
                         .map_err(|e| ucg_core::UcgError::Aborted(e.to_string()))?;
                     Ok(())
                 })
@@ -1682,6 +1697,56 @@ pub fn dispatch_with(
                 })
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
+        }
+        "sequence_start" => {
+            // The record timecode a sequence's first frame is called. With
+            // `start_timecode`, set it; without, report it. Read at the
+            // sequence's own rate, because a label names a frame of a
+            // particular signal and nothing else.
+            let timeline = match params.get("timeline") {
+                Some(J::Null) | None => {
+                    focused_timeline(p).ok_or_else(|| "no sequence is open".to_string())?
+                }
+                Some(_) => entity(params, "timeline")?,
+            };
+            let rate = sequence_rate(&p.engine.read(), timeline)?;
+            if let Some(v) = params.get("start_timecode") {
+                let at = match v {
+                    J::Null => ucg_core::RationalTime::zero(rate),
+                    J::String(text) => {
+                        let tc = cine_media::time::Timecode::parse(text, rate)
+                            .map_err(|e| format!("`start_timecode`: {e}"))?;
+                        ucg_core::RationalTime::exact(
+                            tc.to_frame_number().map_err(|e| e.to_string())?,
+                            rate,
+                        )
+                    }
+                    _ => return Err("`start_timecode` is a timecode string or null".into()),
+                };
+                p.engine
+                    .transact("set the sequence's start timecode", |tx| {
+                        tx.set(
+                            timeline,
+                            cine_timeline::graph::nle_attrs::GLOBAL_START_TIME,
+                            at,
+                        )
+                    })
+                    .map_err(|x| x.to_string())?;
+            }
+            let g = p.engine.read();
+            let at = g
+                .node(timeline)
+                .and_then(|n| n.get(cine_timeline::graph::nle_attrs::GLOBAL_START_TIME))
+                .and_then(Value::as_time)
+                .unwrap_or(ucg_core::RationalTime::zero(rate));
+            json!({
+                "timeline": timeline,
+                "start_timecode": crate::projection::timecode_label(at),
+                "frame": at.ticks(),
+                "rate_num": rate.num(),
+                "rate_den": rate.den(),
+                "drop_frame": rate.supports_drop_frame(),
+            })
         }
         "media_preference" => {
             // With `preference` (`original`, `proxy`, `auto`), read that

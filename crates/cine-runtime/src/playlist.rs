@@ -70,6 +70,9 @@ pub struct EditList {
     pub name: String,
     /// The sequence's frame rate.
     pub rate: Rate,
+    /// The record timecode the sequence's first frame is called. Zero unless
+    /// someone set it: a cut that starts at an hour is an editorial decision.
+    pub start: RationalTime,
     pub end: RationalTime,
     pub entries: Vec<Entry>,
     /// Every audible sound clip, resolved the same way. Mixed by the player.
@@ -211,6 +214,10 @@ pub fn edit_list_for(
         timeline,
         name: composed.name.clone(),
         rate,
+        start: composed
+            .global_start_time
+            .filter(|t| t.rate_exact() == rate)
+            .unwrap_or_else(|| RationalTime::zero(rate)),
         end: flat.end.unwrap_or_else(|| RationalTime::zero(rate)),
         entries,
         sound,

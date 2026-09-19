@@ -68,7 +68,7 @@ fn fixture() -> Fixture {
             tx.ensure(asset, kinds::ASSET_MEDIA)?;
             tx.set(asset, attrs::MEDIA_PATH, "/footage/A001.mov")?;
             tx.set(asset, attrs::AVAILABLE_RANGE, TimeRange::new(f(0), f(480)))?;
-            timeline = create_sequence(tx, project.root, "Cut", Rate::whole(24).unwrap())
+            timeline = create_sequence(tx, project.root, "Cut", Rate::whole(24).unwrap(), None)
                 .map_err(aborted)?;
             let stack = tx.graph().children(timeline)[0];
             let first = tx
@@ -380,7 +380,7 @@ fn measure_caption_review_at_feature_scale() {
                 attrs::AVAILABLE_RANGE,
                 TimeRange::new(f(0), f(per_scene * SCENES as i64)),
             )?;
-            timeline = create_sequence(tx, project.root, "Cut", Rate::whole(24).unwrap())
+            timeline = create_sequence(tx, project.root, "Cut", Rate::whole(24).unwrap(), None)
                 .map_err(aborted)?;
             let stack = tx.graph().children(timeline)[0];
             let first = tx

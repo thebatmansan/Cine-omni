@@ -324,6 +324,16 @@ pub fn media(graph: &Graph) -> J {
     )
 }
 
+/// A time as the label its own rate names it with.
+///
+/// Drop-frame where the rate is one: at 29.97 the two namings are different
+/// numbers for the same frame, and a label with no semicolon in it is read as
+/// the other one.
+pub fn timecode_label(at: ucg_core::RationalTime) -> String {
+    at.to_drop_frame_timecode()
+        .unwrap_or_else(|| at.to_timecode())
+}
+
 /// The production chain, as edges rather than as a guess.
 ///
 /// screenplay scene → shots → takes → media. Each link is read from the graph;

@@ -377,7 +377,7 @@ fn a_retime_survives_the_graph_and_moves_what_follows() {
                 attrs::AVAILABLE_RANGE,
                 TimeRange::from_frames(0, 240, 24.0),
             )?;
-            seq = create_sequence(tx, project, "Assembly", Rate::whole(24).unwrap())
+            seq = create_sequence(tx, project, "Assembly", Rate::whole(24).unwrap(), None)
                 .map_err(|e| UcgError::Aborted(e.to_string()))?;
             Ok(())
         })
@@ -565,7 +565,7 @@ fn setting_a_ramp_decides_both_lengths_and_refuses_media_that_is_not_there() {
                 attrs::AVAILABLE_RANGE,
                 TimeRange::from_frames(0, 240, 24.0),
             )?;
-            let seq = create_sequence(tx, project, "Ramp", Rate::whole(24).unwrap())
+            let seq = create_sequence(tx, project, "Ramp", Rate::whole(24).unwrap(), None)
                 .map_err(|e| UcgError::Aborted(e.to_string()))?;
             let stack = tx.graph().children(seq)[0];
             let first = tx

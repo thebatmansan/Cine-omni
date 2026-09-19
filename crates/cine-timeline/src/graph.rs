@@ -1149,6 +1149,7 @@ pub fn create_sequence(
     project: EntityId,
     name: &str,
     rate: ucg_core::Rate,
+    start: Option<RationalTime>,
 ) -> Result<EntityId> {
     let mut key = format!("sequence:{name}");
     let mut n = 1;
@@ -1160,7 +1161,23 @@ pub fn create_sequence(
         key = format!("sequence:{name}:{n}");
     }
     let mut timeline = Timeline::new(name);
-    timeline.global_start_time = Some(RationalTime::zero(rate));
+    // Where the cut's own clock starts: the record timecode an EDL, a delivery
+    // master and a burn-in all count in. Zero unless the caller says
+    // otherwise — a sequence that starts at an hour is an editorial decision,
+    // and this does not make it on anybody's behalf.
+    // A record start at a different rate is refused rather than rounded: a
+    // timecode counts frames of a particular signal, and converting one to
+    // another rate moves which frame it names.
+    timeline.global_start_time = Some(match start {
+        Some(t) if t.rate_exact() != rate => {
+            return Err(crate::error::Error::Otio(format!(
+                "a record start counting at {} cannot begin a sequence at {rate}",
+                t.rate_exact()
+            )))
+        }
+        Some(t) => t,
+        None => RationalTime::zero(rate),
+    });
     timeline
         .tracks
         .children

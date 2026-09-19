@@ -492,6 +492,16 @@ export interface IngestResult {
 
 export type RenderState = "current" | "stale" | "invalid" | "failed";
 
+/** Where a sequence's own clock starts. */
+export interface SequenceStart {
+  timeline: string;
+  start_timecode: string;
+  frame: number;
+  rate_num: number;
+  rate_den: number;
+  drop_frame: boolean;
+}
+
 /** One render on disk, with whether it still matches the project. */
 export interface RenderView {
   state: RenderState;
@@ -1060,8 +1070,22 @@ export class RpcClient {
   ) {
     return this.call<CascadeResult>("retime", { clip, played, reversed, keep_pitch: keepPitch, ramp });
   }
-  newTimeline(name: string, rate_num: number, rate_den: number) {
-    return this.call<CascadeResult & { id: string }>("new_timeline", { name, rate_num, rate_den });
+  /**
+   * A new sequence. `start_timecode` is the record timecode its first frame is
+   * called — read at the sequence's own rate, so at 29.97 `01:00:00;00` and
+   * `01:00:00:00` are two different instants. Omitted means zero.
+   */
+  newTimeline(name: string, rate_num: number, rate_den: number, start_timecode?: string) {
+    return this.call<CascadeResult & { id: string }>("new_timeline", {
+      name,
+      rate_num,
+      rate_den,
+      start_timecode,
+    });
+  }
+  /** Read, or with `start_timecode` set, a sequence's record start. */
+  sequenceStart(timeline: string | null, start_timecode?: string | null) {
+    return this.call<SequenceStart>("sequence_start", { timeline, start_timecode });
   }
   link(clips: string[], group: string | null) { return this.call<CascadeResult>("link", { clips, group }); }
   bindClip(clip: string, scene: string) { return this.call<CascadeResult>("bind_clip", { clip, scene }); }

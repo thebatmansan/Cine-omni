@@ -52,7 +52,7 @@ fn setup(b_from: i64) -> (Engine, EntityId, Vec<EntityId>) {
     engine
         .transact("sequence", |tx| {
             tx.create_with_id(project, kinds::PROJECT)?;
-            seq = create_sequence(tx, project, "Multicam", Rate::whole(24).unwrap())
+            seq = create_sequence(tx, project, "Multicam", Rate::whole(24).unwrap(), None)
                 .map_err(|e| UcgError::Aborted(e.to_string()))?;
             Ok(())
         })

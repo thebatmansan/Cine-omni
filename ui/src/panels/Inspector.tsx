@@ -76,6 +76,10 @@ export function Inspector({
               <dd>{timeline.name}</dd>
               <dt>duration</dt>
               <dd>{timeline.duration.timecode}</dd>
+              {/* The cut's own clock: what its first frame is called, which an
+                  EDL's record columns and a delivered movie count from. */}
+              <dt>starts at</dt>
+              <dd className="mono">{timeline.global_start_time?.timecode ?? "00:00:00:00"}</dd>
               <dt>tracks</dt>
               <dd>{timeline.tracks.length}</dd>
             </dl>

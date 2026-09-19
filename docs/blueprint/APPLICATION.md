@@ -1039,8 +1039,30 @@ space rather than to shift the available range alone, which would break every
 trim that clamps against it. Recorded as the limit of `time.timecode.conform`
 rather than left to be discovered in a conform.
 
-**A rendered cut carries no record timecode**, because a sequence has no start
-timecode here yet. Writing one would invent the number a conform depends on.
+#### The cut's own clock
+
+A sequence has a **record start**: what its first frame is called. It is a
+separate clock from any take's, and both have to come out right at once — a
+reel starting at `01:00:00:00` cut from a take starting at `01:00:00:00` has
+source and record columns that happen to look alike and move independently.
+
+It is offered, never assumed. `new_timeline` takes a `start_timecode` and
+defaults to zero without one; the New Sequence dialog puts `01:00:00:00` in the
+field, because that is what a reel starts at nearly everywhere, and a person
+sees it before creating anything. `sequence_start` reads it and sets it on a
+sequence that already exists.
+
+The label is read at the **sequence's own rate**, so at 29.97 `01:00:00;00` is
+frame 107 892 and `01:00:00:00` is frame 108 000 — two different frames, and
+the semicolon is the only thing that says which was meant. A label drop-frame
+skips is refused rather than rounded to one that exists, and a record start
+counting at a different rate from the sequence is refused rather than
+converted: converting a timecode to another rate moves which frame it names.
+
+**A rendered movie carries it.** The delivered file's own timecode track is the
+sequence's start advanced by the frame the render begins on, so a ranged render
+of frames 6–17 is called `01:00:00:06` — what those frames are called in the
+cut, not what the head of the cut is called.
 
 ### What a job guarantees, audited
 

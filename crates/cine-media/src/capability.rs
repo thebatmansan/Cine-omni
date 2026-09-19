@@ -611,9 +611,9 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
                  inspector and the viewer's readout all show it. A file with no timecode track \
                  answers absent, never zero. What is not claimed: discontinuous timecode reads as \
                  the first run's start and says how many runs there are; a counter track is \
-                 reported as a counter rather than as a clock; a rendered cut carries no record \
-                 timecode, because a sequence has no start timecode in this build yet; OTIO \
-                 export does not carry it (see `time.timecode.conform`); and no independent \
+                 reported as a counter rather than as a clock; a rendered cut carries the cut's \
+                 own record timecode rather than the camera's; OTIO export does not carry \
+                 source timecode (see `time.timecode.conform`); and no independent \
                  timecode reader was available to check the bytes, so the layout is held to the \
                  published field offsets by a test that walks the boxes separately",
         evidence: Some("cine-media/tests/timecode_track.rs"),
@@ -628,11 +628,13 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
                  the naming every label in the file is written in; an M2 record names its first \
                  picture in the same numbering. Media whose timecode cannot label a frame — a \
                  counter, a discontinuous track — counts from zero and the file says why. \
-                 The limits: a rendered cut carries no record timecode, because a sequence has \
-                 no start timecode in this build; and OTIO export writes an available range \
-                 starting at zero, which an OTIO reader takes as a claim that the media's \
-                 timecode starts at zero. Source ranges are media-relative throughout this \
-                 build, and putting them in timecode space is what would fix OTIO",
+                 A sequence has its own record start, which the record columns count from and \
+                 which a rendered movie carries as its own timecode track — a ranged render is \
+                 called what those frames are called in the cut. The remaining limit: OTIO \
+                 export writes an available range starting at zero, which an OTIO reader takes \
+                 as a claim that the media's timecode starts there. Source ranges are \
+                 media-relative throughout this build, and putting the OTIO file in timecode \
+                 space is what would fix it",
         evidence: Some("cine-runtime/tests/timecode_conform.rs"),
     },
     // --------------------------------------------------------------- colour

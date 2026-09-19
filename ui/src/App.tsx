@@ -740,6 +740,9 @@ function ProjectDialog({
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [asSequence, setAsSequence] = useState(false);
+  // An hour is what a reel starts at nearly everywhere; it is offered rather
+  // than assumed, so nothing is decided on a person's behalf out of sight.
+  const [startTimecode, setStartTimecode] = useState("01:00:00:00");
   const [withThumbnail, setWithThumbnail] = useState(true);
   const [withWaveform, setWithWaveform] = useState(true);
   const [withProxy, setWithProxy] = useState(false);
@@ -752,7 +755,9 @@ function ProjectDialog({
     let ok: unknown = null;
     if (kind === "sequence") {
       const [n, d] = fps.split("/").map(Number);
-      ok = await session.run("new sequence", () => client.newTimeline(name, n, d || 1));
+      ok = await session.run("new sequence", () =>
+        client.newTimeline(name, n, d || 1, startTimecode.trim() || undefined),
+      );
       if (ok && typeof ok === "object" && "id" in ok) session.selectTimeline((ok as { id: string }).id);
     } else if (kind === "media") {
       const [n, d] = fps.split("/").map(Number);
@@ -809,7 +814,23 @@ function ProjectDialog({
                   <option value="60/1">60</option>
                 </select>
               </label>
-              <p className="hint">Rates are exact ratios; 23.976 is stored as 24000/1001, never as a decimal.</p>
+              <label>
+                Start timecode
+                <input
+                  aria-label="Sequence start timecode"
+                  value={startTimecode}
+                  onChange={(e) => setStartTimecode(e.target.value)}
+                  placeholder="01:00:00:00"
+                />
+              </label>
+              <p className="hint">
+                Rates are exact ratios; 23.976 is stored as 24000/1001, never as a decimal. The start
+                timecode is what the cut&rsquo;s first frame is called — an EDL&rsquo;s record columns and a
+                delivered movie count from it. It is read at the sequence&rsquo;s own rate, so at 29.97
+                <span className="mono"> 01:00:00;00</span> and <span className="mono">01:00:00:00</span> are
+                two different frames; write the semicolon where you mean drop frame. Leave it empty to
+                start at zero.
+              </p>
             </>
           )}
           {kind === "media" && (

@@ -629,10 +629,17 @@ pub fn render_sequence(
                             channels: 2,
                         }),
                         colour,
-                        // No record timecode: a sequence has no start
-                        // timecode in this build yet, and writing one would
-                        // be inventing the number a conform depends on.
-                        timecode: None,
+                        // The record timecode of this movie's first picture:
+                        // the sequence's own start, advanced by the frame the
+                        // render begins on. A ranged render of frames 100-199
+                        // is called what those frames are called in the cut,
+                        // not what the cut's head is called.
+                        timecode: cine_media::time::Timecode::from_frame_number(
+                            list.start.ticks() + first,
+                            list.rate,
+                            list.rate.supports_drop_frame(),
+                        )
+                        .ok(),
                         first_picture: first as u64,
                     },
                 )

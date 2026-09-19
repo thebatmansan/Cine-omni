@@ -33,7 +33,7 @@ fn setup() -> (Engine, Vec<EntityId>, EntityId) {
                 attrs::AVAILABLE_RANGE,
                 TimeRange::from_frames(0, 240, 24.0),
             )?;
-            seq = create_sequence(tx, project, "Assembly", Rate::whole(24).unwrap())
+            seq = create_sequence(tx, project, "Assembly", Rate::whole(24).unwrap(), None)
                 .map_err(|e| UcgError::Aborted(e.to_string()))?;
             Ok(())
         })
