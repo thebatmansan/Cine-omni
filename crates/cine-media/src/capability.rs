@@ -612,10 +612,28 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
                  answers absent, never zero. What is not claimed: discontinuous timecode reads as \
                  the first run's start and says how many runs there are; a counter track is \
                  reported as a counter rather than as a clock; a rendered cut carries no record \
-                 timecode, because a sequence has no start timecode in this build yet; and no \
-                 independent timecode reader was available to check the bytes, so the layout is \
-                 held to the published field offsets by a test that walks the boxes separately",
+                 timecode, because a sequence has no start timecode in this build yet; OTIO \
+                 export does not carry it (see `time.timecode.conform`); and no independent \
+                 timecode reader was available to check the bytes, so the layout is held to the \
+                 published field offsets by a test that walks the boxes separately",
         evidence: Some("cine-media/tests/timecode_track.rs"),
+    },
+    MediaPath {
+        id: "time.timecode.conform",
+        name: "Conforming against source timecode",
+        area: "Time",
+        state: PathState::Partial,
+        detail: "A CMX3600 EDL's source columns are the camera's numbering, at 24, 25, 30, \
+                 23.976, 29.97 non-drop and drop-frame, and 59.94, with the FCM line declaring \
+                 the naming every label in the file is written in; an M2 record names its first \
+                 picture in the same numbering. Media whose timecode cannot label a frame — a \
+                 counter, a discontinuous track — counts from zero and the file says why. \
+                 The limits: a rendered cut carries no record timecode, because a sequence has \
+                 no start timecode in this build; and OTIO export writes an available range \
+                 starting at zero, which an OTIO reader takes as a claim that the media's \
+                 timecode starts at zero. Source ranges are media-relative throughout this \
+                 build, and putting them in timecode space is what would fix OTIO",
+        evidence: Some("cine-runtime/tests/timecode_conform.rs"),
     },
     // --------------------------------------------------------------- colour
     MediaPath {

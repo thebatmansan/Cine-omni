@@ -1,0 +1,532 @@
+//! The camera's numbering, all the way out to an EDL.
+//!
+//! The point of reading a timecode track is that the numbers leave the
+//! building. An EDL's source columns are what a facility looks for on the
+//! camera original; if they count from zero, every event points at the head of
+//! the tape instead of at the take. These tests import real media with real
+//! timecode, cut with it, and read the EDL the runtime writes.
+
+mod common;
+
+use common::{Client, Harness};
+use serde_json::json;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use ucg_core::Rate;
+
+fn project(dir: &Path) -> PathBuf {
+    let root = dir.join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+fn wait_for(c: &mut Client, id: u64) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(600);
+    loop {
+        let jobs = c.call("jobs", json!({}));
+        if let Some(job) = jobs.as_array().unwrap().iter().find(|j| j["id"] == id) {
+            if matches!(
+                job["state"].as_str().unwrap(),
+                "succeeded" | "failed" | "cancelled"
+            ) {
+                return job.clone();
+            }
+        }
+        assert!(Instant::now() < deadline, "job {id} did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn import(c: &mut Client, path: &Path) -> String {
+    let job = c.call(
+        "job_submit",
+        json!({ "kind": "media.ingest", "path": path.display().to_string(),
+                "thumbnail": false, "waveform": false }),
+    );
+    let done = wait_for(c, job["id"].as_u64().unwrap());
+    assert_eq!(done["state"], "succeeded", "{done}");
+    done["output"]["id"].as_str().unwrap().to_string()
+}
+
+/// Cut `frames` of `media` starting `from` frames into it, at `rate`.
+fn cut(c: &mut Client, media: &str, from: i64, frames: i64, rate: Rate) -> String {
+    let made = c.call(
+        "new_timeline",
+        json!({ "name": "Conform", "rate_num": rate.num(), "rate_den": rate.den() }),
+    );
+    let tl = made["id"].as_str().unwrap().to_string();
+    let t = c.call("timeline", json!({ "id": tl }));
+    let at = |n: i64| json!({ "ticks": n, "rate_num": rate.num(), "rate_den": rate.den() });
+    c.call(
+        "place",
+        json!({ "tracks": [t["tracks"][0]["id"], t["tracks"][1]["id"]], "time": at(0),
+                "clip": { "media": media,
+                          "source_range": { "start_time": at(from), "duration": at(frames) } } }),
+    );
+    c.call("focus", json!({ "timeline": tl }));
+    tl
+}
+
+fn edl(c: &mut Client) -> String {
+    c.call("export", json!({ "what": "edl" }))
+        .as_str()
+        .expect("an EDL")
+        .to_string()
+}
+
+#[test]
+fn an_edls_source_columns_are_the_cameras_numbers_not_an_offset_from_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("A001C001.mov");
+    // `bars_and_pops` writes a roll starting at one hour.
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, Rate::F24, 2).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+
+    // Twelve frames, starting a second in: 01:00:01:00 to 01:00:01:12.
+    cut(&mut c, &media, 24, 12, Rate::F24);
+    let text = edl(&mut c);
+    let event = text
+        .lines()
+        .find(|l| l.starts_with("001"))
+        .unwrap_or_else(|| panic!("no event in:\n{text}"));
+    assert!(
+        event.contains("01:00:01:00 01:00:01:12"),
+        "the source columns are the camera's: {event}\n{text}"
+    );
+    assert!(
+        event.contains("00:00:00:00 00:00:00:12"),
+        "and the record columns are the cut's own, which starts at zero: {event}"
+    );
+}
+
+#[test]
+fn media_with_no_timecode_counts_from_zero_and_says_nothing_it_does_not_know() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("untimed.mov");
+    cine_media::testsignal::bars_and_pops_from(&source, 160, 90, Rate::F24, 2, None).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+    assert!(
+        c.call("media", json!({}))
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == json!(media))
+            .unwrap()["timecode"]
+            .is_null(),
+        "a file with no timecode track has none, rather than zero"
+    );
+
+    cut(&mut c, &media, 24, 12, Rate::F24);
+    let text = edl(&mut c);
+    let event = text.lines().find(|l| l.starts_with("001")).unwrap();
+    assert!(
+        event.contains("00:00:01:00 00:00:01:12"),
+        "source columns count from zero, which is all anybody knows: {event}"
+    );
+}
+
+#[test]
+fn a_drop_frame_take_is_labelled_drop_frame_all_the_way_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("B001C001.mov");
+    let rate = Rate::new(30000, 1001).unwrap();
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, rate, 2).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+
+    let view = c
+        .call("media", json!({}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == json!(media))
+        .unwrap()
+        .clone();
+    assert_eq!(view["timecode"]["start"], "01:00:00;00", "{view}");
+    assert_eq!(view["timecode"]["drop_frame"], true);
+    assert_eq!(view["timecode"]["rate_num"], 30000);
+    assert_eq!(view["timecode"]["rate_den"], 1001);
+
+    // Thirty frames in from the take's start. A drop-frame label is written
+    // with a semicolon, and reading it as non-drop would be a different
+    // instant — so the EDL must carry the semicolon.
+    cut(&mut c, &media, 30, 15, rate);
+    let text = edl(&mut c);
+    let event = text.lines().find(|l| l.starts_with("001")).unwrap();
+    assert!(
+        event.contains("01:00:01;00 01:00:01;15"),
+        "drop frame survives to the EDL: {event}\n{text}"
+    );
+    // Frame Code Mode tells a reader how to interpret every label that follows,
+    // so it has to agree with them. NON-DROP above `01:00:01;00` would have a
+    // reader take it for 108030 frames when it means 107922.
+    assert!(
+        text.contains("FCM: DROP FRAME"),
+        "the file declares the mode its labels are in:\n{text}"
+    );
+    assert!(
+        event.contains("00:00:00;00 00:00:00;15"),
+        "and the record columns are in the same mode: {event}"
+    );
+}
+
+#[test]
+fn a_cut_at_an_exact_rate_says_non_drop_and_means_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("C001C001.mov");
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, Rate::F24, 2).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+    cut(&mut c, &media, 0, 12, Rate::F24);
+    let text = edl(&mut c);
+    assert!(text.contains("FCM: NON-DROP FRAME"), "{text}");
+    // Drop-frame is meaningless at 24: there is nothing to drift against.
+    assert!(
+        !text.contains(';'),
+        "no drop-frame label at an exact rate:\n{text}"
+    );
+}
+
+/// The source-in and source-out columns of the first event, as written.
+fn source_columns(text: &str) -> (String, String) {
+    let event = text
+        .lines()
+        .find(|l| l.starts_with("001"))
+        .unwrap_or_else(|| panic!("no event in:\n{text}"));
+    let cols: Vec<&str> = event.split_whitespace().collect();
+    let n = cols.len();
+    (cols[n - 4].to_string(), cols[n - 3].to_string())
+}
+
+#[test]
+fn every_rate_this_build_claims_conforms_to_the_frame() {
+    // A clip that begins at a non-zero offset inside a take whose timecode is
+    // not zero: the case where every way of getting this wrong shows up.
+    //
+    // The labels are read back and turned into frame numbers rather than
+    // compared as strings, because that is what a conform does with them: the
+    // question is not what the label looks like but which frame it names.
+    struct Case {
+        rate: Rate,
+        start: &'static str,
+        offset: i64,
+        frames: i64,
+    }
+    let cases = [
+        Case {
+            rate: Rate::F24,
+            start: "01:00:00:00",
+            offset: 24,
+            frames: 12,
+        },
+        Case {
+            rate: Rate::whole(25).unwrap(),
+            start: "10:11:12:13",
+            offset: 25,
+            frames: 25,
+        },
+        Case {
+            rate: Rate::whole(30).unwrap(),
+            start: "00:00:00:00",
+            offset: 1,
+            frames: 29,
+        },
+        // 23.976: an exact-looking label on an NTSC signal.
+        Case {
+            rate: Rate::new(24000, 1001).unwrap(),
+            start: "07:00:00:23",
+            offset: 3,
+            frames: 20,
+        },
+        // 29.97 non-drop and drop-frame, which name the same frames differently.
+        Case {
+            rate: Rate::new(30000, 1001).unwrap(),
+            start: "01:00:00:00",
+            offset: 30,
+            frames: 15,
+        },
+        Case {
+            rate: Rate::new(30000, 1001).unwrap(),
+            start: "01:00:00;00",
+            offset: 30,
+            frames: 15,
+        },
+        // 59.94 drop-frame drops four labels a minute, not two.
+        Case {
+            rate: Rate::new(60000, 1001).unwrap(),
+            start: "00:09:59;59",
+            offset: 60,
+            frames: 30,
+        },
+    ];
+
+    for (i, c) in cases.iter().enumerate() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join(format!("R{i:03}.mov"));
+        let tc = cine_media::time::Timecode::parse(c.start, c.rate)
+            .unwrap_or_else(|e| panic!("{} at {:?}: {e}", c.start, c.rate));
+        cine_media::testsignal::bars_and_pops_from(&source, 160, 90, c.rate, 3, Some(tc)).unwrap();
+
+        let h = Harness::start_in(project(dir.path()));
+        let mut c2 = h.client();
+        let media = import(&mut c2, &source);
+        cut(&mut c2, &media, c.offset, c.frames, c.rate);
+        let text = edl(&mut c2);
+
+        // The file says which naming its labels are in, and they are read in it.
+        let drop = text.contains("FCM: DROP FRAME");
+        assert_eq!(
+            drop,
+            c.rate.supports_drop_frame(),
+            "{:?} declares the mode its labels are in:\n{text}",
+            c.rate
+        );
+        let (in_col, out_col) = source_columns(&text);
+        assert_eq!(
+            in_col.contains(';'),
+            drop,
+            "the labels match the declared mode: {in_col}\n{text}"
+        );
+
+        let frame_of = |label: &str| -> i64 {
+            cine_media::time::Timecode::parse(label, c.rate)
+                .unwrap_or_else(|e| panic!("{label} at {:?}: {e}", c.rate))
+                .to_frame_number()
+                .unwrap()
+        };
+        let take_start = tc.to_frame_number().unwrap();
+        assert_eq!(
+            frame_of(&in_col),
+            take_start + c.offset,
+            "{:?} source-in names the frame the clip starts on ({} + {}): {in_col}\n{text}",
+            c.rate,
+            take_start,
+            c.offset
+        );
+        assert_eq!(
+            frame_of(&out_col) - frame_of(&in_col),
+            c.frames,
+            "{:?} source-out is exclusive and the event is {} frames long: {in_col} {out_col}",
+            c.rate,
+            c.frames
+        );
+    }
+}
+
+#[test]
+fn a_non_drop_source_relabelled_drop_frame_names_the_same_frame() {
+    // The two namings are two names for one instant. Re-labelling is faithful
+    // as long as the file says which naming it is in — the whole purpose of
+    // the FCM line. Getting this wrong by 108 frames at the hour is the
+    // classic conform error.
+    let rate = Rate::new(30000, 1001).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("ND.mov");
+    let non_drop = cine_media::time::Timecode::parse("01:00:00:00", rate).unwrap();
+    assert!(!non_drop.drop_frame);
+    assert_eq!(non_drop.to_frame_number().unwrap(), 108_000);
+    cine_media::testsignal::bars_and_pops_from(&source, 160, 90, rate, 2, Some(non_drop)).unwrap();
+
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+    // The file kept the non-drop flag, and the media list says so.
+    let view = c
+        .call("media", json!({}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == json!(media))
+        .unwrap()
+        .clone();
+    assert_eq!(view["timecode"]["start"], "01:00:00:00", "{view}");
+    assert_eq!(view["timecode"]["drop_frame"], false);
+
+    cut(&mut c, &media, 0, 10, rate);
+    let (in_col, _) = source_columns(&edl(&mut c));
+    assert_eq!(in_col, "01:00:03;18", "frame 108000 in drop-frame naming");
+    assert_eq!(
+        cine_media::time::Timecode::parse(&in_col, rate)
+            .unwrap()
+            .to_frame_number()
+            .unwrap(),
+        108_000,
+        "which is the same frame the take starts on"
+    );
+}
+
+#[test]
+fn a_trimmed_clip_moves_its_source_columns_and_its_record_columns_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("T001.mov");
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, Rate::F24, 3).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+
+    // Two events: the second starts later in the take and later on the track.
+    let tl = cut(&mut c, &media, 24, 12, Rate::F24);
+    let t = c.call("timeline", json!({ "id": tl }));
+    let at = |n: i64| json!({ "ticks": n, "rate_num": 24, "rate_den": 1 });
+    c.call(
+        "place",
+        json!({ "tracks": [t["tracks"][0]["id"], t["tracks"][1]["id"]], "time": at(12),
+                "clip": { "media": media,
+                          "source_range": { "start_time": at(48), "duration": at(6) } } }),
+    );
+    let text = edl(&mut c);
+    let events: Vec<&str> = text.lines().filter(|l| l.starts_with("00")).collect();
+    assert_eq!(events.len(), 2, "{text}");
+    assert!(
+        events[0].contains("01:00:01:00 01:00:01:12 00:00:00:00 00:00:00:12"),
+        "{}\n{text}",
+        events[0]
+    );
+    assert!(
+        events[1].contains("01:00:02:00 01:00:02:06 00:00:00:12 00:00:00:18"),
+        "the second event reads later in the take and later on the track: {}\n{text}",
+        events[1]
+    );
+}
+
+#[test]
+fn a_take_whose_timecode_cannot_label_a_frame_says_so_in_the_edl() {
+    // A counter is not a clock. The EDL counts its source columns from zero —
+    // and says why, in the file, rather than handing a facility numbers that
+    // point at the head of the tape.
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("COUNTER.mov");
+    let tc = cine_media::time::Timecode::parse("00:00:07:00", Rate::F24).unwrap();
+    cine_media::testsignal::bars_and_pops_from(&source, 160, 90, Rate::F24, 2, Some(tc)).unwrap();
+    // Flip the counter bit, as a camera that counts rather than clocks would.
+    let mut data = std::fs::read(&source).unwrap();
+    let at = counter_flag_offset(&data).expect("a tmcd entry");
+    let flags = u32::from_be_bytes(data[at..at + 4].try_into().unwrap());
+    data[at..at + 4].copy_from_slice(&(flags | 0x0008).to_be_bytes());
+    std::fs::write(&source, &data).unwrap();
+
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+    let view = c
+        .call("media", json!({}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == json!(media))
+        .unwrap()
+        .clone();
+    assert_eq!(view["timecode"]["counter"], true, "{view}");
+    assert_eq!(view["timecode"]["labels_frames"], false, "{view}");
+    assert_eq!(
+        view["timecode"]["start"], "00:00:07:00",
+        "still reported: {view}"
+    );
+
+    cut(&mut c, &media, 24, 12, Rate::F24);
+    let text = edl(&mut c);
+    let (in_col, _) = source_columns(&text);
+    assert_eq!(in_col, "00:00:01:00", "counted from zero: {text}");
+    assert!(
+        text.contains("NOT IN THIS EDL") && text.to_uppercase().contains("COUNTER"),
+        "and the file says why it counted from zero:\n{text}"
+    );
+}
+
+/// Byte offset of the `flags` field in the timecode sample description.
+fn counter_flag_offset(data: &[u8]) -> Option<usize> {
+    // Walked literally, so the test does not depend on the reader it checks.
+    let mut i = 0usize;
+    while i + 8 <= data.len() {
+        let size = u32::from_be_bytes(data[i..i + 4].try_into().ok()?) as usize;
+        let (size, header) = if size == 1 {
+            (
+                u64::from_be_bytes(data[i + 8..i + 16].try_into().ok()?) as usize,
+                16,
+            )
+        } else if size == 0 {
+            (data.len() - i, 8)
+        } else {
+            (size, 8)
+        };
+        if size < header {
+            return None;
+        }
+        if &data[i + 4..i + 8] == b"moov" {
+            // Inside the moov, find the `tmcd` sample entry: it is the only
+            // `tmcd` box that is preceded by a `stsd`.
+            let end = i + size;
+            let mut j = i + header;
+            let mut last_stsd = None;
+            while j + 8 <= end {
+                if &data[j..j + 4] == b"stsd" {
+                    last_stsd = Some(j);
+                }
+                if &data[j..j + 4] == b"tmcd" && last_stsd.is_some_and(|s| j > s && j - s < 32) {
+                    // `tmcd` type, then 8 bytes of sample-entry preamble and
+                    // 4 reserved bytes, then the flags.
+                    return Some(j + 4 + 8 + 4);
+                }
+                j += 1;
+            }
+            return None;
+        }
+        i += size;
+    }
+    None
+}
+
+#[test]
+fn a_retimed_events_m2_record_is_in_source_timecode_too() {
+    // The M2 record names the first picture the event shows, and a reader
+    // looks for that picture on the camera original — so it is the camera's
+    // numbering, exactly like the source columns beside it. Counting it from
+    // zero while the source columns counted from an hour would put the speed
+    // record on a different frame from the event it describes.
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("M001.mov");
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, Rate::F24, 4).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+    let tl = cut(&mut c, &media, 48, 24, Rate::F24);
+
+    let t = c.call("timeline", json!({ "id": tl }));
+    let track = t["tracks"][0]["id"].as_str().unwrap().to_string();
+    let clip = c.call("timeline", json!({ "id": tl }))["tracks"][0]["items"][0]["id"]
+        .as_str()
+        .expect("a clip on the track")
+        .to_string();
+    let _ = track;
+    // Half speed: 24 frames of media over 48 of track.
+    let done = c.call(
+        "retime",
+        json!({ "clip": clip, "played": { "ticks": 48, "rate_num": 24, "rate_den": 1 } }),
+    );
+    assert!(done.get("error").is_none(), "{done}");
+
+    let text = edl(&mut c);
+    let m2 = text
+        .lines()
+        .find(|l| l.starts_with("M2"))
+        .unwrap_or_else(|| panic!("no M2 record in:\n{text}"));
+    assert!(
+        m2.contains("01:00:02:00"),
+        "the M2 record names the first picture in the camera's numbering: {m2}\n{text}"
+    );
+    assert!(
+        m2.contains("12.00"),
+        "and the speed it plays at: {m2}\n{text}"
+    );
+    let (in_col, _) = source_columns(&text);
+    assert_eq!(
+        in_col, "01:00:02:00",
+        "which is the frame the event starts on: {text}"
+    );
+}

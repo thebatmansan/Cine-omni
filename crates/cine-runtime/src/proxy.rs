@@ -516,7 +516,7 @@ pub fn generate(
                             // original's timecode too: a stand-in that could
                             // not be conformed like what it stands in for is
                             // not a stand-in.
-                            timecode: info.start_timecode.filter(|t| t.rate == rate),
+                            timecode: info.labelling_timecode().filter(|t| t.rate == rate),
                             first_picture: 0,
                         },
                     )

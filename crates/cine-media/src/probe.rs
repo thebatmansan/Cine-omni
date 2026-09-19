@@ -193,7 +193,9 @@ fn probe_isobmff(path: &Path, hash: ContentHash) -> Result<MediaFile> {
         streams,
         // The camera's own numbering, where the file carries it. `None` means
         // the file has no timecode track, never that it starts at zero.
-        start_timecode: crate::tmcd::source_timecode(path).map(|t| t.start),
+        // The whole timecode track, not just where it starts: whether it may
+        // be used to label a frame is decided in one place, not here.
+        source_timecode: crate::tmcd::source_timecode(path),
         source: None,
     })
 }
@@ -259,7 +261,7 @@ fn probe_with_symphonia(
         hash,
         container,
         streams,
-        start_timecode: None,
+        source_timecode: None,
         source: None,
     })
 }
@@ -299,7 +301,7 @@ fn probe_image(path: &Path, hash: ContentHash) -> Result<MediaFile> {
             audio: None,
             decodable: true,
         }],
-        start_timecode: None,
+        source_timecode: None,
         source: None,
     })
 }

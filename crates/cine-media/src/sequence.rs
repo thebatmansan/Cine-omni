@@ -266,7 +266,7 @@ pub fn probe_sequence(one_file: &Path, rate: Rate) -> Result<MediaFile> {
             audio: None,
             decodable: true,
         }],
-        start_timecode: None,
+        source_timecode: None,
         source: None,
     })
 }

@@ -308,13 +308,35 @@ pub struct MediaFile {
     pub hash: ContentHash,
     pub container: ContainerKind,
     pub streams: Vec<StreamInfo>,
-    /// Start timecode, when the container carries one.
-    pub start_timecode: Option<Timecode>,
+    /// The timecode track the container carries, whole.
+    ///
+    /// The *whole* fact, not just its start: a counter and a discontinuous
+    /// track both have a start, and neither may be used to label a frame. See
+    /// [`MediaFile::labelling_timecode`], which is the one place that decides.
+    #[serde(default, alias = "start_timecode")]
+    pub source_timecode: Option<crate::tmcd::SourceTimecode>,
     /// The card or reel this came from, when ingest knew it.
     pub source: Option<PhysicalSource>,
 }
 
 impl MediaFile {
+    /// The clock a frame of this media may be labelled with, if any.
+    ///
+    /// Every surface that turns a picture into a timecode — the viewer's
+    /// readout, an EDL's source columns, a proxy's own timecode track — asks
+    /// this and nothing else, so there is one interpretation of what a source
+    /// timecode means and one place it can be got wrong.
+    pub fn labelling_timecode(&self) -> Option<Timecode> {
+        self.source_timecode.as_ref().and_then(|t| t.labelling())
+    }
+
+    /// Where the timecode track starts, whatever kind of track it is.
+    ///
+    /// For display. Not for arithmetic — use [`MediaFile::labelling_timecode`].
+    pub fn timecode_start(&self) -> Option<Timecode> {
+        self.source_timecode.as_ref().map(|t| t.start)
+    }
+
     /// Deterministic entity id, derived from **content**, not path.
     ///
     /// Two copies of the same file in different folders are one media identity.

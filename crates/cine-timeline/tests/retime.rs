@@ -308,7 +308,7 @@ fn an_edl_writes_a_motion_record_and_two_different_lengths() {
     timeline.tracks.children.push(Composable::Track(
         Track::new("V1", TrackKind::Video).with(retimed("A001C001", 24, false)),
     ));
-    let (text, report) = write_edl(&timeline, 0, "Assembly");
+    let (text, report) = write_edl(&timeline, 0, "Assembly", &cine_timeline::edl::from_zero);
     assert!(text.contains("M2   A001C001"), "{text}");
     assert!(
         text.contains("48.00"),

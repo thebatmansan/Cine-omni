@@ -47,7 +47,7 @@ use std::path::Path;
 use ucg_core::Rate;
 
 /// What a movie's timecode track says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SourceTimecode {
     /// The first frame's timecode.
     pub start: Timecode,
@@ -60,6 +60,40 @@ pub struct SourceTimecode {
     /// How many samples the track holds. More than one means the timecode is
     /// discontinuous, and only the first run's start is read.
     pub runs: u32,
+}
+
+impl SourceTimecode {
+    /// The clock a frame of this media may be *labelled* with, if any.
+    ///
+    /// This is the one place that decides it, because the answer is a
+    /// judgement and not a field. Labelling frame `n` means adding `n` to the
+    /// start, and that is only true of a continuous clock:
+    ///
+    /// * a **counter** counts something that is not time — takes, feet, edits
+    ///   — so adding frames to it produces a number that looks like a
+    ///   timecode and is not one;
+    /// * a **discontinuous** track has more than one run, so the arithmetic is
+    ///   right until the first jam-sync break and wrong after it, which is
+    ///   worse than having no answer.
+    ///
+    /// Both are still *reported* — [`SourceTimecode::start`] is what the track
+    /// begins at either way, and [`counter`](Self::counter) and
+    /// [`runs`](Self::runs) say what it is. What this refuses is the one
+    /// operation that would be a lie.
+    pub fn labelling(&self) -> Option<Timecode> {
+        (!self.counter && self.runs == 1).then_some(self.start)
+    }
+
+    /// Why frames of this media cannot be labelled, if they cannot.
+    pub fn why_not_labelling(&self) -> Option<&'static str> {
+        if self.counter {
+            Some("its timecode track is a counter, not a clock: it counts something that is not time")
+        } else if self.runs > 1 {
+            Some("its timecode is discontinuous, so a frame's timecode cannot be worked out by counting from the start")
+        } else {
+            None
+        }
+    }
 }
 
 /// Flags in a `tmcd` sample description.

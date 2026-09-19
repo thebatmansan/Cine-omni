@@ -370,6 +370,21 @@ pub fn call_sheet_pdf(p: &OmniProject, day: usize) -> std::result::Result<Vec<u8
     ))
 }
 
+/// The sequence an export means: the one being worked on, or the only one.
+///
+/// Exporting a different sequence from the one on screen is the kind of thing
+/// nobody notices until a facility cuts the wrong reel, so the session's focus
+/// decides and the first sequence is only the fallback for a project where
+/// nothing is open.
+fn focused_timeline(p: &OmniProject) -> Option<EntityId> {
+    let g = p.engine.read();
+    let focused = p.session.focus().filter(|id| {
+        g.node(*id)
+            .is_some_and(|n| n.kind.as_str() == kinds::NLE_TIMELINE)
+    });
+    focused.or_else(|| g.of_kind(kinds::NLE_TIMELINE).first().map(|n| n.id))
+}
+
 pub fn export(
     p: &OmniProject,
     what: &str,
@@ -387,28 +402,58 @@ pub fn export(
             p.export_usda(s).map_err(|x| x.to_string())?
         }
         "otio" => {
-            let t = p
-                .engine
-                .read()
-                .of_kind(kinds::NLE_TIMELINE)
-                .first()
-                .map(|n| n.id)
-                .ok_or_else(|| "no timeline imported".to_string())?;
+            let t = focused_timeline(p).ok_or_else(|| "no timeline imported".to_string())?;
             p.export_otio(t).map_err(|x| x.to_string())?
         }
         "edl" => {
             // The cut as CMX3600, with what the format could not carry said
             // in the file itself rather than left for the receiver to find.
+            let timeline_id =
+                focused_timeline(p).ok_or_else(|| "no timeline in this project".to_string())?;
             let g = p.engine.read();
-            let timeline_id = g
-                .of_kind(kinds::NLE_TIMELINE)
-                .first()
-                .map(|n| n.id)
-                .ok_or_else(|| "no timeline in this project".to_string())?;
             let timeline = cine_timeline::graph::export_timeline(&g, timeline_id)
                 .map_err(|e| e.to_string())?;
             let track = scene.unwrap_or(0);
-            let (text, report) = cine_timeline::edl::write_edl(&timeline, track, &timeline.name);
+            // The source columns are what a facility will look for on the
+            // camera original, so they are the camera's numbering. The graph
+            // holds it per asset; a clip is matched to its asset by the path
+            // its media reference names.
+            use cine_timeline::edl::SourceOrigin;
+            let starts: std::collections::HashMap<String, SourceOrigin> = g
+                .of_kind(kinds::ASSET_MEDIA)
+                .iter()
+                .filter_map(|n| {
+                    let path = n.get_str(ucg_schema::attrs::MEDIA_PATH)?.to_string();
+                    let info = cine_media::ucg::read_media(&g, n.id)?;
+                    let found = info.source_timecode?;
+                    // A timecode that cannot label a frame is a refusal with a
+                    // reason, not an absence: the difference is what a facility
+                    // reading zeroes needs to be told.
+                    let origin = match found.labelling().and_then(|t| t.to_frame_number().ok()) {
+                        Some(frames) => {
+                            SourceOrigin::Camera(RationalTime::exact(frames, found.rate))
+                        }
+                        None => SourceOrigin::Refused(
+                            found
+                                .why_not_labelling()
+                                .unwrap_or("its timecode cannot be read")
+                                .to_string(),
+                        ),
+                    };
+                    Some((path, origin))
+                })
+                .collect();
+            let source_start = |clip: &cine_timeline::otio::Clip| -> SourceOrigin {
+                match &clip.media_reference {
+                    cine_timeline::otio::MediaReference::External { target_url, .. } => starts
+                        .get(target_url)
+                        .cloned()
+                        .unwrap_or(SourceOrigin::Unknown),
+                    _ => SourceOrigin::Unknown,
+                }
+            };
+            let (text, report) =
+                cine_timeline::edl::write_edl(&timeline, track, &timeline.name, &source_start);
             let mut out = text;
             for note in &report.left_behind {
                 out.push_str(&format!("* NOT IN THIS EDL: {}\n", note.to_uppercase()));

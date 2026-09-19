@@ -57,7 +57,7 @@ fn a_movie_carries_the_timecode_it_was_written_with_at_every_rate() {
         // reads it from.
         let info = probe::probe(&path).unwrap();
         assert_eq!(
-            info.start_timecode,
+            info.labelling_timecode(),
             Some(wanted),
             "{label} through the probe"
         );
@@ -70,13 +70,13 @@ fn no_timecode_track_is_not_a_timecode_of_zero() {
     let path = dir.path().join("untimed.mov");
     movie(&path, Rate::F24, 1, None);
     assert_eq!(tmcd::source_timecode(&path), None);
-    assert_eq!(probe::probe(&path).unwrap().start_timecode, None);
+    assert_eq!(probe::probe(&path).unwrap().source_timecode, None);
 
     // A take that really does start at zero says so, and is a different answer.
     let zero = dir.path().join("at-zero.mov");
     let tc = Timecode::parse("00:00:00:00", Rate::F24).unwrap();
     movie(&zero, Rate::F24, 1, Some(tc));
-    assert_eq!(probe::probe(&zero).unwrap().start_timecode, Some(tc));
+    assert_eq!(probe::probe(&zero).unwrap().labelling_timecode(), Some(tc));
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn the_test_signal_carries_an_hour_and_the_drop_frame_rates_get_drop_frame_label
         testsignal::bars_and_pops(&path, 160, 90, rate, 1).unwrap();
         let tc = probe::probe(&path)
             .unwrap()
-            .start_timecode
+            .labelling_timecode()
             .expect("timecode");
         assert_eq!((tc.hours, tc.minutes, tc.seconds, tc.frames), (1, 0, 0, 0));
         assert_eq!(
@@ -256,4 +256,165 @@ fn the_bytes_are_what_the_quicktime_specification_says_they_are() {
         107_892,
         "the frame number in the file is the one an hour of drop frame means"
     );
+}
+
+#[test]
+fn a_counter_track_is_a_counter_and_never_labels_a_frame() {
+    // A `tmcd` track whose counter flag is set counts something that is not
+    // time — takes, feet, edits. Its start is a real number and is reported;
+    // what is refused is adding a frame count to it, because the result would
+    // look exactly like a timecode and be one for nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("counter.mov");
+    let rate = Rate::F24;
+    let tc = Timecode::parse("00:00:07:00", rate).unwrap();
+    testsignal::bars_and_pops_from(&path, 160, 90, rate, 1, Some(tc)).unwrap();
+
+    // Set the counter flag in the sample description, as a camera that counts
+    // rather than clocks would have written it.
+    let mut data = std::fs::read(&path).unwrap();
+    let at = flags_offset(&data).expect("a tmcd sample entry");
+    let flags = u32::from_be_bytes(data[at..at + 4].try_into().unwrap());
+    data[at..at + 4].copy_from_slice(&(flags | 0x0008).to_be_bytes());
+    std::fs::write(&path, &data).unwrap();
+
+    let read = tmcd::source_timecode(&path).expect("the track is still read");
+    assert!(read.counter, "the flag is carried, not dropped");
+    assert_eq!(
+        read.start, tc,
+        "and the number it starts at is still reported"
+    );
+    assert_eq!(
+        read.labelling(),
+        None,
+        "but nothing may be labelled with it"
+    );
+    assert!(read.why_not_labelling().unwrap().contains("counter"));
+
+    let info = probe::probe(&path).unwrap();
+    assert_eq!(info.timecode_start(), Some(tc), "reported");
+    assert_eq!(
+        info.labelling_timecode(),
+        None,
+        "and not used for arithmetic"
+    );
+}
+
+#[test]
+fn a_discontinuous_track_reports_its_runs_and_refuses_to_count_through_them() {
+    // More than one sample is more than one run of timecode: the arithmetic is
+    // right until the first jam-sync break and wrong after it, which is worse
+    // than having no answer.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("broken.mov");
+    let rate = Rate::F24;
+    let tc = Timecode::parse("02:00:00:00", rate).unwrap();
+    testsignal::bars_and_pops_from(&path, 160, 90, rate, 1, Some(tc)).unwrap();
+
+    // Claim a second sample in `stsz`, as a file with two runs has.
+    let mut data = std::fs::read(&path).unwrap();
+    let at = stsz_count_offset(&data).expect("the timecode track's stsz");
+    assert_eq!(u32::from_be_bytes(data[at..at + 4].try_into().unwrap()), 1);
+    data[at..at + 4].copy_from_slice(&2u32.to_be_bytes());
+    std::fs::write(&path, &data).unwrap();
+
+    let read = tmcd::source_timecode(&path).expect("the track is still read");
+    assert_eq!(
+        read.runs, 2,
+        "the file says there are two runs, and so does this"
+    );
+    assert_eq!(read.start, tc, "the first run's start is reported");
+    assert_eq!(read.labelling(), None);
+    assert!(read.why_not_labelling().unwrap().contains("discontinuous"));
+    assert_eq!(probe::probe(&path).unwrap().labelling_timecode(), None);
+}
+
+#[test]
+fn an_image_sequence_has_no_source_timecode_and_does_not_invent_one() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 1..=3 {
+        let f = dir.path().join(format!("shot.{i:04}.png"));
+        let img = image::RgbImage::from_pixel(8, 8, image::Rgb([9, 9, 9]));
+        img.save(&f).unwrap();
+    }
+    let info =
+        cine_media::sequence::probe_sequence(&dir.path().join("shot.0001.png"), Rate::F24).unwrap();
+    assert_eq!(info.source_timecode, None);
+    assert_eq!(info.labelling_timecode(), None);
+    assert_eq!(info.timecode_start(), None);
+}
+
+/// Byte offset of the `flags` field in the timecode sample description.
+fn flags_offset(data: &[u8]) -> Option<usize> {
+    stbl_field(data, b"stsd", |body, at| {
+        // Full box header (4) and entry count (4), then the `tmcd` entry's own
+        // 8-byte header, then 8 bytes before `flags`.
+        let entry = by_the_spec::boxes(&body[8..])
+            .into_iter()
+            .position(|(t, _)| &t == b"tmcd")?;
+        (entry == 0).then_some(at + 8 + 8 + 8 + 4)
+    })
+}
+
+/// Byte offset of the sample count in the timecode track's `stsz`.
+fn stsz_count_offset(data: &[u8]) -> Option<usize> {
+    stbl_field(data, b"stsz", |_, at| Some(at + 8))
+}
+
+/// Find a box inside the timecode track's `stbl` and locate a field in it,
+/// returning an absolute offset into the file.
+fn stbl_field(
+    data: &[u8],
+    want: &[u8; 4],
+    field: impl Fn(&[u8], usize) -> Option<usize>,
+) -> Option<usize> {
+    use by_the_spec::{boxes, find};
+    // Offsets are needed, so the search is by position within the file rather
+    // than by slice identity.
+    let moov_at = locate(data, 0, b"moov")?;
+    let moov = find(data, &[b"moov"])?;
+    for (typ, trak) in boxes(moov) {
+        if &typ != b"trak" {
+            continue;
+        }
+        if find(trak, &[b"mdia", b"hdlr"]).is_none_or(|h| &h[8..12] != b"tmcd") {
+            continue;
+        }
+        let trak_at = moov_at + offset_of(moov, trak);
+        let stbl = find(trak, &[b"mdia", b"minf", b"stbl"])?;
+        let stbl_at = trak_at + offset_of(trak, stbl);
+        let body = find(stbl, &[want])?;
+        let body_at = stbl_at + offset_of(stbl, body);
+        return field(body, body_at);
+    }
+    None
+}
+
+/// Where a child's body begins inside its parent's body.
+fn offset_of(parent: &[u8], child: &[u8]) -> usize {
+    child.as_ptr() as usize - parent.as_ptr() as usize
+}
+
+/// Where the body of the first top-level box of this type begins.
+fn locate(data: &[u8], from: usize, want: &[u8; 4]) -> Option<usize> {
+    let mut i = from;
+    while i + 8 <= data.len() {
+        let mut size = u32::from_be_bytes(data[i..i + 4].try_into().ok()?) as usize;
+        let typ = &data[i + 4..i + 8];
+        let mut header = 8usize;
+        if size == 1 {
+            size = u64::from_be_bytes(data[i + 8..i + 16].try_into().ok()?) as usize;
+            header = 16;
+        } else if size == 0 {
+            size = data.len() - i;
+        }
+        if size < header {
+            return None;
+        }
+        if typ == want {
+            return Some(i + header);
+        }
+        i += size;
+    }
+    None
 }

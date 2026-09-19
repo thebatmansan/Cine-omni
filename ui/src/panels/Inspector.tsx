@@ -549,6 +549,22 @@ function MediaDetail({
             </dd>
             <dt>frame</dt>
             <dd>{media.timecode.frame ?? "—"}</dd>
+            <dt>kind</dt>
+            <dd>
+              {media.timecode.counter
+                ? "counter"
+                : media.timecode.runs > 1
+                  ? `discontinuous · ${media.timecode.runs} runs`
+                  : "continuous clock"}
+            </dd>
+            {/* A number that looks like a time of day and cannot be used as
+                one has to say so where it is shown, or it will be read as one. */}
+            {!media.timecode.labels_frames && (
+              <>
+                <dt>labels frames</dt>
+                <dd className="bad">no — {media.timecode.why_not}</dd>
+              </>
+            )}
           </>
         ) : (
           <>

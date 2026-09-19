@@ -965,8 +965,82 @@ Measured in the real application (`ui/e2e/ingest.mjs`): a `cine bars` roll
 written at one hour reads `01:00:00:00` in the inspector, and picture 12 reads
 `01:00:00:12` in the viewer.
 
-Still counted from zero, and next: an EDL's source columns, which need each
-asset's available range carried through the import.
+#### One interpretation, and what it refuses
+
+A timecode track has a start whatever kind of track it is, and the start is
+always reported. What is not always allowed is the one operation that turns a
+start into a label for an arbitrary frame — adding a frame count to it:
+
+| what the track is | start reported | labels frames | what the EDL does |
+|---|---|---|---|
+| a continuous clock | yes | yes | source columns in the camera's numbering |
+| a **counter** (flag bit 3) | yes | **no** | counts from zero, and says why in the file |
+| **discontinuous** (more than one run) | yes, the first run's | **no** | counts from zero, and says why in the file |
+| no timecode track | — | — | counts from zero; nothing to say |
+| an image sequence | — | — | counts from zero; nothing to say |
+
+`SourceTimecode::labelling` is the only place that decides, and every surface
+that turns a picture into a timecode asks it: the viewer's readout, an EDL's
+source columns, the timecode track a proxy is written with. A counter counts
+takes or feet or edits, so adding frames to it produces a number that looks
+exactly like a timecode and is one for nothing. A discontinuous track is right
+until the first jam-sync break and wrong after it, which is worse than having
+no answer.
+
+**A defect this audit found.** `tmcd.rs` computed both facts and its own
+documentation promised a counter would be "reported as a counter rather than
+dressed up as a clock" — and then `probe` kept only `.start` and threw the rest
+away. Every counter in the project was being presented as a time of day, and
+every discontinuous take as a continuous one. `MediaFile` now carries the whole
+track, and the inspector says which kind it is and, where frames cannot be
+labelled, why not.
+
+#### Conforming: the EDL
+
+The source columns are what a facility looks for on the camera original, so
+they are the camera's numbering — the media-relative source range added to the
+take's start, never replacing it: the range says which part of the take is
+used, and the start says what that part is called. The record columns are the
+cut's own numbering, which begins at zero because a sequence has no start
+timecode in this build.
+
+Held at 24, 25, 30, 23.976, 29.97 non-drop, 29.97 drop-frame and 59.94, with a
+clip starting at a non-zero offset inside a take whose timecode is not zero —
+the case where every way of getting this wrong shows up. The labels are read
+back and turned into frame numbers rather than compared as strings, because
+that is what a conform does with them: the question is not what a label looks
+like but which frame it names.
+
+**Two defects this found.**
+
+* `FCM: NON-DROP FRAME` was a constant, printed directly above drop-frame
+  labels. Frame Code Mode tells a reader how to interpret every label that
+  follows, so a reader honouring it would take `01:00:01;00` for 108 030 frames
+  when it means 107 922 — the conform error timecode exists to prevent. The
+  mode now follows the rate the cut is at and every label in the file is
+  written in it, record columns included.
+* `export` exported the *first* sequence in the project rather than the one
+  being worked on, for both EDL and OTIO. Nobody notices until a facility cuts
+  the wrong reel.
+
+Re-labelling is faithful across namings: a take whose camera wrote non-drop
+`01:00:00:00` at 29.97 is frame 108 000, and the EDL writes `01:00:03;18`,
+which is the same frame under drop-frame naming, under an FCM line that says
+so.
+
+#### What conform does not cover yet
+
+**OTIO export writes an available range starting at zero.** An OTIO reader
+takes a media reference's available range as the media's own coordinates, so
+that is a claim that the take's timecode starts at 00:00:00:00 — which for a
+take the camera numbered `01:00:00:00` is not true. Source ranges are
+media-relative everywhere in this build, and the fix is to put them in timecode
+space rather than to shift the available range alone, which would break every
+trim that clamps against it. Recorded as the limit of `time.timecode.conform`
+rather than left to be discovered in a conform.
+
+**A rendered cut carries no record timecode**, because a sequence has no start
+timecode here yet. Writing one would invent the number a conform depends on.
 
 ### What a job guarantees, audited
 

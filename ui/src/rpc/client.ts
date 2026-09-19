@@ -726,6 +726,17 @@ export interface MediaView {
     rate_num: number;
     rate_den: number;
     frame: number | null;
+    /** The track counts something that is not the time of day. */
+    counter: boolean;
+    /** More than one run means the timecode is discontinuous. */
+    runs: number;
+    /**
+     * Whether a frame of this media may be labelled by counting from `start`.
+     * False for a counter and for a discontinuous track: both have a start,
+     * and neither can name an arbitrary frame.
+     */
+    labels_frames: boolean;
+    why_not: string | null;
   } | null;
   checksum: ChecksumRecord | null;
   /** Stand-ins made from this original, with whether each is still usable. */

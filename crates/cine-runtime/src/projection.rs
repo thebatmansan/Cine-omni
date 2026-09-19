@@ -299,12 +299,20 @@ pub fn media(graph: &Graph) -> J {
                     // The camera's own numbering for this take's first frame,
                     // where the file carries one. Absent means the file has no
                     // timecode track — never that the take starts at zero.
-                    "timecode": info.as_ref().and_then(|i| i.start_timecode).map(|t| json!({
-                        "start": t.to_string(),
-                        "drop_frame": t.drop_frame,
+                    // The whole fact. A counter and a discontinuous track both
+                    // have a start and neither may label a frame, so the answer
+                    // says which it is rather than leaving the interface to
+                    // guess from a number that looks like a time of day.
+                    "timecode": info.as_ref().and_then(|i| i.source_timecode).map(|t| json!({
+                        "start": t.start.to_string(),
+                        "drop_frame": t.start.drop_frame,
                         "rate_num": t.rate.num(),
                         "rate_den": t.rate.den(),
-                        "frame": t.to_frame_number().ok(),
+                        "frame": t.start_frame,
+                        "counter": t.counter,
+                        "runs": t.runs,
+                        "labels_frames": t.labelling().is_some(),
+                        "why_not": t.why_not_labelling(),
                     })),
                     "streams": streams,
                     "proxies": crate::proxy::proxies_json(graph, n.id),

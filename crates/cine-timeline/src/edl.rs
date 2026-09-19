@@ -60,11 +60,47 @@ impl Channel {
     }
 }
 
+/// What an event's source columns count from.
+///
+/// The source columns of an EDL are the numbers a facility will look for on
+/// the camera original, so they must be the camera's — this build counts a
+/// clip's source range from zero inside the file, and this is what turns that
+/// into what the rest of the industry reads.
+///
+/// Counting from zero is a legitimate answer for media that carries no
+/// timecode, and a *refusal* for media whose timecode exists but cannot label
+/// a frame. The two are different things to say, and an EDL that quietly wrote
+/// zeroes for the second would be handing a facility numbers that point at the
+/// head of the tape.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SourceOrigin {
+    /// The camera's own numbering for this media's first frame.
+    Camera(RationalTime),
+    /// Zero, because this media carries no timecode at all.
+    Unknown,
+    /// Zero, because this media's timecode cannot label a frame — and why.
+    Refused(String),
+}
+
+/// Where a clip's media starts, in the camera's own numbering.
+pub type SourceStart<'a> = dyn Fn(&crate::otio::Clip) -> SourceOrigin + 'a;
+
+/// No media carries timecode: every source column counts from zero.
+pub fn from_zero(_: &crate::otio::Clip) -> SourceOrigin {
+    SourceOrigin::Unknown
+}
+
 /// Write one track of `timeline` as a CMX3600 EDL.
 ///
 /// `title` is the EDL's own title line — by convention the sequence name, in
-/// upper case, because the format is upper case.
-pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (String, EdlReport) {
+/// upper case, because the format is upper case. `source_start` gives each
+/// clip's media start timecode; [`from_zero`] where none is known.
+pub fn write_edl(
+    timeline: &Timeline,
+    track_index: usize,
+    title: &str,
+    source_start: &SourceStart<'_>,
+) -> (String, EdlReport) {
     let mut report = EdlReport::default();
     let tracks: Vec<&crate::otio::Track> = timeline
         .tracks
@@ -101,7 +137,28 @@ pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (Strin
         .global_start_time
         .unwrap_or_else(|| RationalTime::zero(timeline.duration().rate_exact()));
 
-    let mut out = format!("TITLE: {}\nFCM: NON-DROP FRAME\n", title.to_uppercase());
+    // Frame Code Mode describes the labels in the events that follow, and a
+    // reader applies it to them. Writing NON-DROP above drop-frame labels —
+    // which is what this did — tells a reader to take `01:00:01;00` for 108030
+    // frames when it means 107922, and that difference is the conform error
+    // timecode exists to prevent. The mode follows the rate the cut is at, and
+    // every label in the file is then written in it.
+    let drop_frame = start.rate_exact().supports_drop_frame();
+    let mut out = format!(
+        "TITLE: {}\nFCM: {}\n",
+        title.to_uppercase(),
+        if drop_frame {
+            "DROP FRAME"
+        } else {
+            "NON-DROP FRAME"
+        }
+    );
+    let label = |t: RationalTime| -> String {
+        match t.to_drop_frame_timecode() {
+            Some(s) if drop_frame => s,
+            _ => t.to_timecode(),
+        }
+    };
     let mut at = start;
     let mut number = 0usize;
     for item in &track.children {
@@ -134,6 +191,40 @@ pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (Strin
                 let played = clip.duration();
                 let record = TimeRange::new(at, played);
                 let reel = reel_name(&clip.name);
+                // The camera's numbering for this media, where it has one.
+                // Added to the media-relative source range, never used to
+                // replace it: the range says which part of the take is used,
+                // and this says what that part is called.
+                let base = match source_start(clip) {
+                    SourceOrigin::Camera(b) if b.rate_exact() == source.start_time.rate_exact() => {
+                        Some(b)
+                    }
+                    SourceOrigin::Camera(b) => {
+                        report.left_behind.push(format!(
+                            "`{}` has source timecode counting at {} and a source range at {}, \
+                             so its source columns count from zero rather than from a number \
+                             that would be wrong",
+                            clip.name,
+                            b.rate_exact(),
+                            source.start_time.rate_exact()
+                        ));
+                        None
+                    }
+                    SourceOrigin::Refused(why) => {
+                        report.left_behind.push(format!(
+                            "`{}` counts from zero in the source columns because {why}",
+                            clip.name
+                        ));
+                        None
+                    }
+                    SourceOrigin::Unknown => None,
+                };
+                let tc = |t: RationalTime| -> String {
+                    label(match base {
+                        Some(b) => b.checked_add(&t),
+                        None => t,
+                    })
+                };
                 if let Some(((num, den), reversed)) = clip.speed() {
                     let fps = source.duration.rate_hz() * num as f64 / den as f64;
                     let fps = if reversed { -fps } else { fps };
@@ -145,10 +236,7 @@ pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (Strin
                             RationalTime::zero(played.rate_exact()),
                         )
                         .unwrap_or(source.start_time);
-                    out.push_str(&format!(
-                        "M2   {reel:<8}       {fps:>8.2} {}\n",
-                        first.to_timecode()
-                    ));
+                    out.push_str(&format!("M2   {reel:<8}       {fps:>8.2} {}\n", tc(first)));
                     report.left_behind.push(format!(
                         "`{}` is retimed to {num}/{den}{}: the speed is in an M2 record, and \
                          readers differ on whether a retimed event's source columns are the \
@@ -164,12 +252,15 @@ pub fn write_edl(timeline: &Timeline, track_index: usize, title: &str) -> (Strin
                         ));
                     }
                 }
+                // Source columns are the camera's numbering; record columns are
+                // the cut's own, which starts at zero because a sequence has no
+                // start timecode in this build yet.
                 out.push_str(&format!(
                     "{number:03}  {reel:<8} {channel:<4} C        {} {} {} {}\n",
-                    source.start_time.to_timecode(),
-                    source.end_time_exclusive().to_timecode(),
-                    record.start_time.to_timecode(),
-                    record.end_time_exclusive().to_timecode(),
+                    tc(source.start_time),
+                    tc(source.end_time_exclusive()),
+                    label(record.start_time),
+                    label(record.end_time_exclusive()),
                     channel = channel.code(),
                 ));
                 out.push_str(&format!("* FROM CLIP NAME: {}\n", clip.name.to_uppercase()));
@@ -241,7 +332,7 @@ mod tests {
             clip("A001C001", 24 * 10, 48),
             clip("A001C002", 24 * 30, 24),
         ]);
-        let (text, report) = write_edl(&t, 0, "Assembly");
+        let (text, report) = write_edl(&t, 0, "Assembly", &from_zero);
         assert_eq!(report.events, 2);
         assert!(report.left_behind.is_empty(), "{:?}", report.left_behind);
         let lines: Vec<&str> = text.lines().collect();
@@ -267,7 +358,7 @@ mod tests {
             Item::Gap(gap),
             clip("A001C002", 0, 24),
         ]);
-        let (text, report) = write_edl(&t, 0, "Assembly");
+        let (text, report) = write_edl(&t, 0, "Assembly", &from_zero);
         assert_eq!(report.events, 2);
         assert!(
             text.contains("01:00:02:00 01:00:03:00"),
@@ -287,7 +378,7 @@ mod tests {
                 children: vec![clip("TITLE", 0, 24)],
                 ..Default::default()
             }));
-        let (_, report) = write_edl(&t, 0, "Assembly");
+        let (_, report) = write_edl(&t, 0, "Assembly", &from_zero);
         assert!(
             report
                 .left_behind
@@ -305,7 +396,7 @@ mod tests {
         };
         nameless.source_range = None;
         let t = timeline(vec![Item::Clip(nameless)]);
-        let (text, report) = write_edl(&t, 0, "Assembly");
+        let (text, report) = write_edl(&t, 0, "Assembly", &from_zero);
         assert_eq!(report.events, 0);
         assert!(
             report.left_behind[0].contains("no source range"),
@@ -325,7 +416,7 @@ mod tests {
             "something unusable is not an empty column"
         );
         let t = timeline(vec![clip("a very long clip name indeed", 0, 24)]);
-        let (text, _) = write_edl(&t, 0, "Assembly");
+        let (text, _) = write_edl(&t, 0, "Assembly", &from_zero);
         assert!(text.contains("AVERYLON"), "{text}");
         assert!(
             text.contains("* FROM CLIP NAME: A VERY LONG CLIP NAME INDEED"),

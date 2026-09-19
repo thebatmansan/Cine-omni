@@ -668,7 +668,7 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     let source_timecode = {
         let g = runtime.project.engine.read();
         cine_media::ucg::read_media(&g, media)
-            .and_then(|i| i.start_timecode)
+            .and_then(|i| i.labelling_timecode())
             .and_then(|t| t.plus_frames(index as i64).ok())
     };
     match runtime
