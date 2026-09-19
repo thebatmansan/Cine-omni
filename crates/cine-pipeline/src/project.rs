@@ -218,8 +218,13 @@ impl OmniProject {
 
     /// Import an OpenTimelineIO JSON document as a timeline.
     pub fn import_otio(&self, json: &str, source_key: &str) -> Result<EntityId> {
-        let timeline = cine_timeline::otio_json::read_otio(json)
+        let mut timeline = cine_timeline::otio_json::read_otio(json)
             .map_err(|e| PipelineError::Timeline(e.to_string()))?;
+        // An OTIO file is in the media's own coordinates, whoever wrote it.
+        // This build edits in media-relative ones, and a trim clamps against
+        // an available range, so the file is normalised on the way in rather
+        // than left to be subtracted at every use.
+        cine_timeline::timecode_space::into_media_relative(&mut timeline);
         let root = self.root;
         let mut id = EntityId::nil();
         self.engine
@@ -322,7 +327,13 @@ impl OmniProject {
         Ok(cine_script::fdx::write_fdx(&sp))
     }
 
-    /// Export a timeline as OTIO JSON.
+    /// Export a timeline as OTIO JSON, in this build's own coordinates.
+    ///
+    /// Source ranges count from zero inside the file. An OTIO reader expects
+    /// them in the media's own numbering, so the runtime converts at the edge
+    /// before writing a file for anyone else — see `cine_runtime`'s `otio`
+    /// export and [`cine_timeline::timecode_space`]. This crate owns reactors,
+    /// not media decoding, and does not read timecode tracks to find out.
     pub fn export_otio(&self, timeline: EntityId) -> Result<String> {
         let g = self.engine.read();
         let t = cine_timeline::graph::export_timeline(&g, timeline)

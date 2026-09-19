@@ -9,7 +9,7 @@
 mod common;
 
 use common::{Client, Harness};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use ucg_core::Rate;
@@ -677,4 +677,121 @@ fn a_rendered_movie_carries_the_record_timecode_of_its_first_frame() {
         Some("01:00:00:06".to_string()),
         "and it is a clock, so it labels frames"
     );
+}
+
+#[test]
+fn otio_is_written_in_the_medias_own_numbering_and_read_back_into_ours() {
+    // An OTIO reader takes a media reference's available range as the media's
+    // own coordinates. Writing `0 … duration` for a take the camera numbered
+    // 01:00:00:00 is not a simplification a reader can see — it is a statement
+    // that the take begins at midnight.
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("A001C001.mov");
+    cine_media::testsignal::bars_and_pops(&source, 160, 90, Rate::F24, 3).unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let media = import(&mut c, &source);
+    cut_starting(&mut c, &media, "01:00:00:00", 24, 12, Rate::F24);
+
+    let text = c
+        .call("export", json!({ "what": "otio" }))
+        .as_str()
+        .unwrap()
+        .to_string();
+    let doc: Value = serde_json::from_str(&text).expect("OTIO json");
+    let clip = doc["tracks"]["children"][0]["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["OTIO_SCHEMA"].as_str().unwrap_or("").starts_with("Clip"))
+        .expect("a clip");
+
+    let value = |v: &Value| -> i64 { v["value"].as_f64().unwrap() as i64 };
+    // The take starts at an hour, and the clip plays from a second into it.
+    assert_eq!(
+        value(&clip["media_references"]["DEFAULT_MEDIA"]["available_range"]["start_time"]),
+        86_400,
+        "the available range begins where the camera says the take does: {clip}"
+    );
+    assert_eq!(
+        value(&clip["source_range"]["start_time"]),
+        86_424,
+        "and the source range is in the same numbering: {clip}"
+    );
+    assert_eq!(
+        value(&clip["source_range"]["duration"]),
+        12,
+        "the length is untouched"
+    );
+    // The cut's own clock is carried separately, and is not the camera's.
+    assert_eq!(value(&doc["global_start_time"]), 86_400);
+
+    // Read back, it lands in the coordinates this build edits in — otherwise
+    // every trim would clamp against numbers from another space.
+    let imported = c.call(
+        "import_otio",
+        json!({ "text": text, "key": "round-trip.otio" }),
+    );
+    assert!(imported.get("error").is_none(), "{imported}");
+    let back = c.call("timeline", json!({ "id": imported["id"] }));
+    let item = &back["tracks"][0]["items"][0];
+    assert_eq!(
+        item["source_range"]["start"]["ticks"], 24,
+        "media-relative again: {item}"
+    );
+    assert_eq!(item["source_range"]["duration"]["ticks"], 12, "{item}");
+}
+
+#[test]
+fn otio_from_another_tool_lands_in_our_coordinates() {
+    // Never written by us: in timecode all along, which is what every other
+    // tool produces. Importing it must not leave source ranges an hour out.
+    let dir = tempfile::tempdir().unwrap();
+    let h = Harness::start_in(project(dir.path()));
+    let mut c = h.client();
+    let doc = json!({
+        "OTIO_SCHEMA": "Timeline.1",
+        "name": "From elsewhere",
+        "global_start_time": { "OTIO_SCHEMA": "RationalTime.1", "rate": 24.0, "value": 86400.0 },
+        "tracks": {
+            "OTIO_SCHEMA": "Stack.1",
+            "name": "tracks",
+            "children": [{
+                "OTIO_SCHEMA": "Track.1",
+                "name": "V1",
+                "kind": "Video",
+                "children": [{
+                    "OTIO_SCHEMA": "Clip.1",
+                    "name": "A001C001",
+                    "source_range": {
+                        "OTIO_SCHEMA": "TimeRange.1",
+                        "start_time": { "OTIO_SCHEMA": "RationalTime.1", "rate": 24.0, "value": 90000.0 },
+                        "duration": { "OTIO_SCHEMA": "RationalTime.1", "rate": 24.0, "value": 48.0 }
+                    },
+                    "media_reference": {
+                        "OTIO_SCHEMA": "ExternalReference.1",
+                        "target_url": "/card/A001C001.mov",
+                        "available_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "start_time": { "OTIO_SCHEMA": "RationalTime.1", "rate": 24.0, "value": 86400.0 },
+                            "duration": { "OTIO_SCHEMA": "RationalTime.1", "rate": 24.0, "value": 7200.0 }
+                        }
+                    }
+                }]
+            }]
+        }
+    });
+    let imported = c.call(
+        "import_otio",
+        json!({ "text": doc.to_string(), "key": "elsewhere.otio" }),
+    );
+    assert!(imported.get("error").is_none(), "{imported}");
+    let back = c.call("timeline", json!({ "id": imported["id"] }));
+    let item = &back["tracks"][0]["items"][0];
+    // 90000 - 86400 = 3600 frames into the take, and the length is unchanged.
+    assert_eq!(
+        item["source_range"]["start"]["ticks"], 3_600,
+        "an hour of camera numbering is taken off: {item}"
+    );
+    assert_eq!(item["source_range"]["duration"]["ticks"], 48, "{item}");
 }

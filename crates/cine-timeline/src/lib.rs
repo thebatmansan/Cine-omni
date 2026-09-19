@@ -54,6 +54,7 @@ pub mod scc;
 pub mod session;
 pub mod sync;
 pub mod three_point;
+pub mod timecode_space;
 
 pub use edit::{
     diff, diff_tracks, extract, insert, join, lift, overwrite, replace, ripple_trim, roll, slide,

@@ -370,6 +370,53 @@ pub fn call_sheet_pdf(p: &OmniProject, day: usize) -> std::result::Result<Vec<u8
     ))
 }
 
+/// Where each media on disk begins, in the camera's numbering.
+///
+/// Only media whose timecode can label a frame: a counter and a discontinuous
+/// track both have a start, and neither may be counted from.
+fn media_timecode_starts(g: &Graph) -> std::collections::HashMap<String, RationalTime> {
+    g.of_kind(kinds::ASSET_MEDIA)
+        .iter()
+        .filter_map(|n| {
+            let path = n.get_str(ucg_schema::attrs::MEDIA_PATH)?.to_string();
+            let info = cine_media::ucg::read_media(g, n.id)?;
+            let tc = info.labelling_timecode()?;
+            Some((
+                path,
+                RationalTime::exact(tc.to_frame_number().ok()?, tc.rate),
+            ))
+        })
+        .collect()
+}
+
+/// The same, for an EDL, which has somewhere to say why it could not.
+///
+/// A timecode that cannot label a frame is a refusal with a reason, not an
+/// absence: the difference is what a facility reading zeroes needs told.
+fn media_timecode_origins(
+    g: &Graph,
+) -> std::collections::HashMap<String, cine_timeline::edl::SourceOrigin> {
+    use cine_timeline::edl::SourceOrigin;
+    g.of_kind(kinds::ASSET_MEDIA)
+        .iter()
+        .filter_map(|n| {
+            let path = n.get_str(ucg_schema::attrs::MEDIA_PATH)?.to_string();
+            let info = cine_media::ucg::read_media(g, n.id)?;
+            let found = info.source_timecode?;
+            let origin = match found.labelling().and_then(|t| t.to_frame_number().ok()) {
+                Some(frames) => SourceOrigin::Camera(RationalTime::exact(frames, found.rate)),
+                None => SourceOrigin::Refused(
+                    found
+                        .why_not_labelling()
+                        .unwrap_or("its timecode cannot be read")
+                        .to_string(),
+                ),
+            };
+            Some((path, origin))
+        })
+        .collect()
+}
+
 /// The sequence an export means: the one being worked on, or the only one.
 ///
 /// Exporting a different sequence from the one on screen is the kind of thing
@@ -402,8 +449,26 @@ pub fn export(
             p.export_usda(s).map_err(|x| x.to_string())?
         }
         "otio" => {
-            let t = focused_timeline(p).ok_or_else(|| "no timeline imported".to_string())?;
-            p.export_otio(t).map_err(|x| x.to_string())?
+            // Written in the coordinates OTIO is read in: a media reference's
+            // available range begins where the camera says the take begins,
+            // and the clip's source range is in the same numbering. Inside
+            // this build both count from zero inside the file, and the
+            // conversion happens here, at the edge of the file, so that
+            // nothing in the model has to move.
+            let id = focused_timeline(p).ok_or_else(|| "no timeline imported".to_string())?;
+            let g = p.engine.read();
+            let mut t = cine_timeline::graph::export_timeline(&g, id).map_err(|e| e.to_string())?;
+            let starts = media_timecode_starts(&g);
+            cine_timeline::timecode_space::into_timecode(
+                &mut t,
+                &|clip| match &clip.media_reference {
+                    cine_timeline::otio::MediaReference::External { target_url, .. } => {
+                        starts.get(target_url).copied()
+                    }
+                    _ => None,
+                },
+            );
+            cine_timeline::otio_json::write_otio(&t)
         }
         "edl" => {
             // The cut as CMX3600, with what the format could not carry said
@@ -419,30 +484,7 @@ pub fn export(
             // holds it per asset; a clip is matched to its asset by the path
             // its media reference names.
             use cine_timeline::edl::SourceOrigin;
-            let starts: std::collections::HashMap<String, SourceOrigin> = g
-                .of_kind(kinds::ASSET_MEDIA)
-                .iter()
-                .filter_map(|n| {
-                    let path = n.get_str(ucg_schema::attrs::MEDIA_PATH)?.to_string();
-                    let info = cine_media::ucg::read_media(&g, n.id)?;
-                    let found = info.source_timecode?;
-                    // A timecode that cannot label a frame is a refusal with a
-                    // reason, not an absence: the difference is what a facility
-                    // reading zeroes needs to be told.
-                    let origin = match found.labelling().and_then(|t| t.to_frame_number().ok()) {
-                        Some(frames) => {
-                            SourceOrigin::Camera(RationalTime::exact(frames, found.rate))
-                        }
-                        None => SourceOrigin::Refused(
-                            found
-                                .why_not_labelling()
-                                .unwrap_or("its timecode cannot be read")
-                                .to_string(),
-                        ),
-                    };
-                    Some((path, origin))
-                })
-                .collect();
+            let starts = media_timecode_origins(&g);
             let source_start = |clip: &cine_timeline::otio::Clip| -> SourceOrigin {
                 match &clip.media_reference {
                     cine_timeline::otio::MediaReference::External { target_url, .. } => starts

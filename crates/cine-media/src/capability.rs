@@ -612,8 +612,7 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
                  answers absent, never zero. What is not claimed: discontinuous timecode reads as \
                  the first run's start and says how many runs there are; a counter track is \
                  reported as a counter rather than as a clock; a rendered cut carries the cut's \
-                 own record timecode rather than the camera's; OTIO export does not carry \
-                 source timecode (see `time.timecode.conform`); and no independent \
+                 own record timecode rather than the camera's; and no independent \
                  timecode reader was available to check the bytes, so the layout is held to the \
                  published field offsets by a test that walks the boxes separately",
         evidence: Some("cine-media/tests/timecode_track.rs"),
@@ -630,11 +629,12 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
                  counter, a discontinuous track — counts from zero and the file says why. \
                  A sequence has its own record start, which the record columns count from and \
                  which a rendered movie carries as its own timecode track — a ranged render is \
-                 called what those frames are called in the cut. The remaining limit: OTIO \
-                 export writes an available range starting at zero, which an OTIO reader takes \
-                 as a claim that the media's timecode starts there. Source ranges are \
-                 media-relative throughout this build, and putting the OTIO file in timecode \
-                 space is what would fix it",
+                 called what those frames are called in the cut. OTIO is written in the media's \
+                 own numbering, as an OTIO reader reads it, and a file from another tool is \
+                 normalised on the way in; the conversion is at the edge of the file, so source \
+                 ranges stay media-relative everywhere inside. What is not claimed: AAF and \
+                 XML are not written at all, and no conform has been round-tripped against \
+                 another application, only against this build's own reader",
         evidence: Some("cine-runtime/tests/timecode_conform.rs"),
     },
     // --------------------------------------------------------------- colour

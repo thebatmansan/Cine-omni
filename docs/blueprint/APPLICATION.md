@@ -1028,16 +1028,33 @@ Re-labelling is faithful across namings: a take whose camera wrote non-drop
 which is the same frame under drop-frame naming, under an FCM line that says
 so.
 
-#### What conform does not cover yet
+#### Conforming: OTIO, and two coordinate spaces
 
-**OTIO export writes an available range starting at zero.** An OTIO reader
-takes a media reference's available range as the media's own coordinates, so
-that is a claim that the take's timecode starts at 00:00:00:00 — which for a
-take the camera numbered `01:00:00:00` is not true. Source ranges are
-media-relative everywhere in this build, and the fix is to put them in timecode
-space rather than to shift the available range alone, which would break every
-trim that clamps against it. Recorded as the limit of `time.timecode.conform`
-rather than left to be discovered in a conform.
+This build counts a clip's source range from **zero inside the file**. A clip
+playing from ten seconds in starts at frame 240, whatever the camera called
+that frame. It holds everywhere inside the application, and trims clamp against
+an available range that also starts at zero, so the two agree.
+
+OTIO does not work that way. A media reference's available range is in the
+media's *own* coordinates — for a take with timecode, timecode — and a clip's
+source range is in the same ones. So an available range of `0 … duration` for a
+take the camera numbered `01:00:00:00` is not a simplification a reader can
+see. It is a statement that the take begins at midnight, and anything
+conforming from the file looks for the wrong frames.
+
+The two spaces are one addition apart, so the conversion happens at the **edge
+of the file** and nothing in the model moves: `timecode_space::into_timecode`
+on the way out, `into_media_relative` on the way in. That second direction
+matters for more than our own round trip — every other tool writes OTIO in
+timecode already, so normalising on import is what makes a cut from somewhere
+else land in the coordinates this build edits in, instead of an hour out.
+
+Media with no usable timecode is left where it is, and an available range of
+`0 … duration` is then exactly true rather than a claim.
+
+What is still not claimed: AAF and XML are not written at all, and no conform
+has been round-tripped against another application — only against this build's
+own reader.
 
 #### The cut's own clock
 
