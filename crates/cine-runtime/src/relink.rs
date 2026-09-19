@@ -414,11 +414,17 @@ fn apply(project: &OmniProject, outcomes: &[Outcome]) -> Result<(), String> {
                 .map(PathBuf::from);
             let state_now = node.and_then(|n| n.get_str(STATE_ATTR)).map(str::to_string);
             let online_now = node.and_then(|n| n.get_bool(cine_media::ucg::ONLINE_ATTR));
-            match o.state {
-                "relinked" => path_now != o.path || online_now != Some(true),
-                "already_here" => state_now.is_some() || online_now != Some(true),
-                _ => state_now.as_deref() != Some(o.state) || online_now != Some(false),
-            }
+            // A check is evidence even when it confirms what was already
+            // believed: "recorded at import" and "confirmed just now" are
+            // different facts about the same belief, and an interface that
+            // cannot tell them apart shows the first as the second.
+            let evidence_now = node.and_then(|n| n.get_str(cine_media::ucg::CHECKED_BY_ATTR));
+            evidence_now != Some("check")
+                || match o.state {
+                    "relinked" => path_now != o.path || online_now != Some(true),
+                    "already_here" => state_now.is_some() || online_now != Some(true),
+                    _ => state_now.as_deref() != Some(o.state) || online_now != Some(false),
+                }
         })
         .collect();
     if changed.is_empty() {
@@ -448,6 +454,8 @@ fn apply(project: &OmniProject, outcomes: &[Outcome]) -> Result<(), String> {
                         tx.remove_attr(o.media, NOTE_ATTR)?;
                         cine_media::ucg::set_online(tx, o.media, true)
                             .map_err(|e| UcgError::Aborted(e.to_string()))?;
+                        cine_media::ucg::set_presence_evidence(tx, o.media, "check")
+                            .map_err(|e| UcgError::Aborted(e.to_string()))?;
                         // The stored `MediaFile` carries the old path; keep it
                         // in step so everything that reads it agrees.
                         if let Some(mut info) = cine_media::ucg::read_media(tx.graph(), o.media) {
@@ -465,11 +473,15 @@ fn apply(project: &OmniProject, outcomes: &[Outcome]) -> Result<(), String> {
                         // The file is there and it is this media: online again.
                         cine_media::ucg::set_online(tx, o.media, true)
                             .map_err(|e| UcgError::Aborted(e.to_string()))?;
+                        cine_media::ucg::set_presence_evidence(tx, o.media, "check")
+                            .map_err(|e| UcgError::Aborted(e.to_string()))?;
                     }
                     _ => {
                         tx.set(o.media, STATE_ATTR, o.state)?;
                         tx.set(o.media, NOTE_ATTR, o.note.as_str())?;
                         cine_media::ucg::set_online(tx, o.media, false)
+                            .map_err(|e| UcgError::Aborted(e.to_string()))?;
+                        cine_media::ucg::set_presence_evidence(tx, o.media, "check")
                             .map_err(|e| UcgError::Aborted(e.to_string()))?;
                     }
                 }
@@ -509,7 +521,10 @@ pub fn check(project: &OmniProject) -> Result<J, String> {
                 ),
             ),
             None => (
-                "not_found",
+                // Nothing at the recorded path. That is *offline* — different
+                // from a scan that searched a folder and could not find this
+                // content anywhere, which is what "not_found" means.
+                "absent",
                 format!("{} is not there", asset.path.display()),
             ),
         };
@@ -610,27 +625,6 @@ pub fn relink_to(project: &OmniProject, media: EntityId, path: &Path) -> Result<
     };
     apply(project, std::slice::from_ref(&outcome))?;
     Ok(outcome.to_json())
-}
-
-/// Why this media cannot be read from where the project says it is, if it
-/// cannot.
-///
-/// The project's own record answers, never the presence of a file: the case
-/// this exists for is a file that *is* there and is not this content. Anything
-/// that reads an original — a frame served over HTTP, a decode for playback —
-/// asks this first, so no path ever hands back a stranger's picture.
-pub fn unreadable(graph: &ucg_core::Graph, media: EntityId) -> Option<&'static str> {
-    let node = graph.node(media)?;
-    if node.get_bool(cine_media::ucg::ONLINE_ATTR) != Some(false) {
-        return None;
-    }
-    match node.get_str(STATE_ATTR) {
-        Some("replaced") => Some(
-            "the file where this media lives is different media now; \
-             relink it to where its content actually is",
-        ),
-        _ => Some("that media is offline: the file it names is not there"),
-    }
 }
 
 /// What the application shows about an asset's resolution, for the media list.

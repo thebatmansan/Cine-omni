@@ -48,6 +48,7 @@ pub mod impact;
 pub mod ingest;
 pub mod jobs;
 pub mod lock;
+pub mod media_state;
 pub mod playlist;
 pub mod projection;
 pub mod provenance;

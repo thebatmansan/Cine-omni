@@ -274,7 +274,12 @@ pub fn media(graph: &Graph) -> J {
                     "id": n.id,
                     "name": n.name(),
                     "path": n.get_str(attrs::MEDIA_PATH),
+                    // Kept for the shape of the answer; `state` is what any
+                    // surface should read, because this flag cannot tell
+                    // "never established" from "established as present".
                     "online": n.get_bool(cine_media::ucg::ONLINE_ATTR),
+                    "state": crate::media_state::MediaState::of_with(graph, n.id, info.as_ref())
+                        .to_json(),
                     "hash": n.get_str(cine_media::ucg::HASH_ATTR),
                     "checksum": n.get(crate::jobs::CHECKSUM_ATTR).map(|v| v.to_json()),
                     "container": info.as_ref().map(|i| format!("{:?}", i.container)),

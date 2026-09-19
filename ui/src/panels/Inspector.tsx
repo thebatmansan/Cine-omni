@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { useState } from "react";
 import { ExactTime, MediaView, ScriptView, TimelineItem, TimelineTrack, TimelineView } from "../rpc/client";
+import { read } from "./mediaState";
 
 /** Whatever is selected, in detail. Values come from the projection unchanged. */
 export function Inspector({
@@ -508,8 +509,10 @@ function MediaDetail({
       <dl className="props">
         <dt>name</dt>
         <dd>{media.name}</dd>
-        <dt>online</dt>
-        <dd>{media.online === false ? "offline" : "yes"}</dd>
+        <dt>state</dt>
+        <dd className={media.state?.readable === false ? "bad" : undefined}>
+          {media.state?.label ?? "—"}
+        </dd>
         <dt>container</dt>
         <dd>{sequenceOf(media) ? `image sequence · ${sequenceOf(media)}` : (media.container ?? "—")}</dd>
         <dt>size</dt>
@@ -683,24 +686,25 @@ function Resolution({
   const [folder, setFolder] = useState("");
   const [file, setFile] = useState("");
   const r = media.resolution ?? { state: null, note: null, relinked_from: null, confidence: null };
-  const settled = media.online !== false && !r.state;
+  // The runtime decides what this media's state is and how it came to know;
+  // nothing here re-derives it from a flag. "Online at its recorded path" used
+  // to be printed from an import-time boolean, so a take that had gone — and a
+  // take nobody had ever read — both said it.
+  const reading = media.state ? read(media.state) : null;
   return (
     <>
       <div className="section-title">Resolution</div>
-      {settled && (
-        <div className="hint">
-          Online at its recorded path
-          {r.relinked_from ? ` · relinked from ${r.relinked_from} (${r.confidence})` : ""}
-        </div>
-      )}
-      {!settled && (
-        <div className="bad" title={r.note ?? ""}>
-          {r.state === "replaced"
-            ? "A different file is at this path now"
-            : r.state === "not_found"
-              ? "Not found by content"
-              : "Offline"}
-          {r.note ? ` — ${r.note}` : ""}
+      {reading && (
+        <div className={`resolution ${reading.tone}`}>
+          <div className="resolution-state">{reading.label}</div>
+          <div className="resolution-grounds">
+            {reading.grounds}
+            {r.relinked_from ? ` · relinked from ${r.relinked_from} (${r.confidence})` : ""}
+          </div>
+          {reading.detail && <div className="resolution-detail">{reading.detail}</div>}
+          {media.state?.local_path === null && media.state?.recorded_at_location && (
+            <div className="resolution-detail mono">{media.state.recorded_at_location}</div>
+          )}
         </div>
       )}
       {onJob && (

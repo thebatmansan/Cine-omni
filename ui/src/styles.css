@@ -1026,6 +1026,23 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .render-state.stale { color: #e8c170; border-color: #6d5a2e; }
 .render-state.invalid, .render-state.failed { color: #ef7b7b; border-color: #6d2e2e; }
 .render-reasons { margin: 4px 0 0 18px; padding: 0; font-size: 12px; opacity: 0.85; }
+/* Media state: the state itself, then how the project came to know it, then
+   the explanation. Read top to bottom, weight falling — no badge, no pill,
+   no colour except where something is actually wrong. */
+.resolution { margin: 2px 0 6px; padding-left: 8px; border-left: 2px solid var(--line, #333); }
+.resolution.ok { border-left-color: #2f6f3f; }
+.resolution.caution { border-left-color: #8a6d22; }
+.resolution.bad { border-left-color: #8a2f2f; }
+.resolution-state { font-size: 13px; letter-spacing: 0.01em; }
+.resolution.caution .resolution-state { color: #d6b25e; }
+.resolution.bad .resolution-state { color: #e08585; }
+.resolution-grounds { font-size: 11px; opacity: 0.62; margin-top: 1px; }
+.resolution-detail { font-size: 11px; opacity: 0.78; margin-top: 3px; line-height: 1.35; }
+.caution { color: #d6b25e; }
+.viewer-state { font-size: 13px; letter-spacing: 0.01em; }
+.viewer-state.caution { color: #d6b25e; }
+.viewer-state.bad { color: #e08585; }
+.viewer-state-detail { font-size: 11px; opacity: 0.7; margin-top: 4px; max-width: 46ch; line-height: 1.4; }
 /* True of the render without meaning it is out of date: said more quietly
    than a reason, and never in the colour that means something is wrong. */
 .render-notes { margin: 4px 0 0 18px; padding: 0; font-size: 12px; opacity: 0.6; font-style: italic; }

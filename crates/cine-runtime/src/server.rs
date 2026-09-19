@@ -617,18 +617,26 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
         // prevent. The project's record decides; hashing on every frame would
         // be the wrong price for an answer the project already has.
         match proxy {
-            None if crate::relink::unreadable(&g, media).is_some() => {
-                Err(crate::relink::unreadable(&g, media).unwrap_or("that media cannot be read"))
+            // One authoritative state decides, and says which of the eight
+            // things is true. "No media with that id" used to be the answer
+            // for a media that was in the project and had merely never been
+            // probed, which is the one statement here that was false.
+            None => {
+                let state = crate::media_state::MediaState::of(&g, media);
+                match state.why_not_readable() {
+                    Some(why) => Err(why),
+                    None => cine_media::ucg::read_media(&g, media)
+                        .ok_or_else(|| "that media was never probed".to_string()),
+                }
             }
-            None => cine_media::ucg::read_media(&g, media)
-                .ok_or("no media with that id in this project"),
             Some(p) if !crate::proxy::proxies_of(&g, media).contains(&p) => {
-                Err("that proxy is not a proxy of that media")
+                Err("that proxy is not a proxy of that media".to_string())
             }
             Some(p) if crate::proxy::status(&g, p, false).state != "current" => {
-                Err("that proxy is not current; ask for the original")
+                Err("that proxy is not current; ask for the original".to_string())
             }
-            Some(p) => cine_media::ucg::read_media(&g, p).ok_or("that proxy was never probed"),
+            Some(p) => cine_media::ucg::read_media(&g, p)
+                .ok_or_else(|| "that proxy was never probed".to_string()),
         }
     };
     let wanted = match wanted {

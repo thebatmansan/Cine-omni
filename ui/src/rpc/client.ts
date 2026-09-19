@@ -492,6 +492,38 @@ export interface IngestResult {
 
 export type RenderState = "current" | "stale" | "invalid" | "failed";
 
+/**
+ * One media's availability, decided once by the runtime.
+ *
+ * Presence is what the project believes; evidence is how it came to believe
+ * it. Reported together, because a fact recorded at import time is not a fact
+ * about now, and an interface given only the first will show it as the second.
+ */
+export interface MediaAvailability {
+  presence:
+    | "no_such_media"
+    | "never_probed"
+    | "present"
+    | "offline"
+    | "replaced"
+    | "not_found_by_content"
+    | "undecodable"
+    | "not_on_this_machine";
+  /** Short label in the words a cutting room uses. */
+  label: string;
+  /** Whether a picture may be read from it. */
+  readable: boolean;
+  evidence: "never" | "at_import" | "checked";
+  /** Seconds since the epoch, when the evidence was established. */
+  at: number | null;
+  recorded_at_location: string;
+  /** The filesystem path, when the recorded location is one. */
+  local_path: string | null;
+  detail: string | null;
+  /** The runtime operation that would resolve this. */
+  action: "check_media" | "relink" | null;
+}
+
 /** Where a sequence's own clock starts. */
 export interface SequenceStart {
   timeline: string;
@@ -711,7 +743,15 @@ export interface MediaView {
   id: string;
   name: string;
   path: string | null;
+  /**
+   * @deprecated A tri-state pretending to be a boolean — true at import, false
+   * after a check, and **absent** for media that was never probed. Read
+   * `state` instead; every surface testing `online !== false` reported a take
+   * nobody had ever looked at as present.
+   */
   online: boolean | null;
+  /** What the project knows about this media's availability, and how. */
+  state: MediaAvailability;
   hash: string | null;
   container: string | null;
   size: number | null;
@@ -755,7 +795,11 @@ export interface MediaView {
   waveform: WaveformView | null;
   /** Whether the file is where the project says, and what a scan decided. */
   resolution: {
-    state: "replaced" | "not_found" | null;
+    /**
+     * `absent` — nothing at the recorded path. `not_found` — a scan searched
+     * and could not find this content. `replaced` — a different file is there.
+     */
+    state: "replaced" | "not_found" | "absent" | null;
     note: string | null;
     relinked_from: string | null;
     confidence: "exact" | "fingerprint" | null;

@@ -65,6 +65,8 @@ pub fn register_media(tx: &mut Tx, project: EntityId, info: &MediaFile) -> Resul
     tx.set(id, attrs::MEDIA_PATH, info.path.display().to_string())?;
     tx.set(id, HASH_ATTR, info.hash.hex())?;
     tx.set(id, ONLINE_ATTR, info.path.exists())?;
+    // Where it was when it was imported, and that this is what that means.
+    set_presence_evidence(tx, id, "import")?;
     tx.set(id, MEDIA_INFO_ATTR, Value::from_serde(info)?)?;
     // What an edit may play. Clips clamp trims against this, so a file with no
     // stated length records none rather than a guess.
@@ -164,6 +166,26 @@ pub fn register_derivative(
 /// Bind a clip, take or other consumer to a media file.
 pub fn bind_to_media(tx: &mut Tx, consumer: EntityId, media: EntityId) -> Result<()> {
     tx.link(consumer, media, EdgeKind::Binds)?;
+    Ok(())
+}
+
+/// When the project last established where a media is. Seconds since the epoch.
+pub const CHECKED_AT_ATTR: &str = "presence_checked_at";
+/// What established it: `import` or `check`.
+pub const CHECKED_BY_ATTR: &str = "presence_checked_by";
+
+/// Record that presence was established now, and by what.
+///
+/// Presence is not one bit: a flag saying "online" is worth nothing without
+/// when it was set and what set it, because an interface reading the flag
+/// alone will show a fact from import time as a fact about now.
+pub fn set_presence_evidence(tx: &mut Tx, media: EntityId, by: &str) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    tx.set(media, CHECKED_AT_ATTR, now)?;
+    tx.set(media, CHECKED_BY_ATTR, by)?;
     Ok(())
 }
 

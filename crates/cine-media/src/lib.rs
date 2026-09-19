@@ -31,6 +31,7 @@ pub mod frame;
 pub mod h264_sps;
 pub mod identity;
 pub mod isobmff;
+pub mod locator;
 pub mod mhl;
 pub mod mov;
 pub mod offload;

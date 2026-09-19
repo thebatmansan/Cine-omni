@@ -135,7 +135,16 @@ export function Browser({
                     ≠
                   </span>
                 )}
-                {m.online === false ? "offline" : m.video?.frames ? `${m.video.frames}f` : ""}
+                {/* The runtime's own word for the state, never a guess from a flag. */}
+                {m.state && !m.state.readable ? (
+                  <span className={m.state.presence === "never_probed" ? "caution" : "bad"}>
+                    {m.state.label.toLowerCase()}
+                  </span>
+                ) : m.video?.frames ? (
+                  `${m.video.frames}f`
+                ) : (
+                  ""
+                )}
               </span>
             </div>
           ))}

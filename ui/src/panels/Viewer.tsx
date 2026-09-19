@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Capability, MediaView } from "../rpc/client";
+import { read } from "./mediaState";
 
 /**
  * A real decoded picture from the project's own media.
@@ -48,7 +49,12 @@ export function Viewer({
   const playback = capabilities.find((c) => c.id === "media.playback");
   const preview = capabilities.find((c) => c.id === "media.preview");
   const frames = media?.video?.frames ?? 0;
-  const decodable = media?.video?.decodable ?? false;
+  // Whether a picture can be shown is the runtime's answer, not a guess from
+  // whether a codec was recorded. A media nobody has probed has no codec
+  // either, and saying "cannot decode" about it states a reason the project
+  // does not know — it has not looked.
+  const reading = media?.state ? read(media.state) : null;
+  const decodable = (media?.state?.readable ?? false) && (media?.video?.decodable ?? false);
 
   const load = useCallback(
     async (want: number) => {
@@ -97,6 +103,16 @@ export function Viewer({
     void load(index);
   }, [index, load]);
 
+  // A refusal belongs to the media it was about. Without this the previous
+  // take's message stayed on screen under the next one's picture.
+  useEffect(() => {
+    setFailure(null);
+    setShown((old) => {
+      if (old) URL.revokeObjectURL(old.url);
+      return null;
+    });
+  }, [media?.id]);
+
   useEffect(() => () => inflight.current?.abort(), []);
 
   const step = (by: number) => onIndex(Math.max(0, Math.min(frames - 1, index + by)));
@@ -120,7 +136,13 @@ export function Viewer({
 
       <div className="viewer-stage">
         {!media && <div className="viewer-empty">Select media in the project browser.</div>}
-        {media && !decodable && (
+        {media && reading && !media.state.readable && (
+          <div className="viewer-empty">
+            <div className={`viewer-state ${reading.tone}`}>{reading.label}</div>
+            {reading.detail && <div className="viewer-state-detail">{reading.detail}</div>}
+          </div>
+        )}
+        {media && media.state?.readable && !decodable && (
           <div className="viewer-empty">
             This build cannot decode {media.video?.codec ?? "this media"}.
             <br />

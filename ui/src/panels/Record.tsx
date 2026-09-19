@@ -137,7 +137,11 @@ export function Record({
             “{at.name}” plays media that declares no available range, so which picture it shows cannot be known.
           </div>
         )}
-        {at && !at.black && at.online === false && <div className="viewer-empty">“{at.name}”: media offline.</div>}
+        {/* The edit list carries the same availability the media list shows,
+            so the monitor cannot contradict the browser about one take. */}
+        {at && !at.black && at.online === false && (
+          <div className="viewer-empty">“{at.name}”: media offline.</div>
+        )}
         {failure && <div className="viewer-empty">{failure}</div>}
         {url && !failure && <img src={url} alt="record picture" />}
         {at && !at.black && (
