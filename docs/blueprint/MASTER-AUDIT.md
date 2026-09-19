@@ -319,8 +319,37 @@ opened, which already exists as an RPC), or mark the Inspector's claim as
 offer the action that resolves it (probe / relink). One-line message change plus
 a regression test; the honest wording already exists three lines away.
 
-**Neither is in the working tree yet** — both are recorded here first, as this
-audit is read-only.
+**Both fixed** in `a527eb4`, along with two defects found underneath them.
+
+The root cause of M1 and M2 was one field. `online` is a tri-state pretending
+to be a boolean — `true` at import, `false` after a check, **absent** when
+never established — and five surfaces each decided availability by testing
+`online !== false`, which cannot tell *never established* from *established as
+present*. Presence is now reported as two things that are never separated:
+`Presence` (eight states) and `Evidence` (never / at import / checked, with a
+timestamp), decided once in `cine-runtime/src/media_state.rs` and read by the
+browser, the inspector, the record monitor and the frame server. The second
+readability gate, `relink::unreadable`, was deleted rather than left to drift.
+
+Found while fixing them:
+
+* `check_media` and `relink_scan` both wrote `not_found`, conflating *nothing
+  is at the recorded path* with *a search could not find this content*. Now
+  `absent` and `not_found`.
+* `check_media` skipped its commit when the belief was unchanged, so evidence
+  stayed `at_import` for ever and "confirmed just now" was unreachable.
+
+Gap **A5** is closed in the form this slice needed: `cine_media::locator`
+parses a recorded location once into a path, a scheme this machine cannot open,
+or nothing. `PathBuf::from("file:///media/A001.mov")` was a *relative path
+named `file:`*, which is why every check answered "not there" — the right
+conclusion for the wrong reason. The audited project's eight OTIO references
+now resolve their real paths. Content identity, relinking, namesake refusal,
+ingest, proxies and persistence are untouched.
+
+Verified in the real application against a copy of the audited project: viewer,
+inspector and browser all read "Not yet verified" for the same take, and no
+contradictory pair remains on the screen.
 
 ## D. Frontend information architecture — the real problem
 
@@ -411,9 +440,7 @@ and derived data are untouchable regardless.
 Ordered by dependency unlock × correctness risk × breadth of lifecycle
 unblocked — deliberately **not** by which is easiest to show.
 
-* **P0 — Truthfulness repairs (small, immediate).** M1 and M2 above. The
-  product's core claim is that it never states something it cannot back;
-  two screens currently do.
+* ~~**P0 — Truthfulness repairs.** M1 and M2.~~ **Done** — `a527eb4`.
 * **P0 — The relationship rail.** Make the graph's edges the navigation. This
   converts the existing `structure` RPC into the product's differentiator and
   costs no new engine work.
@@ -435,10 +462,12 @@ unblocked — deliberately **not** by which is easiest to show.
 
 ## H. Dependency-ordered implementation plan
 
-1. M2 (message + test), then M1 (presence resolved on open, or stated as last
-   known with its time).
-2. `media_path` becomes a locator that distinguishes URL from path (A5),
-   unblocking honest conform from OTIO/EDL/AAF.
+1. ~~M2, then M1.~~ **Done** — `a527eb4`, with presence stated as last known
+   and the time it was established.
+2. ~~`media_path` becomes a locator that distinguishes URL from path (A5).~~
+   **Done** — `cine_media::locator`. What remains of A5 is the twenty other
+   call sites that still `PathBuf::from` the recorded string; they behave
+   safely (a URL is simply not a file) and now have one function to adopt.
 3. Relationship rail over `structure`, with subject selection shared across
    panels — one subject model in `session.ts`.
 4. Vocabulary extension: `deliverable`, `package`, `episode` first, because
