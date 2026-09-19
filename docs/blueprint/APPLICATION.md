@@ -1081,6 +1081,43 @@ sequence's start advanced by the frame the render begins on, so a ranged render
 of frames 6–17 is called `01:00:00:06` — what those frames are called in the
 cut, not what the head of the cut is called.
 
+### Matroska: describing what is in the file
+
+The streaming demuxer this build uses for Matroska is an audio library. It
+surfaces *every* track — picture included — but fills in parameters only inside
+`if let Some(audio) = track.audio`, so a picture track arrived with no codec,
+no sample rate and no channel count. The probe then applied
+`sample_rate.unwrap_or(48_000)` and `channels.unwrap_or(2)`.
+
+The result was not a gap. An MKV with picture and sound reported **two sound
+streams**, one of them a phantom 48 kHz stereo track for a track that has no
+sound in it at all — a number nobody wrote, presented as something read from
+the file. The capability matrix recorded it as "the probe reports every track
+as audio", which is the only row on the board that described the build saying
+something untrue rather than lacking something.
+
+The track list is now read from the file's own EBML header (`cine_media::ebml`)
+— `Segment → Info, Tracks → TrackEntry`, and no cluster is touched, so it costs
+a seek whatever the file's length. Every track is described as what it is: a
+picture track's codec, pixel size, and frame rate as the **exact reciprocal**
+of the stated frame duration (40 000 000 ns is 25/1, not 25.0); a sound track's
+rate, channels and bit depth. **A track that states none of those records
+none**, not a plausible default.
+
+A picture track is described exactly and marked **not decodable**, because this
+build has no Matroska picture decoder. Describing a file and being able to play
+it are different questions, and the honest answer to the second is a refusal
+that names the codec.
+
+**Verified against a second implementation.** The tests write real Matroska
+files byte by byte from the specification — there is no Matroska muxer here —
+and then hold this reader's *sound* answers against the streaming demuxer's
+own Matroska parser reading the same bytes. That is a genuine cross-check,
+and it paid immediately: the demuxer records Matroska channel counts as a
+*layout* rather than as a channel set, which the production path was also
+missing, so `unwrap_or(2)` was fabricating a stereo count for files that had
+stated something else. Both now read the layout.
+
 ### What a job guarantees, audited
 
 Every long thing the application does is a job, so the guarantees below are the

@@ -475,8 +475,14 @@ pub const MEDIA_PATHS: &[MediaPath] = &[
         name: "Matroska, read",
         area: "Containers",
         state: PathState::Partial,
-        detail: "Demuxed for sound only: the probe reports every track as audio, so a picture \
-                 track in an MKV is neither described nor decoded",
+        detail: "The track list is read from the file's own EBML header, so every track is \
+                 described as what it is: a picture track's codec, pixel size and frame rate \
+                 (the exact reciprocal of the stated frame duration), a sound track's rate, \
+                 channels and bit depth, and a track stating none of those records none rather \
+                 than a plausible default. Sound decodes through the streaming demuxer. What is \
+                 not claimed: no Matroska *picture* decoder exists in this build, so a picture \
+                 track is described exactly and refused rather than shown blank; and no \
+                 cluster is read, so frame counts come from the demuxer or not at all",
         evidence: None,
     },
     MediaPath {

@@ -23,6 +23,7 @@ pub mod clock;
 pub mod colr;
 pub mod decode_ahead;
 pub mod decoder;
+pub mod ebml;
 pub mod edit_list;
 pub mod encode;
 pub mod error;

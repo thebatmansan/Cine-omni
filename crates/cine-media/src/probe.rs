@@ -68,7 +68,7 @@ pub fn probe(path: &Path) -> Result<MediaFile> {
         "wav" | "wave" => probe_with_symphonia(path, hash, ContainerKind::Wave, "wav"),
         "flac" => probe_with_symphonia(path, hash, ContainerKind::IsoBmff, "flac"),
         "mp3" => probe_with_symphonia(path, hash, ContainerKind::IsoBmff, "mp3"),
-        "mkv" | "webm" => probe_with_symphonia(path, hash, ContainerKind::Matroska, "mkv"),
+        "mkv" | "webm" => probe_matroska(path, hash),
         "png" | "tif" | "tiff" | "jpg" | "jpeg" => probe_image(path, hash),
         other => Err(Error::UnknownContainer(format!(
             "{} (extension `{other}`)",
@@ -234,7 +234,15 @@ fn probe_with_symphonia(
     for t in probed.format.tracks() {
         let p = &t.codec_params;
         let codec = codec_token(p.codec);
-        let rate = p.sample_rate.unwrap_or(48_000);
+        // Nothing stated, nothing invented. These used to default to 48 kHz
+        // stereo, which described a track that did not exist.
+        let rate = p.sample_rate.unwrap_or(0);
+        // A channel *layout* is how some containers state the count.
+        let channels = p
+            .channels
+            .or_else(|| p.channel_layout.map(|l| l.into_channels()))
+            .map(|c| c.count() as u16)
+            .unwrap_or(0);
         streams.push(StreamInfo {
             index: t.id,
             kind: StreamKind::Audio,
@@ -245,12 +253,13 @@ fn probe_with_symphonia(
             time_base: p
                 .time_base
                 .and_then(|tb| Rate::new(tb.denom, tb.numer))
-                .unwrap_or(Rate::whole(rate).ok_or(Error::InvalidTimeBase { num: rate, den: 1 })?),
+                .or_else(|| Rate::whole(rate))
+                .ok_or(Error::InvalidTimeBase { num: rate, den: 1 })?,
             duration_ticks: p.n_frames.map(|n| n as i64),
             video: None,
             audio: Some(AudioStreamInfo {
                 sample_rate: rate,
-                channels: p.channels.map(|c| c.count() as u16).unwrap_or(2),
+                channels,
                 bits_per_sample: p.bits_per_sample.map(|b| b as u16),
             }),
         });
@@ -264,6 +273,118 @@ fn probe_with_symphonia(
         source_timecode: None,
         source: None,
     })
+}
+
+/// Matroska and WebM: the track list from the file's own header.
+///
+/// The streaming demuxer here is an audio library. It surfaces every track but
+/// describes only the ones with sound, so reading its answer directly turned a
+/// picture track into a phantom 48 kHz stereo stream. The header says what
+/// each track is, and [`crate::ebml`] reads it.
+///
+/// Decodability is a separate question from description, and is answered by
+/// the capability registry: a picture track is described exactly and marked
+/// not decodable, because this build has no Matroska picture decoder.
+fn probe_matroska(path: &Path, hash: ContentHash) -> Result<MediaFile> {
+    let header = crate::ebml::read_header(path).ok_or_else(|| {
+        Error::Container(format!(
+            "{}: this does not have a Matroska track list in its header",
+            path.display()
+        ))
+    })?;
+    // What the demuxer could make of the sound, so a track it can decode says
+    // so. It is asked about sound only; it has nothing to say about picture.
+    let by_symphonia = probe_with_symphonia(path, hash.clone(), ContainerKind::Matroska, "mkv")
+        .ok()
+        .map(|m| m.streams)
+        .unwrap_or_default();
+
+    let mut streams = Vec::new();
+    for t in &header.tracks {
+        let kind = match t.kind {
+            crate::ebml::TrackType::Video => StreamKind::Video,
+            crate::ebml::TrackType::Audio => StreamKind::Audio,
+            crate::ebml::TrackType::Subtitle => StreamKind::Subtitle,
+            crate::ebml::TrackType::Other(_) => StreamKind::Data,
+        };
+        let codec = matroska_codec(&t.codec_id);
+        let known = by_symphonia.iter().find(|s| u64::from(s.index) == t.number);
+        // A frame lasts `default_duration` nanoseconds, so the rate is its
+        // reciprocal — exactly, as the ratio it is, never through a decimal.
+        let frame_rate = t
+            .default_duration_ns
+            .filter(|d| *d > 0)
+            .and_then(|d| Rate::new(1_000_000_000, u32::try_from(d).ok()?));
+        streams.push(StreamInfo {
+            index: u32::try_from(t.number).unwrap_or(0),
+            kind,
+            decodable: match kind {
+                // No Matroska picture decoder in this build. The track is
+                // described exactly and refused, never shown as a blank frame.
+                StreamKind::Video => false,
+                StreamKind::Audio => known.map(|s| s.decodable).unwrap_or(false),
+                _ => false,
+            },
+            codec,
+            time_base: known
+                .map(|s| s.time_base)
+                .or(frame_rate)
+                .unwrap_or(Rate::whole(1000).expect("1000 is a rate")),
+            duration_ticks: known.and_then(|s| s.duration_ticks),
+            video: (kind == StreamKind::Video).then(|| VideoStreamInfo {
+                width: t.width.unwrap_or(0),
+                height: t.height.unwrap_or(0),
+                frame_rate,
+                frame_count: None,
+                // Matroska states a default frame duration for constant-rate
+                // picture and omits it otherwise, which is the file saying so.
+                variable_frame_rate: t.default_duration_ns.is_none(),
+            }),
+            audio: (kind == StreamKind::Audio).then(|| AudioStreamInfo {
+                // From the file, not from a default: a track that does not
+                // state its rate has none recorded rather than a plausible one.
+                sample_rate: t.sample_rate.map(|r| r as u32).unwrap_or(0),
+                channels: t.channels.unwrap_or(0),
+                bits_per_sample: t.bit_depth,
+            }),
+        });
+    }
+    streams.sort_by_key(|s| s.index);
+    Ok(MediaFile {
+        path: path.to_path_buf(),
+        hash,
+        container: ContainerKind::Matroska,
+        streams,
+        source_timecode: None,
+        source: None,
+    })
+}
+
+/// A Matroska codec id as the name this build uses elsewhere.
+///
+/// Unmapped ids keep their Matroska spelling rather than becoming "unknown":
+/// the file said something exact and repeating it is more use to a person than
+/// discarding it.
+fn matroska_codec(id: &str) -> String {
+    match id {
+        "V_MPEG4/ISO/AVC" => "h264".into(),
+        "V_MPEGH/ISO/HEVC" => "hevc".into(),
+        "V_AV1" => "av1".into(),
+        "V_VP8" => "vp8".into(),
+        "V_VP9" => "vp9".into(),
+        "V_MPEG4/ISO/ASP" => "mpeg4".into(),
+        "A_AAC" => "aac".into(),
+        "A_OPUS" => "opus".into(),
+        "A_VORBIS" => "vorbis".into(),
+        "A_FLAC" => "flac".into(),
+        "A_PCM/INT/LIT" => "pcm_s16le".into(),
+        "A_PCM/INT/BIG" => "pcm_s16be".into(),
+        "A_PCM/FLOAT/IEEE" => "pcm_f32le".into(),
+        "A_MPEG/L3" => "mp3".into(),
+        "A_AC3" => "ac3".into(),
+        "" => "unknown".into(),
+        other => other.to_ascii_lowercase(),
+    }
 }
 
 /// A still image, which may be one frame of a sequence.
