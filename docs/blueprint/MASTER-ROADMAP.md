@@ -28,6 +28,16 @@ reliable.
 The phases below are the dependency order, not approval gates. What has landed
 since the audit, each with its evidence in the named document or test:
 
+> **Selection rule (re-anchored 2026-09-19).** This table records what has been
+> built; it is **not** the list of what to build next. The destination is
+> `CINE-OMNI-CAPABILITY-MATRIX.md` — the whole lifecycle, 169 rows — and the
+> selection rule is the priority order in `MASTER-AUDIT.md` § "Re-anchor".
+> Recent rows here are almost entirely media and editorial; that is drift, not
+> the plan. The cheapest real product in the repository is engine capability
+> that already exists and has no interface (colour, compositing, boards,
+> previs, audio), and the two correctness repairs M1/M2 come before any of it.
+
+
 | Area | Landed | Evidence |
 |---|---|---|
 | Phase 1 — editor | all 11 edits through the graph, linked edits, place/insert/overwrite, record picture, impact by department, shared history, script line editing and scene binding; UI tools, two monitors, impact/history/script panels | `APPLICATION.md`, `editorial_protocol.rs`, `ui/e2e/editor.mjs` |
