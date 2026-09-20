@@ -58,6 +58,7 @@ pub mod render;
 pub mod rpc;
 pub mod server;
 pub mod session;
+pub mod subject;
 pub mod waveform;
 pub mod ws;
 

@@ -468,8 +468,10 @@ unblocked — deliberately **not** by which is easiest to show.
    **Done** — `cine_media::locator`. What remains of A5 is the twenty other
    call sites that still `PathBuf::from` the recorded string; they behave
    safely (a URL is simply not a file) and now have one function to adopt.
-3. Relationship rail over `structure`, with subject selection shared across
-   panels — one subject model in `session.ts`.
+3. ~~Relationship rail, with one subject model.~~ **Done** — `subject.rs`,
+   `useSubject`, `Rail`. Implemented as subject × lens rather than as a
+   sidebar: the relationships come from the graph's own edges and the craft
+   grouping is a table in Rust, so React hard-codes nothing.
 4. Vocabulary extension: `deliverable`, `package`, `episode` first, because
    Delivery is the end of every workflow already built.
 5. First department conversion, cheapest-real-product first: **colour**, which

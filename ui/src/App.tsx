@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Browser } from "./panels/Browser";
+import { Rail } from "./panels/Rail";
+import { useSubject } from "./state/subject";
 import { Capabilities } from "./panels/Capabilities";
 import { History, Impact } from "./panels/Impact";
 import { Jobs } from "./panels/Jobs";
@@ -57,6 +59,8 @@ const NO_MARKS = { in: null, out: null };
 export function App() {
   const session = useSession();
   const { client, timeline } = session;
+  // The lens: which craft's view is open. It changes freely and is never an
+  // input to what the subject is, which is what makes the subject survive it.
   const [workspace, setWorkspace] = useState("editorial");
   const [selectionKey, setSelectionKey] = useState<string | null>(null);
   const [mediaId, setMediaId] = useState<string | null>(null);
@@ -78,6 +82,9 @@ export function App() {
   const [rightTab, setRightTab] = useState<"inspector" | "captions" | "history" | "jobs">("inspector");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [scriptMode, setScriptMode] = useState<"read" | "write">("read");
+  // What is being worked on. Application state: where a person is looking is
+  // not a fact about the film, so it is not written into the project graph.
+  const subject = useSubject(session.client, session.project?.revision ?? null);
 
   const media = useMemo(
     () => session.media.find((m) => m.id === mediaId) ?? session.media.find((m) => m.video?.decodable) ?? null,
@@ -279,6 +286,37 @@ export function App() {
     [rate, recordMarks, timeline],
   );
 
+  // One place decides what selecting a thing means. A subject is the graph's
+  // node; the existing per-surface selections follow from it rather than
+  // competing with it.
+  const chooseSubject = useCallback(
+    (entry: { id: string; kind: string; lens: string | null }) => {
+      subject.select({ id: entry.id, kind: entry.kind });
+      if (entry.kind === "asset.media") {
+        setMediaId(entry.id);
+        setPicture(0);
+        setMonitor("source");
+      } else if (entry.kind === "nle.timeline") {
+        session.selectTimeline(entry.id);
+        setPlayheadTicks(0);
+      } else if (entry.kind === "script.scene") {
+        setSceneId(entry.id);
+      }
+    },
+    [session, subject],
+  );
+
+  const rail = (
+    <Rail
+      view={subject.view}
+      loading={subject.loading}
+      refusal={subject.refusal}
+      lens={workspace}
+      onSubject={chooseSubject}
+      onLens={setWorkspace}
+    />
+  );
+
   const browser = (
     <Browser
       timelines={session.timelines}
@@ -289,12 +327,14 @@ export function App() {
       onTimeline={(id) => {
         session.selectTimeline(id);
         setPlayheadTicks(0);
+        subject.select({ id, kind: "nle.timeline" });
       }}
       onMedia={(id) => {
         setMediaId(id);
         setPicture(0);
         setMonitor("source");
         setSelectionKey(null);
+        subject.select({ id, kind: "asset.media" });
       }}
     />
   );
@@ -336,7 +376,10 @@ export function App() {
 
       {workspace === "editorial" && (
         <div className="work editorial">
-          {browser}
+          <div className="left-stack">
+            {rail}
+            {browser}
+          </div>
           <Viewer
             title="Source"
             media={media}
@@ -566,7 +609,10 @@ export function App() {
 
       {workspace === "media" && (
         <div className="work media">
-          {browser}
+          <div className="left-stack">
+            {rail}
+            {browser}
+          </div>
           <Viewer media={media} capabilities={session.capabilities} index={picture} onIndex={setPicture} />
           <div className="right-stack">
             <div className="panel tabs-panel">

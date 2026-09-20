@@ -1118,6 +1118,51 @@ and it paid immediately: the demuxer records Matroska channel counts as a
 missing, so `unwrap_or(2)` was fabricating a stereo count for files that had
 stated something else. Both now read the layout.
 
+### Subject and lens
+
+A filmmaker does not work in a department. They work on a *thing* — a scene, a
+shot, a take — and need the departments' views of that thing. An application
+built as department tabs makes the user hold the correspondence in their own
+head, which is the failure of the tool-chain this one exists to replace.
+
+So navigation has two axes:
+
+* the **subject** is what is being worked on, and it persists;
+* the **lens** is which craft's view is open, and it changes freely.
+
+Choosing Grade while looking at Scene 17 leaves you on Scene 17. That is true
+**by construction** rather than by a restore path: the lens is never an input
+to what the subject is, so there is nothing to reset.
+
+**The relationships are the graph's.** `subject(id)` answers what a thing is,
+its path from the project down, and everything one edge away — `out_edges` and
+`in_edges` across all six edge kinds — grouped by what each neighbour *is*.
+Nothing in `cine-runtime/src/subject.rs` knows that a scene has shots; it asks.
+The only judgement the module holds is `GROUPS`, a table mapping a kind prefix
+to a craft and the lens that opens it, which lives beside the graph's own
+vocabulary rather than inside a React component. A new department is a row.
+
+**One hop, deliberately.** A scene's takes are three edges away — scene, shot,
+take — and reaching them by walking is what makes this navigation rather than a
+tree dump of the project. Each step is an edge somebody actually made, and the
+rail shows where it goes.
+
+**Nothing is invented.** A craft with no neighbours is *absent*, not an empty
+heading and never a placeholder record: a take nothing has been cut against
+shows no Post group at all. A kind the table has not been taught about is shown
+under *Other* rather than hidden, because that is a gap in the table, not a
+reason to lose the thing — which is how the e2e found that a media's own
+streams had no row.
+
+**Where the subject lives.** Application state, not project state. Where one
+person is looking is not a fact about the film, so it is not written into the
+graph. Two clients asking about one scene get one answer, because the answer is
+a fact about the project and not about a window.
+
+Proven in the real application (`ui/e2e/subject.mjs`): a take selected in
+Editorial is still the subject after moving to Media and back, and clicking a
+relationship lands on that thing.
+
 ### What a job guarantees, audited
 
 Every long thing the application does is a job, so the guarantees below are the

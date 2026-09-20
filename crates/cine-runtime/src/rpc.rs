@@ -2036,6 +2036,14 @@ pub fn dispatch_with(
         }
 
         // -- the production chain -------------------------------------------
+        "subject" => {
+            // What is being worked on, where it sits, and what the project
+            // connects to it. The relationships are the graph's own edges;
+            // nothing here is a view of a department.
+            let id = entity(params, "id")?;
+            let g = p.engine.read();
+            crate::subject::describe(&g, id)?
+        }
         "structure" => {
             let g = p.engine.read();
             crate::projection::structure(&g)

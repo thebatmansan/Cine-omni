@@ -524,6 +524,24 @@ export interface MediaAvailability {
   action: "check_media" | "relink" | null;
 }
 
+/** One thing the project connects to the current subject. */
+export interface RelatedEntry {
+  id: string;
+  kind: string;
+  kind_label: string;
+  name: string;
+  sub: string | null;
+  group: string;
+  lens: string | null;
+}
+
+/** The current subject, its place, and its relationships. */
+export interface SubjectView {
+  subject: RelatedEntry;
+  path: RelatedEntry[];
+  related: { group: string; entries: RelatedEntry[] }[];
+}
+
 /** Where a sequence's own clock starts. */
 export interface SequenceStart {
   timeline: string;
@@ -1126,6 +1144,14 @@ export class RpcClient {
       rate_den,
       start_timecode,
     });
+  }
+  /**
+   * What is being worked on, where it sits, and what the project connects to
+   * it. The relationships are the graph's own edges — nothing about a scene
+   * having shots is written in this application.
+   */
+  subject(id: string) {
+    return this.call<SubjectView>("subject", { id });
   }
   /** Read, or with `start_timecode` set, a sequence's record start. */
   sequenceStart(timeline: string | null, start_timecode?: string | null) {

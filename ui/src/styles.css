@@ -1039,6 +1039,36 @@ button.link { background: none; border: none; padding: 0; color: var(--accent); 
 .resolution-grounds { font-size: 11px; opacity: 0.62; margin-top: 1px; }
 .resolution-detail { font-size: 11px; opacity: 0.78; margin-top: 3px; line-height: 1.35; }
 .caution { color: #d6b25e; }
+/* The left column: context above the project, sharing one scroll so the rail
+   never pushes the browser out of reach. */
+.left-stack { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.left-stack > .rail { flex: 0 0 auto; }
+.left-stack > .panel { flex: 1 1 auto; min-height: 0; }
+
+/* The relationship rail. Dense, quiet, and subordinate to the work: the
+   subject is the only thing with weight, the path is a whisper above it and
+   the relationships are a list, not cards. */
+.rail { padding: 6px 8px 10px; border-bottom: 1px solid var(--line, #2a2a2a); font-size: 12px; }
+.rail.loading { opacity: 0.72; }
+.rail-path { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; margin-bottom: 4px; }
+.rail-crumb { background: none; border: 0; padding: 0 1px; font-size: 10.5px; opacity: 0.6; cursor: pointer; color: inherit; }
+.rail-crumb:hover { opacity: 1; text-decoration: underline; }
+.rail-sep { opacity: 0.3; font-size: 10px; padding: 0 1px; }
+.rail-subject { margin: 2px 0 6px; }
+.rail-kind { font-size: 9.5px; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.5; }
+.rail-name { font-size: 15px; line-height: 1.2; margin-top: 1px; }
+.rail-sub { font-size: 11px; opacity: 0.66; margin-top: 2px; line-height: 1.3; }
+.rail-open { background: none; border: 1px solid var(--line, #3a3a3a); color: inherit; font-size: 10.5px; padding: 1px 6px; cursor: pointer; margin-bottom: 6px; }
+.rail-open:hover { border-color: #666; }
+.rail-group { margin-top: 7px; }
+.rail-group-name { font-size: 9.5px; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.42; margin-bottom: 2px; }
+.rail-entry { display: flex; align-items: baseline; gap: 6px; width: 100%; background: none; border: 0; color: inherit; text-align: left; padding: 1px 2px; cursor: pointer; font-size: 11.5px; }
+.rail-entry:hover { background: rgba(255, 255, 255, 0.05); }
+.rail-entry-kind { font-size: 9.5px; opacity: 0.45; min-width: 52px; flex: 0 0 auto; }
+.rail-entry-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-entry-lens { font-size: 9.5px; opacity: 0.4; flex: 0 0 auto; }
+.rail-empty, .rail-gone { font-size: 11px; opacity: 0.55; line-height: 1.4; padding: 2px 0; }
+.rail-gone { color: #d6b25e; opacity: 0.85; }
 .viewer-state { font-size: 13px; letter-spacing: 0.01em; }
 .viewer-state.caution { color: #d6b25e; }
 .viewer-state.bad { color: #e08585; }
