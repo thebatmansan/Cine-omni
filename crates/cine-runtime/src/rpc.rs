@@ -258,8 +258,29 @@ fn capabilities() -> J {
                        config by default) and every media file has an input colorspace from \
                        its file rules. Displays, views and conversions match OpenColorIO 2.5.2 \
                        on the released configs (aces2_oracle.rs, released_configs.rs). The \
-                       native window shows the picture through the chosen view; the browser \
-                       shows decoded pictures untransformed, and neither grades",
+                       native window shows the picture through the chosen view. In the browser \
+                       a clip's picture comes through the same view with that clip's grade \
+                       applied, and a file's picture comes untransformed and ungraded, because \
+                       one file can back several clips with different grades. Real-time \
+                       playback stays native: a frame must not leave the GPU",
+        }),
+        json!({
+            "id": "colour.grading",
+            "name": "Grading a clip",
+            "group": "Colour",
+            "state": "degraded",
+            "detail": "Per clip: the ASC CDL, and a primary grade layer of exposure, contrast, \
+                       saturation, temperature/tint and printer lights, evaluated in the \
+                       working space by cine-color and applied to the browser's picture, the \
+                       native window and the render through one function (view_for_graded), so \
+                       the three cannot disagree. Undoable, persisted, and part of what makes \
+                       a render stale. An HSL qualifier is carried exactly when one is on a \
+                       grade; a geometric mask is refused by name, because a colour transform \
+                       is never told where a pixel is and grading evenly would be a masked \
+                       picture that is not masked. The engine also evaluates wheels, curves, \
+                       3D LUTs, matrices and hue rotation; none of those has an interface, \
+                       `grade` names each one with the reason, and a write that would discard \
+                       one is refused. One layer, no node graph, no tracking",
         }),
         json!({
             "id": "delivery.render",
@@ -1540,6 +1561,26 @@ pub fn dispatch_with(
                 .map_err(|x| x.to_string())?;
             with_impact(p, &group)
         }
+        "grade" => {
+            // The colourist's grade on a clip, as the project holds it.
+            // Looking never creates one.
+            let clip = entity(params, "clip")?;
+            crate::grade::read(p, clip)?
+        }
+        "grade_set" => {
+            // Replace the primary layer's operations. The layers this
+            // protocol does not carry are left exactly as they are.
+            let clip = entity(params, "clip")?;
+            let list = params
+                .get("ops")
+                .and_then(J::as_array)
+                .ok_or("`ops` must be a list of operations")?;
+            let ops = list
+                .iter()
+                .map(crate::grade::op_from_json)
+                .collect::<std::result::Result<Vec<_>, String>>()?;
+            crate::grade::set_primary(p, clip, ops)?
+        }
         "set_grade" => {
             // A CDL on a clip. The viewer bakes it into the transform it is
             // already applying, so grading and viewing are one chain rather
@@ -1925,7 +1966,7 @@ pub fn dispatch_with(
                 serde_json::from_value(params.get("time").cloned().ok_or("missing param `time`")?)
                     .map_err(|e| format!("invalid time: {e}"))?;
             let g = p.engine.read();
-            crate::projection::picture_at(&g, timeline, at, p.session.media())?
+            crate::projection::picture_at(&g, p.root, timeline, at, p.session.media())?
         }
         "link" => {
             let clips: Vec<EntityId> = params

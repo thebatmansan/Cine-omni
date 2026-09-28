@@ -16,6 +16,15 @@ import type {
  * picture itself is a real decode from `/frame`. When the cut has nothing there
  * it shows black and says so; when the clip's media cannot be shown it says
  * why rather than showing a stale frame.
+ *
+ * This is the record monitor, so the picture is the clip's: asked for through
+ * the project's view with that clip's grade applied, which is what the cut
+ * looks like. The runtime says whether that is available (`colour.available`)
+ * and this asks for it only then — a media with no input colorspace has no
+ * view to look through, and the raw decode is shown with the reason said. The
+ * clip is in the request, so two clips that share one file cannot be served
+ * each other's grade, and the revision is in it too, so no cache anywhere can
+ * answer a regrade with the picture from before it.
  */
 export function Record({
   client,
@@ -46,6 +55,8 @@ export function Record({
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [decodeMs, setDecodeMs] = useState<number | null>(null);
+  /** The clip whose grade the runtime says this picture was served through. */
+  const [coloured, setColoured] = useState<string | null>(null);
   const inflight = useRef<AbortController | null>(null);
 
   const key = playhead ? `${playhead.ticks}/${playhead.rate_num}/${playhead.rate_den}` : "";
@@ -76,12 +87,17 @@ export function Record({
         return null;
       });
       setFailure(null);
+      setColoured(null);
       return;
     }
     inflight.current?.abort();
     const control = new AbortController();
     inflight.current = control;
-    fetch(`/frame?media=${at.asset}&index=${at.index}${at.proxy ? `&proxy=${at.proxy}` : ""}`, { signal: control.signal })
+    const graded = at.colour?.available && at.clip ? `&view=project&clip=${at.clip}` : "";
+    fetch(
+      `/frame?media=${at.asset}&index=${at.index}${at.proxy ? `&proxy=${at.proxy}` : ""}${graded}&rev=${revision}`,
+      { signal: control.signal },
+    )
       .then(async (r) => {
         if (!r.ok) {
           setFailure(await r.text());
@@ -95,12 +111,16 @@ export function Record({
         });
         const ms = r.headers.get("x-cine-decode-ms");
         setDecodeMs(ms ? Number(ms) : null);
+        // The clip the runtime says it coloured for, not the one this asked
+        // for: if they ever differed, the monitor would be showing another
+        // clip's grade and calling it this one's.
+        setColoured(r.headers.get("x-cine-clip"));
         setFailure(null);
       })
       .catch((e: Error) => {
         if (e.name !== "AbortError") setFailure(e.message);
       });
-  }, [at]);
+  }, [at, revision]);
 
   return (
     <div className={`panel viewer record${active ? " active" : ""}`} onMouseDown={onActivate}>
@@ -147,6 +167,20 @@ export function Record({
         {at && !at.black && (
           <div className="viewer-note">
             {at.proxy && <span className="chip proxy" title={at.substitution ?? "reading a proxy"}>PROXY</span>}
+            {/* What colour this picture is, which for a record monitor is not
+                decoration: a graded picture and an ungraded one are different
+                answers to "what does the cut look like here". */}
+            {coloured && coloured === at.clip ? (
+              <span className="chip" title="through the project's view, with this clip's grade">
+                {at.colour?.graded ? "GRADED" : "VIEW"}
+              </span>
+            ) : (
+              at.colour?.why_not && (
+                <span className="chip dim" title={at.colour.why_not}>
+                  RAW
+                </span>
+              )
+            )}
             {at.track_name} · {at.name}
             {at.source ? ` · src ${at.source.timecode}` : ""}
             {at.index != null ? ` · #${at.index}` : ""}

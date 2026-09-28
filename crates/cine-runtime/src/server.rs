@@ -526,15 +526,26 @@ fn serve_render_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     }
 }
 
-/// The project's view for one media file's own colorspace.
+/// The project's view for one picture.
 ///
-/// No grade: a grade belongs to a clip in a cut, and this is the media itself.
+/// `clip` is what decides whether a grade applies. Without it this is the
+/// media itself — the same file may back several clips with different grades,
+/// so a media-only request is ungraded on purpose and any grade shown there
+/// would be one clip's opinion presented as the file's. With it, that clip's
+/// CDL and its layered grade are applied in the working space by the same
+/// function a render uses, so a preview and a render cannot disagree.
+///
+/// A clip that does not play this media is refused rather than ignored:
+/// applying one clip's grade to another's picture is the substitution the
+/// resolution model exists to prevent.
+///
 /// An HDR display is named in the description together with the fact that the
 /// browser cannot present it, because a PQ picture shown on an SDR surface is
 /// not HDR however correct the transform was.
 fn project_view_for(
     runtime: &Runtime,
     media: ucg_core::EntityId,
+    clip: Option<ucg_core::EntityId>,
 ) -> Result<cine_color::view::ViewTransform, String> {
     let graph = runtime.project.engine.read();
     let (config, _) = cine_color::view::project_config(&graph, runtime.project.root)
@@ -553,7 +564,41 @@ fn project_view_for(
         .cloned()
         .ok_or("this media has no input colorspace established, so it cannot be looked at through a view")?;
     let working = config.role("scene_linear").unwrap_or("ACEScg").to_string();
-    let transform = cine_color::view::view_for(&config, &input, &working, None, &display, &view)?;
+    // The clip's colour, read the same way `wanted_views` reads it for a
+    // render: the CDL first, then the layered grade, both in the working
+    // space. A clip bound to other media is not a grade for this picture.
+    let (cdl, grade) = match clip {
+        None => (None, None),
+        Some(clip) => {
+            match cine_timeline::graph::media_of_clip(&graph, clip) {
+                Some(bound) if bound == media => {}
+                Some(_) => {
+                    return Err(
+                        "that clip plays other media, so its grade is not this picture's"
+                            .to_string(),
+                    )
+                }
+                None => return Err("that clip is bound to no media asset".to_string()),
+            }
+            let cdl = cine_color::ucg::grade_of_clip(&graph, clip);
+            let grade = cine_color::ucg::load_grade(
+                &graph,
+                ucg_core::EntityId::derived(clip, ucg_schema::kinds::COLOR_GRADE),
+            )
+            .ok()
+            .filter(|g| !g.is_empty());
+            (cdl, grade)
+        }
+    };
+    let transform = cine_color::view::view_for_graded(
+        &config,
+        &input,
+        &working,
+        cdl.as_ref(),
+        grade.as_ref(),
+        &display,
+        &view,
+    )?;
     let hdr = display.contains("2100")
         || display.to_lowercase().contains("pq")
         || display.to_lowercase().contains("hlg");
@@ -576,23 +621,29 @@ fn project_view_for(
     Ok(transform)
 }
 
-/// Handle one JSON-RPC line. `None` means the request was a notification.
 /// One decoded picture, as a PNG.
 ///
 /// `?media=<entity id>&index=<n>`. The media must already be registered in the
 /// project: this serves the project's media, not an arbitrary path off the
 /// filesystem, which is also what keeps it from becoming a file-read endpoint.
+///
+/// `&view=project` looks through the project's display and view. `&clip=<id>`
+/// says which clip this picture stands for, and is what makes a grade apply;
+/// it is only meaningful together with `view=project`, since a grade lives in
+/// the working space that the view transform ends.
 fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     let mut media = None;
     let mut index = 0usize;
     let mut proxy = None;
     let mut through_view = false;
+    let mut clip = None;
     for pair in query.split('&') {
         match pair.split_once('=') {
             Some(("media", v)) => media = ucg_core::EntityId::parse(v),
             Some(("index", v)) => index = v.parse().unwrap_or(0),
             Some(("proxy", v)) => proxy = ucg_core::EntityId::parse(v),
             Some(("view", v)) => through_view = v == "project",
+            Some(("clip", v)) => clip = ucg_core::EntityId::parse(v),
             _ => {}
         }
     }
@@ -654,7 +705,7 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
     // The project's view, when asked for: built here from the same function a
     // render uses, so a preview and a render cannot disagree about colour.
     let view = if through_view {
-        match project_view_for(runtime, media) {
+        match project_view_for(runtime, media, clip) {
             Ok(v) => Some(v),
             Err(why) => {
                 respond(
@@ -687,12 +738,19 @@ fn serve_frame(stream: &mut TcpStream, runtime: &Runtime, query: &str) {
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\
                  Cache-Control: no-store\r\nX-Cine-Index: {}\r\nX-Cine-Decode-Ms: {:.1}\r\n\
-                 X-Cine-Colour: {}\r\nX-Cine-Colour-Assumed: {}\r\n{}\r\n",
+                 X-Cine-Colour: {}\r\nX-Cine-Colour-Assumed: {}\r\n{}{}\r\n",
                 picture.png.len(),
                 picture.index,
                 picture.decode_ms,
                 crate::http::header_text(&picture.colour),
                 picture.colour_assumed,
+                // Which clip's colour this picture is, when it is a clip's at
+                // all. Without it the interface would have to take on trust
+                // that the grade it asked for is the grade it got.
+                match clip.filter(|_| through_view) {
+                    Some(c) => format!("X-Cine-Clip: {c}\r\n"),
+                    None => String::new(),
+                },
                 match source_timecode {
                     Some(tc) => format!("X-Cine-Timecode: {tc}\r\n"),
                     None => String::new(),

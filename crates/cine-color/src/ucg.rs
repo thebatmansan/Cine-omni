@@ -336,20 +336,68 @@ pub fn viewing_processor(
     display: &str,
     view: &str,
 ) -> Result<Processor> {
+    viewing_processor_with(config, input, working, cdl, None, display, view)
+}
+
+/// The same, with the colourist's layered grade.
+///
+/// Two different things sit in the working space, in the order a film is
+/// actually made: the **CDL** that came from the set or the dailies, and the
+/// **grade** built on top of it in the suite. Both are the project's, and
+/// applying them in that order is what a colourist would expect to see.
+///
+/// Before this, a [`GradeStack`] was stored on every `color.grade` node and
+/// read by nothing: the model existed, the maths existed and was tested, and
+/// no picture was ever put through it. This is the path.
+pub fn viewing_processor_with(
+    config: &Config,
+    input: &str,
+    working: &str,
+    cdl: Option<&ucg_schema::Cdl>,
+    grade: Option<&GradeStack>,
+    display: &str,
+    view: &str,
+) -> Result<Processor> {
+    let grade = grade.filter(|g| !g.is_empty());
     let mut ops: Vec<Op> = Vec::new();
-    match cdl {
-        None => {
+    match (cdl, grade) {
+        (None, None) => {
             // Nothing to grade: one processor, exactly as an ungraded clip is
             // shown, so a clip with no grade is not paying for a round trip
             // through the working space.
             return config.display_processor(input, display, view);
         }
-        Some(cdl) => {
+        (cdl, grade) => {
             ops.extend(config.processor(input, working)?.ops().iter().cloned());
-            ops.push(Op::Cdl {
-                cdl: cdl.clone(),
-                direction: Direction::Forward,
-            });
+            if let Some(cdl) = cdl {
+                ops.push(Op::Cdl {
+                    cdl: cdl.clone(),
+                    direction: Direction::Forward,
+                });
+            }
+            if let Some(g) = grade {
+                // A geometric mask is a function of *where* a pixel is, and a
+                // processor is only ever handed a colour — so a masked stack
+                // cannot be carried in a view transform at all. Refused by
+                // name rather than applied at the centre of the frame, which
+                // would be an evenly graded picture presented as a masked one.
+                // `GradeStack::apply_image` is the path that rasterises masks;
+                // no surface puts a grade through it before the view yet, and
+                // this says so instead of pretending otherwise.
+                if let Some(layer) = g
+                    .layers
+                    .iter()
+                    .find(|l| l.enabled && !l.ops.is_empty() && l.mask.is_some())
+                {
+                    return Err(crate::Error::Unsupported(format!(
+                        "grade layer `{}` has a geometric mask, and a view transform has no \
+                         idea where a pixel is; a masked grade needs the image path \
+                         (GradeStack::apply_image), which no viewer or render uses yet",
+                        layer.name
+                    )));
+                }
+                ops.push(Op::Grade(Arc::new(g.clone())));
+            }
             ops.extend(
                 config
                     .display_processor(working, display, view)?

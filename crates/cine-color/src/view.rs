@@ -176,6 +176,20 @@ pub fn view_for(
     display: &str,
     view: &str,
 ) -> Result<ViewTransform, String> {
+    view_for_graded(config, input, working, cdl, None, display, view)
+}
+
+/// The same, with the colourist's layered grade in the chain.
+pub fn view_for_graded(
+    config: &Config,
+    input: &str,
+    working: &str,
+    cdl: Option<&ucg_schema::Cdl>,
+    grade: Option<&crate::grade::GradeStack>,
+    display: &str,
+    view: &str,
+) -> Result<ViewTransform, String> {
+    let grade = grade.filter(|g| !g.is_empty());
     let encoding = config
         .colorspace(input)
         .ok_or_else(|| format!("`{input}` is not a colorspace in this project's config"))?
@@ -185,8 +199,11 @@ pub fn view_for(
         encoding.as_str(),
         "sdr-video" | "hdr-video" | "edr-video" | "log"
     );
-    if display_referred {
-        return bake_view(config, input, working, cdl, display, view)
+    // A grade whose effect depends on the pixel cannot be a lattice, so a
+    // picture that would normally be baked is put through the exact chain
+    // instead. Slower, and the only answer that is actually the grade.
+    if display_referred && !grade.is_some_and(|g| g.varies_by_pixel()) {
+        return bake_view_graded(config, input, working, cdl, grade, display, view)
             .map(ViewTransform::Baked)
             .ok_or_else(|| {
                 format!(
@@ -196,12 +213,13 @@ pub fn view_for(
     }
     // Scene-linear (or a config that declares no encoding, which ACES configs
     // do for scene-referred spaces): exact, because the values are unbounded.
-    let processor = crate::ucg::viewing_processor(config, input, working, cdl, display, view)
-        .map_err(|e| format!("`{input}` through {display} / {view}: {e}"))?;
-    let describe = match cdl {
-        Some(_) => format!("{input} → grade → {display} / {view} (exact, scene-linear)"),
-        None => format!("{input} → {display} / {view} (exact, scene-linear)"),
-    };
+    let processor =
+        crate::ucg::viewing_processor_with(config, input, working, cdl, grade, display, view)
+            .map_err(|e| format!("`{input}` through {display} / {view}: {e}"))?;
+    let describe = format!(
+        "{input} →{} {display} / {view} (exact, scene-linear)",
+        graded_step(cdl, grade)
+    );
     Ok(ViewTransform::Exact {
         processor: Arc::new(processor),
         describe,
@@ -222,6 +240,30 @@ pub fn bake_view(
     display: &str,
     view: &str,
 ) -> Option<BakedView> {
+    bake_view_graded(config, input, working, cdl, None, display, view)
+}
+
+/// The same, with the colourist's grade baked in with everything else.
+///
+/// Refuses a grade whose effect varies by pixel — see
+/// [`crate::GradeStack::varies_by_pixel`] — and the caller takes the exact
+/// path instead. A *qualifier* is a function of the input colour, which is what
+/// a lattice is, so it could in principle be baked; it is not, because a
+/// qualifier's edges are where its whole point lives and 33 samples a side
+/// would smear them. A *mask* cannot be baked or carried in a chain at all,
+/// and is refused by [`crate::ucg::viewing_processor_with`].
+pub fn bake_view_graded(
+    config: &Config,
+    input: &str,
+    working: &str,
+    cdl: Option<&ucg_schema::Cdl>,
+    grade: Option<&crate::grade::GradeStack>,
+    display: &str,
+    view: &str,
+) -> Option<BakedView> {
+    if grade.is_some_and(|g| g.varies_by_pixel()) {
+        return None;
+    }
     let encoding = config
         .colorspace(input)
         .map(|c| c.encoding.to_lowercase())
@@ -233,7 +275,8 @@ pub fn bake_view(
         return None;
     }
     let processor =
-        crate::ucg::viewing_processor(config, input, working, cdl, display, view).ok()?;
+        crate::ucg::viewing_processor_with(config, input, working, cdl, grade, display, view)
+            .ok()?;
     let mut lut = Lut3D::bake_domain(
         &processor,
         LATTICE_SIZE,
@@ -244,10 +287,7 @@ pub fn bake_view(
     // error would be measuring an interpolation nobody performs.
     lut.interpolation = Interpolation::Trilinear;
     let worst_error = lut.worst_error(&processor, 4096);
-    let describe = match cdl {
-        Some(_) => format!("{input} → grade → {display} / {view}"),
-        None => format!("{input} → {display} / {view}"),
-    };
+    let describe = format!("{input} →{} {display} / {view}", graded_step(cdl, grade));
     Some(BakedView {
         lut: Arc::new(lut),
         worst_error,
@@ -255,7 +295,39 @@ pub fn bake_view(
     })
 }
 
-/// A short, stable name for a grade, so a cache of bakes can tell two grades
+/// The middle of the chain's name: what is applied in the working space, if
+/// anything. Said rather than implied — a description that left the grade out
+/// would be a graded picture describing itself as ungraded.
+fn graded_step(
+    cdl: Option<&ucg_schema::Cdl>,
+    grade: Option<&crate::grade::GradeStack>,
+) -> &'static str {
+    match (cdl.is_some(), grade.is_some()) {
+        (false, false) => "",
+        (true, false) => " CDL →",
+        (false, true) => " grade →",
+        (true, true) => " CDL → grade →",
+    }
+}
+
+/// A stable name for a grade, so two clips graded differently never share a
+/// cached transform.
+///
+/// Serialised rather than hashed field by field: a stack is a tree of layers,
+/// masks and curves, and a fingerprint that walked only the fields somebody
+/// remembered would collide the moment a new one was added — which is the
+/// kind of cache bug that shows up as one shot wearing another's grade.
+pub fn grade_fingerprint(grade: Option<&crate::grade::GradeStack>) -> String {
+    let Some(g) = grade.filter(|g| !g.is_empty()) else {
+        return "nograde".into();
+    };
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(g).unwrap_or_default().hash(&mut h);
+    format!("g{:x}", h.finish())
+}
+
+/// A short, stable name for a CDL, so a cache of bakes can tell two grades
 /// apart without holding the grade itself.
 pub fn cdl_fingerprint(cdl: Option<&ucg_schema::Cdl>) -> String {
     let Some(cdl) = cdl else {

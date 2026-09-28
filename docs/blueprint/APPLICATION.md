@@ -227,9 +227,24 @@ lattice; the window interpolates that lattice in the fragment shader, where the
 pixels already are, and prints on the picture which view it is showing and how
 far the lattice is from the transform itself.
 
-The browser does not apply it. A browser cannot receive GPU textures, so the
-pictures there are decoded frames with no transform, and the panel says so
-rather than letting a chosen view imply otherwise.
+The browser applies it too, on the frames it is served rather than on the GPU.
+`/frame?view=project` builds the same transform from the same function a render
+uses, so a preview and a master cannot disagree about colour. What it does not
+have is real-time playback: these are single decoded frames, and the panel says
+so rather than letting a chosen view imply a running picture.
+
+Whose colour a frame is, though, is decided by the request. `&clip=<id>` says
+the frame stands for a clip on the cut, and then that clip's CDL and grade are
+applied; without it the frame is the *file*, and it is ungraded. That is not a
+gap. One file can back several clips with different grades, so a graded picture
+served as the file's colour would be one clip's opinion presented as the take's.
+So the record monitor asks with the clip, the source viewer asks without one,
+and a request naming a clip that does not play that media is refused rather than
+answered ungraded. The response carries `X-Cine-Clip`, so the interface shows
+which grade it got instead of which one it asked for, and `picture_at` says in
+advance whether a graded picture is available at all — a media with no input
+colorspace has no view to look through, and the monitor shows the decode and the
+reason instead of a refusal where a picture belongs.
 
 Measured (`ui/e2e/colour.mjs` against a running `cine start` with real media,
 `planar_present.rs` and `view_lattice.rs` on this machine's Intel UHD):
@@ -252,18 +267,53 @@ way — and are measured while the panels redraw rather than per picture, becaus
 playback's budget belongs to playback. The pane says both: how many samples,
 and what they cost.
 
-A clip can be graded: an ASC CDL — slope, offset, power and saturation — set
-in the Colour workspace and applied *in the working space*, which is the
-difference between grading a picture and tinting one. The grade is baked into
-the same lattice the window is already interpolating, so grading and viewing
-are one chain rather than two that can disagree, and the lattice is re-baked
-only for the clips whose grade changed.
+A clip can be graded, and there are two things on it rather than one. The
+**ASC CDL** — slope, offset, power and saturation — is the value that came from
+the set or the dailies, and it is what a facility exchanges. The **grade** is
+the work done on top of it in the suite: a primary layer of exposure, contrast,
+saturation, temperature/tint and printer lights. Both are applied *in the
+working space*, in that order, which is the difference between grading a picture
+and tinting one, and the order a film is actually made in.
 
-There are no wheels, curves, qualifiers or windows — no parade,
-histogram or HDR scope in the interface, no scopes at all in the browser, and
-no analytic transform on the GPU: the lattice is an approximation, and its size
-is the measured number above rather than a matter of taste. A 65³ lattice would
-halve the error at 558 ms to bake.
+One function applies them — `view_for_graded` — and the native window, the
+browser's frames and the render all go through it, so the three cannot disagree
+about what a shot looks like. A changed grade is part of what makes a render
+stale, because it is part of what the render read.
+
+What that one function can carry is decided by *what the grade is a function
+of*, and there are three answers:
+
+* A **primary** is a function of the colour alone, so it bakes into the same
+  33³ lattice the window is already interpolating — re-baked only for the clips
+  whose grade changed.
+* A **qualifier** is also a function of the colour, so it could be baked, but it
+  is not: a qualifier's edges are where its whole point lives and 33 samples a
+  side would smear them. The exact chain is evaluated instead — slower, and the
+  only answer that is actually the grade.
+* A **mask** is a function of *where the pixel is*, and a colour transform is
+  never told. Neither is `Processor::apply_image`, which walks pixels with no
+  coordinates. So a masked grade cannot be carried by a view transform at all,
+  and it is **refused by name** — naming the layer, and naming
+  `GradeStack::apply_image` as the path that rasterises masks, which no viewer
+  or render puts a grade through yet. Evaluating the mask at the centre of the
+  frame would have been an evenly graded picture presented as a masked one,
+  which is the class of wrong answer this project refuses.
+
+The engine evaluates more than the interface offers: wheels, curves, 3D LUTs, a
+free matrix, hue rotation, geometric masks and HSL qualifiers are all in
+`cine-color` with no interface, because each needs a control that is not a
+number — a wheel, a curve editor, a shape tool — and a control that cannot be
+driven is worse than one that is absent. `grade` names every one of them with
+the reason, so an interface states the limit instead of implying none, and a
+write that would discard one is refused: setting a primary over a layer holding
+a curve would delete the curve, and setting one into a masked layer would
+confine the numbers somebody typed to part of the frame.
+
+There is one layer, no node graph and no tracking. No parade, histogram or HDR
+scope in the interface, no scopes at all in the browser, and no analytic
+transform on the GPU: the lattice is an approximation, and its size is the
+measured number above rather than a matter of taste. A 65³ lattice would halve
+the error at 558 ms to bake.
 
 ### Marks decide the edit
 

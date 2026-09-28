@@ -1103,3 +1103,25 @@ label.check { display: flex; align-items: center; gap: 6px; }
 .chip.small { padding: 0 4px; margin-right: 3px; border-radius: 3px; font-size: 10px; background: #2f3b32; color: #9fd6ad; }
 .chip.small.stale { background: #3b352a; color: #e8c170; }
 .chip.small.bad { background: #3b2a2a; color: #ef7b7b; }
+
+/* The colour workspace's middle column: the clip's picture above the file's. */
+.colour-work .monitors {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 0;
+}
+.colour-work .monitors > .panel { border-right: none; }
+.colour-work .monitors > .panel + .panel { border-top: 1px solid var(--line); }
+.section-title.sub { font-size: 10px; opacity: 0.8; }
+.hint.warn { color: var(--warn, #d08c30); }
+.op-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+.op-row > .label { flex: 1 1 40%; display: flex; align-items: center; gap: 4px; }
+.op-row input[type="number"] { flex: 1 1 0; min-width: 0; }
+.op-row .field { display: flex; align-items: center; gap: 3px; flex: 1 1 0; min-width: 0; }
+.op-row .field .dim { font-size: 10px; }

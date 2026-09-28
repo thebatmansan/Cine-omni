@@ -991,6 +991,16 @@ fn partial_dir(out: &Path) -> PathBuf {
     out.with_file_name(name)
 }
 
+/// What one entry of the cut is in, and what is graded onto it: its input
+/// colorspace, the ASC CDL that came from the set, and the colourist's layered
+/// grade. The three together decide the transform that entry is shown through,
+/// which is why they travel together and why all three are in the cache key.
+pub(crate) type EntryColour = (
+    String,
+    Option<ucg_schema::Cdl>,
+    Option<cine_color::GradeStack>,
+);
+
 /// What each entry needs baked, read from the graph.
 pub(crate) struct WantedViews {
     pub(crate) config: cine_color::ocio::Config,
@@ -998,8 +1008,8 @@ pub(crate) struct WantedViews {
     pub(crate) display: String,
     pub(crate) view: String,
     pub(crate) working: String,
-    /// Per entry: input colorspace and grade.
-    pub(crate) per_entry: Vec<Option<(String, Option<ucg_schema::Cdl>)>>,
+    /// Per entry, in the order the edit list holds them.
+    pub(crate) per_entry: Vec<Option<EntryColour>>,
 }
 
 struct Views {
@@ -1043,7 +1053,15 @@ pub(crate) fn wanted_views(
             let cdl = e
                 .clip
                 .and_then(|clip| cine_color::ucg::grade_of_clip(graph, clip));
-            Some((input, cdl))
+            // The colourist's layered grade, which sits after the CDL in the
+            // working space. Before this it was stored and never read.
+            let grade = e.clip.and_then(|clip| {
+                let id = ucg_core::EntityId::derived(clip, ucg_schema::kinds::COLOR_GRADE);
+                cine_color::ucg::load_grade(graph, id)
+                    .ok()
+                    .filter(|g| !g.is_empty())
+            });
+            Some((input, cdl, grade))
         })
         .collect();
     Ok(WantedViews {
@@ -1073,24 +1091,29 @@ fn resolve_views(
             views.push(None);
             continue;
         }
-        let Some((input, cdl)) = wanted else {
+        let Some((input, cdl, grade)) = wanted else {
             return Err(format!(
                 "`{}` has no input colorspace established, so it cannot be rendered through {} / {}; establish one, or render as decoded",
                 entry.name, w.display, w.view
             ));
         };
+        // The grade is part of what makes a transform what it is: without it
+        // in the key, two clips graded differently would share one cached
+        // transform and one would wear the other's grade.
         let key = format!(
-            "{input}|{}",
-            cine_color::view::cdl_fingerprint(cdl.as_ref())
+            "{input}|{}|{}",
+            cine_color::view::cdl_fingerprint(cdl.as_ref()),
+            cine_color::view::grade_fingerprint(grade.as_ref())
         );
         let transform = match cache.get(&key) {
             Some(t) => t.clone(),
             None => {
-                let t = cine_color::view::view_for(
+                let t = cine_color::view::view_for_graded(
                     &w.config,
                     input,
                     &w.working,
                     cdl.as_ref(),
+                    grade.as_ref(),
                     &w.display,
                     &w.view,
                 )

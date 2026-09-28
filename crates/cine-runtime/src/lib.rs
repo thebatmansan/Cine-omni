@@ -43,6 +43,7 @@
 
 pub mod derived;
 pub mod frames;
+pub mod grade;
 pub mod http;
 pub mod impact;
 pub mod ingest;

@@ -478,6 +478,20 @@ impl GradeStack {
         self.layers.iter().all(|l| !l.enabled || l.ops.is_empty())
     }
 
+    /// Whether any enabled layer's effect depends on where the pixel is, or
+    /// on what colour it already is.
+    ///
+    /// A 3D LUT is a function of colour alone. A masked layer is a function of
+    /// position as well, and a qualified one feeds its own input back into its
+    /// weight, so neither can be baked into a lattice — baking one would
+    /// freeze the mask's value at a single point and apply it everywhere,
+    /// which looks like a grade and is not the grade.
+    pub fn varies_by_pixel(&self) -> bool {
+        self.layers
+            .iter()
+            .any(|l| l.enabled && !l.ops.is_empty() && (l.mask.is_some() || l.qualifier.is_some()))
+    }
+
     /// Apply to one pixel (masks evaluated at normalized `uv`).
     pub fn apply_pixel(&self, rgb: [f64; 3], uv: [f32; 2]) -> [f64; 3] {
         let mut c = rgb;

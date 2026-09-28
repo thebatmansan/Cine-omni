@@ -206,10 +206,16 @@ pub fn dependencies(
         // By clip, not by position: a clip added elsewhere shifts positions.
         for (i, e) in &pictures {
             match &w.per_entry[*i] {
-                Some((input, cdl)) => text.push_str(&format!(
-                    "{:?}|{input}|{}\n",
+                // The colourist's grade is part of what a render read, so a
+                // render made before it was changed is out of date. Without
+                // the grade here it would have stayed "current" through a
+                // regrade, which is the worst kind of wrong answer: a stale
+                // master that says it is not.
+                Some((input, cdl, grade)) => text.push_str(&format!(
+                    "{:?}|{input}|{}|{}\n",
                     e.clip,
-                    cine_color::view::cdl_fingerprint(cdl.as_ref())
+                    cine_color::view::cdl_fingerprint(cdl.as_ref()),
+                    cine_color::view::grade_fingerprint(grade.as_ref())
                 )),
                 None => text.push_str(&format!("{:?}|none\n", e.clip)),
             }

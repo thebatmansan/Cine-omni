@@ -389,8 +389,16 @@ pub fn structure(graph: &Graph) -> J {
 /// Composition is answered by [`crate::playlist`], the same list the native
 /// player plays. A gap answers `black`; a clip whose asset declares no available
 /// range answers with no index, because which picture it plays cannot be known.
+///
+/// `colour` says whether this picture can be shown through the project's view
+/// with this clip's grade applied, and when it cannot, why. An interface asks
+/// for a graded picture because the runtime said one is available, not because
+/// it hoped: `/frame?view=project&clip=` refuses a media with no input
+/// colorspace, and a monitor that guessed would show a refusal instead of a
+/// picture.
 pub fn picture_at(
     graph: &Graph,
+    root: EntityId,
     timeline: EntityId,
     at: RationalTime,
     preference: cine_pipeline::session::MediaPreference,
@@ -410,6 +418,7 @@ pub fn picture_at(
     // between two pictures.
     let (offset, index) = crate::playlist::picture_index(graph, entry, at);
     let track_ids = track_entity_ids(graph, timeline);
+    let colour = picture_colour(graph, root, entry);
     Ok(json!({
         "black": false,
         "track": track_ids.get(entry.track),
@@ -428,7 +437,48 @@ pub fn picture_at(
         "why_not": entry.unplayable(),
         "source": offset.zip(available).map(|(o, a)| time(a.start_time.checked_add(&o))),
         "index": index,
+        "colour": colour,
     }))
+}
+
+/// Whether this entry's picture can be shown through the project's view with
+/// the clip's grade, and whether there is a grade to show.
+///
+/// The two are separate answers. `available` is about the project: a colour
+/// config, and an input colorspace for the file — without both there is no
+/// transform to look through, graded or not. `graded` is about the clip: a CDL,
+/// or a grade stack with something in it. A clip with neither is still worth
+/// showing through the view; it simply looks the same either way.
+fn picture_colour(graph: &Graph, root: EntityId, entry: &crate::playlist::Entry) -> J {
+    let Some(clip) = entry.clip else {
+        return json!({ "available": false, "graded": false, "why_not": "not a clip" });
+    };
+    let graded = cine_color::ucg::grade_of_clip(graph, clip).is_some()
+        || cine_color::ucg::load_grade(
+            graph,
+            EntityId::derived(clip, ucg_schema::kinds::COLOR_GRADE),
+        )
+        .is_ok_and(|g| !g.is_empty());
+    let why_not = if cine_color::ucg::project_config(graph, root).is_none() {
+        Some("this project has no colour config, so there is no view to look through")
+    } else if entry
+        .asset
+        // The asset's own path, not `entry.path`, which is the proxy's when a
+        // proxy is being read: a colorspace is established for the take, and
+        // the view a graded frame is served through is built from the take.
+        .and_then(|a| graph.node(a))
+        .and_then(|n| n.get_str(attrs::MEDIA_PATH))
+        .is_none_or(|p| !cine_color::view::input_colorspaces(graph).contains_key(p))
+    {
+        Some("this media has no input colorspace established, so it cannot be looked at through a view")
+    } else {
+        None
+    };
+    json!({
+        "available": why_not.is_none(),
+        "graded": graded,
+        "why_not": why_not,
+    })
 }
 
 /// The flattened edit list, for players and for inspection.
@@ -780,12 +830,7 @@ pub fn color(
     // graded: what a colour workspace needs to show and to change.
     let clips: Vec<J> = session
         .focus()
-        .or_else(|| {
-            graph
-                .of_kind(kinds::NLE_TIMELINE)
-                .first()
-                .map(|n| n.id)
-        })
+        .or_else(|| graph.of_kind(kinds::NLE_TIMELINE).first().map(|n| n.id))
         .and_then(|timeline| crate::playlist::edit_list(graph, timeline).ok())
         .map(|list| {
             list.entries
@@ -797,11 +842,21 @@ pub fn color(
                         EntityId::derived(clip, kinds::COLOR_GRADE),
                     );
                     let cdl = meta.as_ref().map(|m| &m.cdl);
+                    // The layered grade counts as graded too. It used to be
+                    // read by nothing, so a clip with a grade stack and a
+                    // neutral CDL showed as ungraded in the one panel whose
+                    // job is to say which clips have been worked on.
+                    let stack = cine_color::ucg::load_grade(
+                        graph,
+                        EntityId::derived(clip, kinds::COLOR_GRADE),
+                    )
+                    .is_ok_and(|g| !g.is_empty());
                     Some(json!({
                         "clip": clip,
                         "name": entry.name,
                         "input_colorspace": meta.as_ref().map(|m| m.input_colorspace.clone()),
-                        "graded": cdl.map(|c| !cine_color::grade::cdl_is_identity(c)).unwrap_or(false),
+                        "graded": stack
+                            || cdl.map(|c| !cine_color::grade::cdl_is_identity(c)).unwrap_or(false),
                         "cdl": cdl.map(|c| json!({
                             "slope": c.slope,
                             "offset": c.offset,

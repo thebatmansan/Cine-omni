@@ -277,6 +277,17 @@ export function App() {
     [rate, timeline],
   );
 
+  /** Put the playhead on a clip without leaving the workspace it was picked in. */
+  const goToClip = useCallback(
+    (clip: string) => {
+      const found = findItem(timeline, clip);
+      if (!found) return;
+      setSelectionKey(clip);
+      setPlayheadTicks(frameAt(found.item.at.start.seconds, rate));
+    },
+    [rate, timeline],
+  );
+
   const revision = session.project?.revision ?? 0;
   const captions = useCaptions(client, timeline?.id ?? null, captionLanguage, revision, setCaptionLanguage);
 
@@ -596,13 +607,35 @@ export function App() {
         <div className="work colour-work">
           <Colour
             colour={session.colour}
+            client={client}
+            revision={revision}
             onView={(selection) => void session.run("view", () => client.colorView(selection))}
             onInputColorspace={(media, colorspace) =>
               void session.run("input colorspace", () => client.setInputColorspace(media, colorspace))
             }
             onGrade={(clip, cdl) => void session.run("grade", () => client.setGrade(clip, cdl))}
+            onGradeOps={(clip, ops) => void session.run("grade", () => client.gradeSet(clip, ops))}
+            onPickClip={goToClip}
           />
-          <Viewer media={media} capabilities={session.capabilities} index={picture} onIndex={setPicture} />
+          {/* Two monitors, and which is which matters. The record monitor is
+              the clip: the project's view with that clip's grade. The source
+              viewer is the file, ungraded, because one file can back several
+              clips and none of their grades is the file's. */}
+          <div className="monitors">
+            <Record
+              client={client}
+              timeline={timeline}
+              playhead={playhead}
+              revision={revision}
+              preference={session.mediaPreference}
+              // The same monitor state the editorial workspace uses, so a
+              // left-arrow means the same thing in both.
+              active={monitor === "record"}
+              onActivate={() => setMonitor("record")}
+              onStep={stepRecord}
+            />
+            <Viewer media={media} capabilities={session.capabilities} index={picture} onIndex={setPicture} />
+          </div>
           {impact}
         </div>
       )}

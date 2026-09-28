@@ -400,6 +400,50 @@ export interface Cdl {
   saturation: number;
 }
 
+/**
+ * One operation of a clip's grade, as the protocol carries it.
+ *
+ * `editable: false` marks an operation the engine evaluates that this protocol
+ * cannot set — a curve or a LUT somebody put on the shot elsewhere. It is
+ * listed so the interface can say it is there instead of showing a grade that
+ * is missing part of itself.
+ */
+export type GradeOp =
+  | { op: "exposure"; stops: number }
+  | { op: "contrast"; amount: number; pivot: number }
+  | { op: "saturation"; amount: number }
+  | { op: "temperature_tint"; temperature_k: number; tint: number }
+  | { op: "printer_lights"; points: [number, number, number] }
+  | { op: string; editable: false };
+
+/** The grade of one clip: the CDL beside it, and what this build can change. */
+export interface GradeView {
+  clip: string;
+  grade: string | null;
+  /** The `color.grade` node is there — a reactor makes one for every clip. */
+  exists: boolean;
+  /** ...and something in it, or in the CDL, would change a picture. */
+  graded: boolean;
+  working_primaries: string;
+  layers: {
+    name: string;
+    enabled: boolean;
+    opacity: number;
+    masked: boolean;
+    qualified: boolean;
+    ops: GradeOp[];
+  }[];
+  cdl: Cdl | null;
+  /** The operation names this build can read and write. */
+  supported: string[];
+  /** The rest of the engine's operations, each with why it is not here. */
+  unsupported: { op: string; reason: string }[];
+  /** Whether `grade_set` would be accepted for this clip's first layer. */
+  primary_settable: boolean;
+  /** Why it would not, when it would not: a curve in it, or a mask on it. */
+  primary_why_not: string | null;
+}
+
 export interface ViewSelection {
   display: string;
   view: string;
@@ -610,6 +654,17 @@ export interface PictureAt {
   proxy?: string | null;
   /** Why this file and not the other, when the choice needs saying. */
   substitution?: string | null;
+  /** Whether this picture can be shown through the project's view with this
+   *  clip's grade, and whether there is a grade on it. The runtime answers it;
+   *  the monitor asks for a graded frame only when it says one is available. */
+  colour?: PictureColour;
+}
+
+/** Whether a picture can be looked at through the project's view, and why not. */
+export interface PictureColour {
+  available: boolean;
+  graded: boolean;
+  why_not: string | null;
 }
 
 export interface SceneSummary {
@@ -1192,6 +1247,19 @@ export class RpcClient {
       power: cdl.power,
       saturation: cdl.saturation,
     });
+  }
+  /** One clip's grade: its layers, its CDL, and what this build can change. */
+  grade(clip: string) {
+    return this.call<GradeView>("grade", { clip });
+  }
+  /**
+   * Replace the operations of a clip's primary grade layer.
+   *
+   * An empty list leaves a grade that changes nothing, which is not the same
+   * as having no grade. Layers this protocol does not carry are untouched.
+   */
+  gradeSet(clip: string, ops: GradeOp[]) {
+    return this.call<GradeView>("grade_set", { clip, ops });
   }
   /** Say what a file really is. Undoable, like any other edit. */
   setInputColorspace(media: string, colorspace: string) {

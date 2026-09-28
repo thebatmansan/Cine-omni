@@ -132,6 +132,19 @@ pub enum NegativeStyle {
 /// One per-pixel operation.
 #[derive(Clone)]
 pub enum Op {
+    /// A colourist's grade — layers of [`crate::GradeOp`] with their masks and
+    /// qualifiers — applied in the working space.
+    ///
+    /// The maths is [`crate::GradeStack::apply_pixel`], unchanged. This
+    /// variant exists so that the stack the project persists is evaluated by
+    /// the same processor the viewer and the render already run, rather than
+    /// being a model stored beside the picture and never reaching it.
+    ///
+    /// It is opaque to the optimiser on purpose: a stack carries masks and
+    /// qualifiers that depend on the pixel's position and its own value, so it
+    /// cannot be fused into a matrix or inverted analytically, and saying so
+    /// is better than a fusion that quietly drops a qualifier.
+    Grade(Arc<crate::grade::GradeStack>),
     /// `out = m * in + offset`.
     Matrix { m: Mat3, offset: [f64; 3] },
     /// Apply a transfer function. `decode` = code → linear, else linear → code.
@@ -186,6 +199,7 @@ pub enum Op {
 impl fmt::Debug for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Op::Grade(g) => write!(f, "Grade({} layers)", g.layers.len()),
             Op::Matrix { m, offset } => write!(f, "Matrix({:?}, {:?})", m.0, offset),
             Op::Transfer { func, decode } => write!(f, "Transfer({func:?}, decode={decode})"),
             Op::Lut1D(l) => write!(f, "Lut1D(size={})", l.size),
@@ -288,6 +302,9 @@ impl Op {
         let one = |v: &f64| (v - 1.0).abs() < 1e-12;
         let zero = |v: &f64| v.abs() < 1e-12;
         match self {
+            // A stack with nothing enabled changes nothing, and the engine
+            // already knows how to say so.
+            Op::Grade(g) => g.is_empty(),
             Op::Matrix { m, offset } => m.is_identity(1e-12) && offset.iter().all(zero),
             Op::Transfer {
                 func: Transfer::Linear,
@@ -323,6 +340,12 @@ impl Op {
     /// The inverse op, when one exists analytically.
     pub fn inverse(&self) -> Option<Op> {
         Some(match self {
+            // A grade has no analytic inverse: a qualifier picks by the
+            // colour a pixel already is, and a mask by where it is, so undoing
+            // it is not a function of the output. `None` is the true answer,
+            // and a plausible wrong one would silently corrupt an inverse
+            // chain.
+            Op::Grade(_) => return None,
             Op::Matrix { m, offset } => {
                 let inv = m.inverse()?;
                 let o = inv.apply(*offset);
@@ -407,6 +430,15 @@ impl Op {
     pub fn apply(&self, c: [f64; 3]) -> [f64; 3] {
         match self {
             Op::Approximation(_) => c,
+            // A processor maps a colour to a colour: it is never told where
+            // the pixel was, and `apply_image` does not tell it either. So a
+            // *qualifier*, which picks by the colour a pixel already is, is
+            // exact here — and a *mask*, which picks by where the pixel is,
+            // cannot be. Rather than grade evenly and call it a mask, a
+            // masked stack is refused before it can reach a chain
+            // (`crate::ucg::viewing_processor_with`); the centre is what this
+            // arm would evaluate, and nothing is allowed to get here with one.
+            Op::Grade(g) => g.apply_pixel(c, [0.5, 0.5]),
             Op::Matrix { m, offset } => {
                 let v = m.apply(c);
                 [v[0] + offset[0], v[1] + offset[1], v[2] + offset[2]]
