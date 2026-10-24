@@ -64,7 +64,8 @@ undid `edit dialogue` in one step (19 inverse ops)
 ## Build
 
 Rust 1.85+ (stable). No system C compiler is required if Zig is used as the
-linker (see `docs/adr/0002-toolchain.md`).
+linker (see `docs/adr/0002-toolchain.md`). Setting up a fresh machine, and what
+the repository does not contain: `docs/SETUP.md`.
 
 ```
 cargo test --workspace            # 424 tests, all green

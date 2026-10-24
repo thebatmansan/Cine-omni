@@ -1,0 +1,21 @@
+{
+  "channels": 2,
+  "elapsed_ms": 104,
+  "frames": 481280,
+  "job": 6,
+  "kind": "media.waveform",
+  "levels": [
+    256,
+    2048,
+    16384,
+    131072
+  ],
+  "original": {
+    "content_hash": "d2fd72099c1b1d84e5444f190ecf0d836a4c6f47ec3ad4d76fbe27d0059cd5fd",
+    "media": "9da87047-0363-5f51-8f05-23d09b08a8ba",
+    "name": "now_you_do_it_accordingly (1).mp4",
+    "path": "/home/finstein-emp/Downloads/now_you_do_it_accordingly (1).mp4"
+  },
+  "recipe": "peaks 16-bit levels 256/2048/16384/131072 waveform/1",
+  "sample_rate": 48000
+}

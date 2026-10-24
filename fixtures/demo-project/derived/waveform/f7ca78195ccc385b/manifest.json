@@ -1,0 +1,21 @@
+{
+  "channels": 2,
+  "elapsed_ms": 827,
+  "frames": 481280,
+  "job": 3,
+  "kind": "media.waveform",
+  "levels": [
+    256,
+    2048,
+    16384,
+    131072
+  ],
+  "original": {
+    "content_hash": "f7ca78195ccc385b2e8792974535ba036a98ad80b728883c0fd90f51fa96493f",
+    "media": "b153a967-a865-5202-a29e-279b38cae812",
+    "name": "mp4.mp4",
+    "path": "/home/finstein-emp/Downloads/mp4.mp4"
+  },
+  "recipe": "peaks 16-bit levels 256/2048/16384/131072 waveform/1",
+  "sample_rate": 48000
+}
